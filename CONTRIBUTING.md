@@ -15,3 +15,9 @@ Accepting maintainer and release authority: @bernalde. Organization administrato
 retain access for continuity; future maintainership/access changes need a separate
 handoff. Registration, tagging, releases, hosted documentation and repository
 settings changes are separate maintainer actions.
+
+For this slice, the core is QUBOTools plus used Julia standard libraries. Run
+`julia --project=. -e 'using Pkg; Pkg.test()'`, the runnable identity example,
+and the separate documentation build. The test oracle uses independent scalar
+and exact binary-value rational references on explicitly guarded tiny fixtures.
+Do not claim tests for deferred inference, assumption or non-identity transport.

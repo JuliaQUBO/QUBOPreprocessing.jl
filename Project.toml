@@ -1,0 +1,23 @@
+name = "QUBOPreprocessing"
+uuid = "ce9b04da-6a94-4a97-978a-34bf3f916ed2"
+authors = ["David Bernal <dbernaln@purdue.edu>"]
+version = "0.1.0"
+
+[deps]
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+QUBOTools = "60eb5b62-0a39-4ddc-84c5-97d2adff9319"
+SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
+
+[compat]
+LinearAlgebra = "1.10"
+QUBOTools = "0.16.2"
+SparseArrays = "1.10"
+UUIDs = "1.10"
+julia = "1.10"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
