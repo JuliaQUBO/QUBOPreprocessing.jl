@@ -5,3 +5,4 @@ using SparseArrays
 using LinearAlgebra
 
 include("identity.jl")
+include("labels.jl")

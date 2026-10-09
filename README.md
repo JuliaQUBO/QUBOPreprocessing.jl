@@ -23,7 +23,9 @@ restored = reconstruct(result, [0,1])
 Supported concrete QUBOTools models have finite Float64 objective data and
 built-in sparse, dense or dictionary normal forms. Identity export preserves
 stored data, all variables, ordered labels, domain, sense, scale and offset
-without numerical transformation. It certifies representation identity with
+without numerical transformation. Labels must preserve equality/hash under
+owned deep copies; unsupported identity-based mutable labels are rejected.
+It certifies representation identity with
 an empty reduction chain; it does not certify a supplied state's optimality.
 Reconstruction validates a complete state and reports ordinary numerical energy,
 including a finite-result flag. Source and returned mutable data are isolated.

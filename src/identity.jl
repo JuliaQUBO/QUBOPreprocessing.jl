@@ -60,6 +60,15 @@ struct _Snapshot
     domain::QT.Domain
 end
 
+function _validate_label_copy(labels, owned)
+    all(i -> isequal(labels[i], owned[i]) && isequal(owned[i], labels[i]) &&
+             hash(labels[i]) == hash(owned[i]), eachindex(labels)) ||
+        throw(ArgumentError("labels must preserve equality and hash under deepcopy"))
+    return owned
+end
+
+_owned_labels(labels) = _validate_label_copy(labels, deepcopy(labels))
+
 function _snapshot(model::QT.Model{V,Float64,U}) where {V,U}
     f = QT.form(model)
     f isa QT.Form || throw(ArgumentError("unsupported objective form"))
@@ -94,7 +103,7 @@ function _snapshot(model::QT.Model{V,Float64,U}) where {V,U}
         all(i -> iszero(QT.data(qf)[i,i]), 1:n) ||
             throw(ArgumentError("quadratic diagonal must be zero in normal form"))
     end
-    return _Snapshot(Tuple(deepcopy(labels)), V, U, l, q,
+    return _Snapshot(Tuple(_owned_labels(labels)), V, U, l, q,
                      QT.scale(model), QT.offset(model), QT.sense(model), QT.domain(model))
 end
 _snapshot(model) = throw(ArgumentError("expected a QUBOTools.Model with Float64 objective data"))
@@ -116,8 +125,8 @@ end
 Privately snapshot a finite Float64 QUBOTools model and its ordered labels.
 Only `:identity` is supported. Source edits never change the snapshot; use
 [`reset!`](@ref) to accept a new source. Labels must have stable equality/hash
-semantics. Use each workspace serially. Model metadata, solutions and warm
-starts are outside the objective snapshot.
+semantics and preserve equality/hash under owned deep copies. Use each workspace
+serially. Model metadata, solutions and warm starts are outside the objective snapshot.
 """
 mutable struct Workspace
     _snapshot::_Snapshot
@@ -174,14 +183,16 @@ transport are implemented. Copies are proportional to stored source data.
 """
 function materialize(ws::Workspace; coefficient_type=Float64)
     coefficient_type === Float64 || throw(ArgumentError("only Float64 identity transport is supported"))
-    return ExportResult(deepcopy(ws._snapshot), generation(ws), :certified,
+    snapshot = deepcopy(ws._snapshot)
+    _validate_label_copy(ws._snapshot.labels, snapshot.labels)
+    return ExportResult(snapshot, generation(ws), :certified,
                         (scope=:original, reduction_chain=(), unchanged_representation=true))
 end
 
 """`original_variables(ws_or_export)` returns owned labels in original index order."""
 function original_variables(x::Union{Workspace,ExportResult})
     s = x._snapshot
-    return deepcopy(s.label_type[s.labels...])
+    return _owned_labels(s.label_type[s.labels...])
 end
 
 """`index_map(ws_or_export)` returns an owned original-index → residual-index vector."""

@@ -65,9 +65,13 @@ that source and export represent the same problem, with an empty reduction
 chain and original scope. **It does not prove that a supplied state is optimal.**
 
 A workspace privately freezes scalar storage and copies labels. Labels must
-have stable equality/hash semantics; do not mutate a label identity while it
-is retained. Model metadata, warm starts and attached solutions are outside the
-snapshot and are omitted from exported solver models. One workspace is used
+have stable equality/hash semantics and an owned `deepcopy` that preserves
+those semantics. Identity-based mutable labels whose copies compare unequal
+are rejected with `ArgumentError`, including transactionally by `reset!`.
+Mutable labels with copy-stable value equality/hash are supported; their mutable
+payloads must be correctly copied by `deepcopy`. Do not mutate a label identity
+while it is retained. Model metadata, warm starts and attached solutions are
+outside the snapshot and are omitted from exported solver models. One workspace is used
 serially; independent workspaces share no mutable state.
 
 `materialize` captures an owned historical export. `export_model(result)` returns
