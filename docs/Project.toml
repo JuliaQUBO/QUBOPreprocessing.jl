@@ -1,0 +1,10 @@
+[deps]
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+QUBOPreprocessing = "ce9b04da-6a94-4a97-978a-34bf3f916ed2"
+QUBOTools = "60eb5b62-0a39-4ddc-84c5-97d2adff9319"
+
+[compat]
+Documenter = "1"
+QUBOPreprocessing = "0.1"
+QUBOTools = "0.16.2"
+julia = "1.10"

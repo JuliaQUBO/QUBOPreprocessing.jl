@@ -1,0 +1,50 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    name: Julia ${{ matrix.julia }} / ${{ matrix.os }} / ${{ matrix.dependencies }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - julia: '1.10'
+            os: ubuntu-latest
+            dependencies: floor
+          - julia: '1.10'
+            os: ubuntu-latest
+            dependencies: compatible
+          - julia: '1'
+            os: ubuntu-latest
+            dependencies: compatible
+          - julia: '1'
+            os: windows-latest
+            dependencies: compatible
+    steps:
+      - uses: actions/checkout@v6
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia }}
+      - uses: julia-actions/cache@v3
+      - name: Install package and optionally pin the dependency floor
+        env:
+          DEPENDENCY_PROFILE: ${{ matrix.dependencies }}
+        run: >-
+          julia --project=. --startup-file=no -e 'using Pkg;
+          if ENV["DEPENDENCY_PROFILE"] == "floor";
+          Pkg.add(PackageSpec(name="QUBOTools", version=v"0.16.2"));
+          Pkg.pin("QUBOTools"); end;
+          Pkg.instantiate(); Pkg.status()'
+      - name: Package tests
+        run: julia --project=. --startup-file=no -e 'using Pkg; Pkg.test()'
+      - name: Runnable identity example
+        run: julia --project=. --startup-file=no examples/identity.jl
