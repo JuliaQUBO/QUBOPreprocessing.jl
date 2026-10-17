@@ -72,7 +72,8 @@ All steps in this format are strong. Weak persistency and compatible optimum
 selection require their own supported guarantee; they cannot inherit this one.
 
 `verify_certificate(ws, certificate)` compares actual source data as well as
-generation, checks the live caller scope and checkpoint lineage, then substitutes
+generation, checks the live caller scope and exact current trail-tip checkpoint
+(generation, epoch, depth and serial), then substitutes
 assumptions and each already validated predecessor directly in the original
 polynomial. It does not trust cached fields, adjacency, constant or queue and
 does not call the producer's bound/conditioning helper. Exact bounds must match

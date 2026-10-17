@@ -261,6 +261,11 @@ function verify_certificate(ws::Workspace, cert::DominanceCertificate;
     cost <= max_work || return VerificationResult(false,:work_limit,0)
     _same_source(s,cert._source) || return VerificationResult(false,:different_source,cost)
     cert.assumptions == _caller_scope(ws) || return VerificationResult(false,:stale_scope,cost)
+    # A valid ancestor alone cannot bind the complete current scope. Requiring
+    # the tip depth lets lineage validation below check its generation, epoch
+    # and exact serial, including after an identical branch is reapplied.
+    cert._scope_checkpoint._depth == length(ws._state.trail) ||
+        return VerificationResult(false,:stale_scope,cost)
     try
         _validate_checkpoint(ws,cert._scope_checkpoint)
     catch error

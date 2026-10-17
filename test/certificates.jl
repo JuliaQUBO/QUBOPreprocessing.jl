@@ -108,6 +108,8 @@ end
     @test c.assumptions == (2=>0,)
     @test only(c.steps).value == 0 # globally the unique optimum has x=y=1
     @test verify_certificate(ws,c).valid
+    ancestor = copy_certificate(c;position=root)
+    @test verify_certificate(ws,ancestor).stop_reason === :stale_scope
     @test !verify_certificate(ws,c;max_work=0).valid
     @test verify_certificate(ws,c;deadline_ns=UInt64(0)).stop_reason === :deadline
     step = only(c.steps)
@@ -129,6 +131,7 @@ end
     @test verify_certificate(ws,c).stop_reason === :stale_scope
     assume!(ws,:y,0) # same values on a different branch must not revive old scope
     @test verify_certificate(ws,c).stop_reason === :stale_scope
+    @test verify_certificate(ws,ancestor).stop_reason === :stale_scope
     c = prove_dominance(ws,:x).certificate
     @test verify_certificate(ws,c).valid
     reset!(ws,model)
