@@ -113,3 +113,8 @@ paired repetition and separates phases. Reduced variables/edges and total
 costs are reported together, including no-reduction controls. This pilot is
 not the accepted operating envelope or an ecosystem adoption decision; those
 remain with QUBOBenchmarks issue #30.
+
+The retained source artifact `docs/evidence/dominance-pilot.md` records the
+producing revision and all paired raw rows. In that tiny warm run, the all-fixed
+case reduced total time, while the cascade and both no-reduction controls were
+slower with preprocessing. Variable reduction alone did not predict payoff.
