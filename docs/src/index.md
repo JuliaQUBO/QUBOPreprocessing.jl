@@ -5,7 +5,8 @@ This candidate package implements the repository and identity foundation of the
 The implemented rule is **`rules=:identity`**, which performs no inference.
 `rules=:dominance` raises `ArgumentError`. Candidate version 0.1.0 is not a
 release. [Reversible conditioning](workspace.md) implements the incremental
-algebra and assumption trail; dominance/inference remain unavailable.
+algebra and assumption trail. [Sound bounds and proof verification](certificates.md)
+checks individual strict-dominance proofs; automatic dominance/inference remain unavailable.
 
 ## Install and run from source
 
@@ -15,7 +16,7 @@ revision, preferably the reviewed commit SHA:
 ```julia
 using Pkg
 Pkg.add(url="https://github.com/JuliaQUBO/QUBOPreprocessing.jl",
-        rev="feat/reversible-workspace")
+        rev="feat/certified-dominance-witnesses")
 Pkg.add("QUBOTools") # Declare the model dependency in the consumer project.
 using QUBOPreprocessing
 ```
@@ -103,7 +104,8 @@ order apply; exact stored-value preservation does not imply exact numerical
 energy evaluation. Nonfinite numerical results are reported without upgrading
 them to proof. Tests use independent exact binary-value rational references on
 guarded tiny fixtures. Reversible conditioning uses exact rational algebra;
-inference proof arithmetic/verifiers remain deferred.
+individual strict-dominance bounds and independent proof verification are now
+implemented. Automatic inference and its deduction trail remain deferred.
 
 ## Implemented costs and deferred API
 
@@ -122,7 +124,7 @@ and a no-inference report; it does not materialize a model implicitly.
 | Accepted architecture/API/acceptance contract | [QUBO PR #94](https://github.com/JuliaQUBO/QUBO.jl/pull/94), already merged |
 | Repository and identity foundation | [#1](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/1), this slice |
 | Adjacency, dirty queue, checkpoints, reversible conditioning and bounded work | [#2](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/2), implemented in this slice; full inference remains separate |
-| Enclosures, bounded dyadic proofs, verifier and non-identity safe transport | [#3](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/3), deferred |
+| Enclosures, bounded exact fallback, strict-proof records, independent verifier and safe transport | [#3](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/3), this slice; automatic inference remains separate |
 | Strict dominance | [#4](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/4), deferred |
 | Assumptions, conditional provenance, rollback/unfix/replay and resumption | [#5](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/5), deferred |
 | Optional QUBODrivers/MOI/direct/ToQUBO consumer | [#6](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/6), deferred |

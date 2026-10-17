@@ -1,0 +1,114 @@
+# Sound bounds and proof verification
+
+`prove_dominance(ws, label)` checks one strict unary reduction without changing
+the workspace. The complete dominance queue/propagation and inference undo trail
+remain with issues #4/#5. This slice provides their numerical witness seam and
+an independently structured verifier, with no mandatory external backend.
+
+```@example certificates
+using QUBOPreprocessing
+import QUBOTools as QT
+ws = Workspace(QT.Model(Dict(:x=>3.0,:y=>0.0),Dict((:x,:y)=>-1.0)))
+attempt = prove_dominance(ws,:x; max_exact_work=0)
+@assert attempt.method == :interval
+@assert verify_certificate(ws,attempt.certificate).valid
+@assert isempty(assumptions(ws))
+only(attempt.certificate.steps).value
+```
+
+## The exact represented problem
+
+For stored finite Float64 coefficients, the mathematical objective is
+``E(x)=\alpha(\beta+\sum_i L_i x_i+\sum_{i<j}Q_{ij}x_i x_j)`` with each
+Float64 interpreted as its exact binary rational value. Both domains and senses
+are supported directly; this check does not cast between domains.
+
+Let ``\sigma=\operatorname{sign}(\alpha)`` for minimization and its negative
+for maximization. Multiplication by its sign normalizes the direction without
+forming an overflowing scaled coefficient. Zero/negative-zero scale yields no
+strict proof because all states tie. Under the current fixed values, the
+normalized derivative is ``D_i=\sigma(L_i+\sum_j Q_{ij}x_j)``. For a binary
+free neighbor, its contribution lies between ``\min(0,\sigma Q_{ij})`` and
+``\max(0,\sigma Q_{ij})``. For a spin neighbor it lies between
+``-|Q_{ij}|`` and ``|Q_{ij}|``. Fixed neighbors contribute their exact value.
+
+A strictly positive lower bound proves binary 0 / spin -1 in every scoped
+optimum; a strictly negative upper bound proves 1. For spin, the energy
+difference from -1 to +1 is twice this derivative, preserving its sign. Ties
+never produce a strict fixing. Unscaled constants do not affect this test but
+are bound in the witness and recomputed by the verifier.
+
+The fast path starts with an enclosure checked against the exact cached field,
+then expands each Float64 sum outward with `prevfloat`/`nextfloat`. Original
+adjacency coefficients retain their represented Float64 values. It changes no
+process-global rounding mode. Nonfinite enclosures or an unresolved sign trigger
+budgeted exact rational fallback; no epsilon or ordinary rounded sum is used as
+a proof. Exact fields are imported once and updated locally by the workspace;
+no whole-model BigInt conversion occurs at each numerical check.
+
+`DominanceAttempt` reports method, visited adjacency entries, fallback count
+and exact work. `max_work` bounds adjacency visits across both passes;
+`max_exact_work` reserves the field plus incident coefficient contributions for
+fallback. A deadline, exhausted budget, zero scale or non-strict bound returns
+no certificate. Work counts are structural, with integer bit complexity and
+allocation costs additional. Public proof export copies source/scope explicitly
+after a successful numeric check; deadline checks surround that atomic copy.
+
+## Guarantee, scope and verifier
+
+An **energy identity** shows a conditioned residual evaluates like its original
+under supplied assumptions. A **strong-persistency proof** additionally shows
+that the selected value holds in every scoped optimum. Exact **local elimination**
+instead minimizes removed variables conditional on survivors and needs different
+reconstruction records; it is outside this unary slice. Neither an energy
+identity nor a plausible solver sample is an optimality proof.
+
+Each `DominanceCertificate` owns a source snapshot, generation, branch-specific
+checkpoint, explicit caller assumptions and ordered `DominanceStep` records.
+A step records original index/value, signed bounds, exact conditioned constant,
+numeric method and predecessor-prefix length. An ordered prefix is verified
+sequentially, so deductions cannot be combined as unrelated existential claims.
+All steps in this format are strong. Weak persistency and compatible optimum
+selection require their own supported guarantee; they cannot inherit this one.
+
+`verify_certificate(ws, certificate)` compares actual source data as well as
+generation, checks the live caller scope and checkpoint lineage, then substitutes
+assumptions and each already validated predecessor directly in the original
+polynomial. It does not trust cached fields, adjacency, constant or queue and
+does not call the producer's bound/conditioning helper. Exact bounds must match
+exact recomputation; interval bounds must enclose the exact range and prove the
+claimed strict sign. A wider but still sound enclosure remains mathematically
+valid; forged strict bounds, values, constants, predecessors and source identity
+are rejected. This is mathematical verification, not just hash authentication.
+
+```@example certificates
+root = checkpoint(ws)
+assume!(ws,:y,0)
+conditional = prove_dominance(ws,:x).certificate
+@assert verify_certificate(ws,conditional).valid
+rollback!(ws,root)
+@assert !verify_certificate(ws,conditional).valid
+```
+
+A branch assumption does not certify that the branch contains an original global
+optimum. Removing/replacing its scope invalidates applicability, including when
+the same values are later reapplied on another branch. Source/penalty edits
+require `reset!` and a new generation. A root-global proof never depends on caller
+assumptions. Heuristic solvers and source ToQUBO feasibility retain their own
+separate correctness requirements.
+
+Verification is an explicit boundary: source identity costs O(n+m), and each
+step scans original storage, potentially O(steps*(n+m)) with sparse input and
+O(steps*n²) for dense storage. `term_visits` reports charged storage work,
+including a reserved full scan if interruption follows storage reconstruction.
+Work/deadline exhaustion always yields `valid=false`. Proof capture, verification
+and residual materialization costs must be included in consumer measurements;
+the cheap witness helper alone is not whole-solve cost evidence.
+
+A valid fixing proof does not authorize rounding the residual. Workspace
+Float64 export still rejects coefficients/constants that cannot be represented
+exactly; exact `Rational{BigInt}` transport is an explicit supported alternative.
+Re-evaluating a lifted state's Float64 energy cannot repair an unsound transport.
+Certified QUBO–Ising/gauge conversion remains with #13. Run
+`examples/certificates.jl` and `scripts/certificate_costs.jl` for executable
+examples and separate numeric-path, proof-export and verification measurements.
