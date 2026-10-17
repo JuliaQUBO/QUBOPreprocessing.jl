@@ -15,7 +15,7 @@ Install from a selected source revision, substituting its exact reviewed SHA:
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/JuliaQUBO/QUBOPreprocessing.jl", rev="feat/bounded-dominance-propagation")
+Pkg.add(url="https://github.com/JuliaQUBO/QUBOPreprocessing.jl", rev="feat/scoped-branch-workloads")
 Pkg.add("QUBOTools") # Declare the model dependency in the consumer project.
 using QUBOPreprocessing
 import QUBOTools as QT
@@ -62,6 +62,7 @@ julia --project=. examples/identity.jl
 julia --project=. examples/workspace.jl
 julia --project=. examples/certificates.jl
 julia --project=. examples/dominance.jl
+julia --project=. examples/branch_search.jl
 julia --project=docs -e 'using Pkg; Pkg.develop(path=pwd()); Pkg.instantiate()'
 julia --project=docs docs/make.jl
 ```
@@ -81,3 +82,9 @@ The [certificate manual](docs/src/certificates.md) and
 The [dominance manual](docs/src/dominance.md), [cascade example](examples/dominance.jl)
 and [bounded on/off pilot](scripts/dominance_pilot.jl) address
 [#4](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/4).
+
+[Branch workloads](docs/src/scopes.md) and the [bounded search example](examples/branch_search.jl)
+exercise scoped fix/unfix and resumable inference for
+[#5](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/5). Optional
+`rollback!(ws, cp; report=true)` reports removed caller and inferred fixings as
+original-index/value pairs in reverse application order without materializing a residual.

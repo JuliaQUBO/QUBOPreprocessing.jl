@@ -16,7 +16,7 @@ revision, preferably the reviewed commit SHA:
 ```julia
 using Pkg
 Pkg.add(url="https://github.com/JuliaQUBO/QUBOPreprocessing.jl",
-        rev="feat/bounded-dominance-propagation")
+        rev="feat/scoped-branch-workloads")
 Pkg.add("QUBOTools") # Declare the model dependency in the consumer project.
 using QUBOPreprocessing
 ```
@@ -124,10 +124,10 @@ it does not materialize a model implicitly.
 | :-- | :-- |
 | Accepted architecture/API/acceptance contract | [QUBO PR #94](https://github.com/JuliaQUBO/QUBO.jl/pull/94), already merged |
 | Repository and identity foundation | [#1](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/1), this slice |
-| Adjacency, dirty queue, checkpoints, reversible conditioning and bounded work | [#2](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/2), implemented in implemented |
+| Adjacency, dirty queue, checkpoints, reversible conditioning and bounded work | [#2](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/2), implemented |
 | Enclosures, bounded exact fallback, strict-proof records, independent verifier and safe transport | [#3](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/3), implemented |
 | Strict dominance | [#4](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/4), implemented |
-| Assumptions, conditional provenance, rollback/unfix/replay and resumption | [#5](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/5), conservative provenance/replay implemented; branch workload acceptance remains separate |
+| Assumptions, conditional provenance, rollback/unfix/replay and resumption | [#5](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/5), implemented; [branch workload contract](scopes.md) |
 | Optional QUBODrivers/MOI/direct/ToQUBO consumer | [#6](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/6), deferred |
 | Performance envelope | [QUBOBenchmarks #30](https://github.com/JuliaQUBO/QUBOBenchmarks.jl/issues/30), deferred |
 | Decomposition integration | [QUBODecomposition #16](https://github.com/JuliaQUBO/QUBODecomposition.jl/issues/16), deferred |

@@ -184,17 +184,49 @@ function _fix!(ws::Workspace,i::Int,v::Int;proof=nothing,max_work=typemax(Int),d
 end
 
 """
-    rollback!(ws, checkpoint)
+    RollbackReport
+
+Optional owned rollback result: source `generation`, restored `checkpoint`,
+`caller_unfixed` and `deduction_unfixed` vectors of original-index => removed-value
+pairs in reverse application order. These are indices, unlike the label-based
+`assumptions`/`deductions` queries. They describe removals, not new proof claims.
+"""
+struct RollbackReport
+    generation::Generation
+    checkpoint::Checkpoint
+    caller_unfixed::Vector{Pair{Int,Int}}
+    deduction_unfixed::Vector{Pair{Int,Int}}
+end
+generation(r::RollbackReport) = r.generation
+
+"""
+    rollback!(ws, checkpoint; report=false)
 
 Restore fields, constant, free/fixed values, queue flags and assumptions exactly
 in reverse trail order. Cost is proportional to undone entries/touched fields
 and appended queue entries. No source graph copy or floating subtraction occurs.
 Invalid checkpoints fail before mutation. Rollback completes without a work or
 deadline limit; callers bound its cost by bounding preceding updates.
+
+By default return `ws`. With `report=true`, return a [`RollbackReport`](@ref)
+whose removed-fixing vectors are prepared before mutation. Capture visits only
+fixing records after `cp`, not queue-only history or unrelated source vertices.
+Rollback itself still costs all undone journal/field/queue work. Empty reports
+cost constant-size work and no full materialization is needed.
 """
-function rollback!(ws::Workspace, cp::Checkpoint)
+function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
     _validate_checkpoint(ws, cp)
     st = ws._state
+    captured = if report
+        callers,deductions = Pair{Int,Int}[],Pair{Int,Int}[]
+        for k in length(st.fixes):-1:cp._fix_depth+1
+            e = st.trail[st.fixes[k]]
+            push!(e.proof === nothing ? callers : deductions,e.index=>e.value)
+        end
+        RollbackReport(generation(ws),cp,callers,deductions)
+    else
+        nothing
+    end
     while length(st.trail) > cp._depth
         undo = pop!(st.trail)
         if undo isa _UndoQueue
@@ -217,7 +249,7 @@ function rollback!(ws::Workspace, cp::Checkpoint)
             st.constant = undo.constant
         end
     end
-    return ws
+    return report ? captured : ws
 end
 
 """

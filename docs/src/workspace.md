@@ -106,3 +106,7 @@ warm measurements. Structural/allocation tests guard local work independently
 of wall time. Measured end-to-end adoption and the accepted operating envelope
 remain with QUBOBenchmarks issue #30; a reduced variable count is not evidence
 that preprocessing pays off.
+
+Use `rollback!(ws, cp; report=true)` for owned original-index/value removal
+reports separated by caller/deduction provenance. See [branch workloads](scopes.md)
+for its query costs, bounded branch search and replay stress tests.
