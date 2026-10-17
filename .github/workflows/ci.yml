@@ -46,5 +46,7 @@ jobs:
           Pkg.instantiate(); Pkg.status()'
       - name: Package tests
         run: julia --project=. --startup-file=no -e 'using Pkg; Pkg.test()'
-      - name: Runnable identity example
-        run: julia --project=. --startup-file=no examples/identity.jl
+      - name: Runnable examples
+        run: |
+          julia --project=. --startup-file=no examples/identity.jl
+          julia --project=. --startup-file=no examples/workspace.jl

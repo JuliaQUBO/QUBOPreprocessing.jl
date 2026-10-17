@@ -223,7 +223,7 @@ end
     @test_throws ArgumentError Workspace(d)
     m.variable_map.map[:x] = 2
     @test_throws ArgumentError Workspace(m)
-    for name in (:checkpoint, :assume!, :propagate!, :rollback!, :unfix!, :changes)
+    for name in (:propagate!,)
         @test !isdefined(QUBOPreprocessing, name)
     end
 end

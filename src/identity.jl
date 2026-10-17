@@ -123,7 +123,8 @@ end
     Workspace(model; rules=:identity)
 
 Privately snapshot a finite Float64 QUBOTools model and its ordered labels.
-Only `:identity` is supported. Source edits never change the snapshot; use
+Only `:identity` is supported (no inferred reductions). Explicit caller
+assumptions can be conditioned and rolled back. Source edits never change the snapshot; use
 [`reset!`](@ref) to accept a new source. Labels must have stable equality/hash
 semantics and preserve equality/hash under owned deep copies. Use each workspace
 serially. Model metadata, solutions and warm starts are outside the objective snapshot.
@@ -131,10 +132,14 @@ serially. Model metadata, solutions and warm starts are outside the objective sn
 mutable struct Workspace
     _snapshot::_Snapshot
     _generation::Generation
+    _state::_Incremental
+    # Internal staging constructor for transactional non-LIFO replay.
+    Workspace(snapshot::_Snapshot, token::Generation, state::_Incremental) = new(snapshot, token, state)
     function Workspace(model; rules=:identity)
         _check_rules(rules)
         snapshot = _snapshot(model)
-        return new(snapshot, Generation(uuid4(), uuid4()))
+        state = _incremental(snapshot)
+        return new(snapshot, Generation(uuid4(), uuid4()), state)
     end
 end
 _check_rules(rules) = rules === :identity ? nothing :
@@ -152,9 +157,11 @@ source. Owned exports remain evidence for their historical generation.
 """
 function reset!(ws::Workspace, model)
     snapshot = _snapshot(model)
+    state = _incremental(snapshot)
     token = Generation(generation(ws).workspace, uuid4())
     ws._snapshot = snapshot
     ws._generation = token
+    ws._state = state
     return ws
 end
 
@@ -177,11 +184,16 @@ generation(result::ExportResult) = result.generation
 """
     materialize(ws; coefficient_type=Float64)
 
-Explicitly capture an owned identity export. Only unchanged Float64 transport is
-supported. No assumptions, deductions, deadline/work limits or alternate numeric
-transport are implemented. Copies are proportional to stored source data.
+Explicitly capture an owned export. Without assumptions this is the unchanged
+Float64 identity export. With assumptions, return a [`ConditionedExport`](@ref):
+Float64 transport must represent every conditioned coefficient exactly, or the
+call raises `ArgumentError`; use `coefficient_type=Rational{BigInt}` for exact
+transport. Materialization scans/copies the graph; it is never implicit in updates.
 """
 function materialize(ws::Workspace; coefficient_type=Float64)
+    if !isempty(ws._state.trail)
+        return _conditioned_export(ws, coefficient_type)
+    end
     coefficient_type === Float64 || throw(ArgumentError("only Float64 identity transport is supported"))
     snapshot = deepcopy(ws._snapshot)
     _validate_label_copy(ws._snapshot.labels, snapshot.labels)
@@ -196,7 +208,7 @@ function original_variables(x::Union{Workspace,ExportResult})
 end
 
 """`index_map(ws_or_export)` returns an owned original-index → residual-index vector."""
-index_map(x::Union{Workspace,ExportResult}) = collect(1:length(x._snapshot.labels))
+index_map(x::ExportResult) = collect(1:length(x._snapshot.labels))
 
 """
     export_model(result)

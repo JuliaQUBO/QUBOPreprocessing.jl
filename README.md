@@ -1,15 +1,16 @@
 # QUBOPreprocessing.jl
 
 Identity foundation for the [accepted certified preprocessing design](https://github.com/JuliaQUBO/QUBO.jl/pull/94).
-**Only `rules=:identity` is implemented.** No dominance, reversible assumptions,
-proof arithmetic, solver adapter or decomposition integration is available yet.
+**Only `rules=:identity` is implemented.** Explicit assumptions now use reusable
+sparse conditioning, exact algebra, checkpoints and rollback. No dominance,
+inference certificate, solver adapter or decomposition integration is available yet.
 Candidate version 0.1.0 is unreleased and unregistered.
 
-Install from the implementation branch, or substitute its exact reviewed SHA:
+Install from a selected source revision, substituting its exact reviewed SHA:
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/JuliaQUBO/QUBOPreprocessing.jl", rev="feat/identity-bootstrap")
+Pkg.add(url="https://github.com/JuliaQUBO/QUBOPreprocessing.jl", rev="feat/reversible-workspace")
 Pkg.add("QUBOTools") # Declare the model dependency in the consumer project.
 using QUBOPreprocessing
 import QUBOTools as QT
@@ -32,6 +33,16 @@ including a finite-result flag. Source and returned mutable data are isolated.
 `reset!` validates transactionally and creates a new generation; existing exports
 keep their historical source/generation.
 
+For repeated boundary changes, use `checkpoint(ws)`, `assume!(ws, label, value)`,
+`changes(ws, checkpoint)` and `rollback!(ws, checkpoint)`. Assumptions restrict
+the problem; they never certify an original global optimum. `unfix!` supports
+local LIFO removal and a documented full rebuild/replay for arbitrary removal.
+`materialize(ws)` rejects conditioned coefficients that Float64 cannot represent
+exactly; `coefficient_type=Rational{BigInt}` exports the exact residual. Full
+materialization and original-energy evaluation are explicit O(n+m) boundaries.
+See the [workspace example](examples/workspace.jl) and
+[workspace contracts](docs/src/workspace.md), including limits and costs.
+
 Read the [source manual](docs/src/index.md), [API](docs/src/api.md),
 [runnable example](examples/identity.jl) and [release instructions](RELEASE.md).
 There is no advertised hosted manual. Core dependencies are QUBOTools and used
@@ -43,6 +54,7 @@ Run tests and the example from a checkout:
 ```sh
 julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
 julia --project=. examples/identity.jl
+julia --project=. examples/workspace.jl
 julia --project=docs -e 'using Pkg; Pkg.develop(path=pwd()); Pkg.instantiate()'
 julia --project=docs docs/make.jl
 ```
@@ -54,3 +66,4 @@ Source is licensed under MPL-2.0; respective contributors retain ownership.
 
 The [bootstrap issue #1](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/1)
 tracks this slice. See the manual's acceptance matrix for later owners.
+The reversible conditioning slice addresses [#2](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/2).

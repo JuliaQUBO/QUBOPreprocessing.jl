@@ -4,7 +4,8 @@ This candidate package implements the repository and identity foundation of the
 [accepted certified preprocessing design](https://github.com/JuliaQUBO/QUBO.jl/blob/c0ab77d34e2281cfd6bd06e6c9c2f5ce13994670/docs/src/design.md#certified-preprocessing).
 The implemented rule is **`rules=:identity`**, which performs no inference.
 `rules=:dominance` raises `ArgumentError`. Candidate version 0.1.0 is not a
-release, and the planned dominance/incremental API is not available yet.
+release. [Reversible conditioning](workspace.md) implements the incremental
+algebra and assumption trail; dominance/inference remain unavailable.
 
 ## Install and run from source
 
@@ -14,7 +15,7 @@ revision, preferably the reviewed commit SHA:
 ```julia
 using Pkg
 Pkg.add(url="https://github.com/JuliaQUBO/QUBOPreprocessing.jl",
-        rev="feat/identity-bootstrap")
+        rev="feat/reversible-workspace")
 Pkg.add("QUBOTools") # Declare the model dependency in the consumer project.
 using QUBOPreprocessing
 ```
@@ -101,7 +102,8 @@ and a `finite` flag. Floating rounding, cancellation, overflow and summation
 order apply; exact stored-value preservation does not imply exact numerical
 energy evaluation. Nonfinite numerical results are reported without upgrading
 them to proof. Tests use independent exact binary-value rational references on
-guarded tiny fixtures; production does not implement exact proof arithmetic.
+guarded tiny fixtures. Reversible conditioning uses exact rational algebra;
+inference proof arithmetic/verifiers remain deferred.
 
 ## Implemented costs and deferred API
 
@@ -110,7 +112,8 @@ data explicitly. Sparse structural work/storage is O(n+m); dense storage copying
 can cost O(n²). Reconstruction validates all n entries, constructs evaluation
 storage and evaluates the original objective. Dictionary iteration and numerical
 summation order can differ between copies. No benchmark performance envelope,
-work/deadline enforcement or hard timing guarantee is claimed by this slice.
+hard timing guarantee is claimed by this slice. Workspace work/deadline
+contracts apply to explicit conditioning updates, as described in its manual.
 Generation/report inspection is constant-size. `preprocess` constructs a workspace
 and a no-inference report; it does not materialize a model implicitly.
 
@@ -118,7 +121,7 @@ and a no-inference report; it does not materialize a model implicitly.
 | :-- | :-- |
 | Accepted architecture/API/acceptance contract | [QUBO PR #94](https://github.com/JuliaQUBO/QUBO.jl/pull/94), already merged |
 | Repository and identity foundation | [#1](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/1), this slice |
-| Adjacency, dirty queue, checkpoints, reversible conditioning and bounded work | [#2](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/2), deferred |
+| Adjacency, dirty queue, checkpoints, reversible conditioning and bounded work | [#2](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/2), implemented in this slice; full inference remains separate |
 | Enclosures, bounded dyadic proofs, verifier and non-identity safe transport | [#3](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/3), deferred |
 | Strict dominance | [#4](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/4), deferred |
 | Assumptions, conditional provenance, rollback/unfix/replay and resumption | [#5](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/5), deferred |
@@ -127,7 +130,7 @@ and a no-inference report; it does not materialize a model implicitly.
 | Decomposition integration | [QUBODecomposition #16](https://github.com/JuliaQUBO/QUBODecomposition.jl/issues/16), deferred |
 | Full manual, release/registration and ecosystem adoption | [#7](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/7), deferred |
 
-`checkpoint`, `assume!`, `propagate!`, `changes`, `rollback!` and `unfix!` are
-neither exported nor implemented. `materialize` accepts Float64 only and does
-not accept future `limits` arguments. No placeholder consumer or inference API
-claims these later features work.
+`checkpoint`, `assume!`, `changes`, `rollback!` and `unfix!` implement explicit
+caller conditioning. `propagate!` remains unimplemented. Under assumptions,
+`materialize` accepts exact Float64 or Rational{BigInt} transport; no future
+inference `limits` arguments or placeholder solver consumers are implemented.
