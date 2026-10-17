@@ -3,15 +3,28 @@
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 const _Exact = Rational{BigInt}
+abstract type _ProofRecord end
+const _NeighborRecord = Tuple{Int,_Exact,_Exact,_Exact}
 
 struct _UndoFix
     serial::UInt64
+    fix_depth::Int
     index::Int
     value::Int
     constant::_Exact
-    fields::Vector{Pair{Int,_Exact}}
+    fields::Vector{_NeighborRecord}
     queue_length::Int
+    proof::Union{Nothing,_ProofRecord}
 end
+
+struct _UndoQueue
+    serial::UInt64
+    fix_depth::Int
+    index::Int
+    head::Int
+    queued::Bool
+end
+const _UndoEntry = Union{_UndoFix,_UndoQueue}
 
 # Adjacency is fixed for this conditioning-only slice. Future topology-changing
 # reductions must introduce their own trailed edge/reconstruction records here;
@@ -24,7 +37,18 @@ mutable struct _Incremental
     fixed::Vector{Int8} # 2 denotes free in either source domain
     queue::Vector{Int}
     queued::BitVector
-    trail::Vector{_UndoFix}
+    trail::Vector{_UndoEntry}
     serial::UInt64
     epoch::UUID
+    rules::Symbol
+    lower::Union{Nothing,Vector{_Exact}}
+    upper::Union{Nothing,Vector{_Exact}}
+    head::Int
+    fixes::Vector{Int}
+    callers::Vector{Int}
+    entries::Vector{Int}
+    proof_count::Int
+    total_candidates::Int
+    total_edges::Int
+    total_exact::Int
 end

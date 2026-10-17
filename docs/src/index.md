@@ -1,12 +1,12 @@
-# Identity foundation
+# Certified preprocessing
 
-This candidate package implements the repository and identity foundation of the
+This candidate package implements the first strict-dominance rule of the
 [accepted certified preprocessing design](https://github.com/JuliaQUBO/QUBO.jl/blob/c0ab77d34e2281cfd6bd06e6c9c2f5ce13994670/docs/src/design.md#certified-preprocessing).
-The implemented rule is **`rules=:identity`**, which performs no inference.
-`rules=:dominance` raises `ArgumentError`. Candidate version 0.1.0 is not a
+**`rules=:identity`** performs no inference; **`rules=:dominance`** enables
+[bounded strict-dominance propagation](dominance.md). Candidate version 0.1.0 is not a
 release. [Reversible conditioning](workspace.md) implements the incremental
 algebra and assumption trail. [Sound bounds and proof verification](certificates.md)
-checks individual strict-dominance proofs; automatic dominance/inference remain unavailable.
+checks both individual strict-dominance proofs and complete propagated chains.
 
 ## Install and run from source
 
@@ -16,7 +16,7 @@ revision, preferably the reviewed commit SHA:
 ```julia
 using Pkg
 Pkg.add(url="https://github.com/JuliaQUBO/QUBOPreprocessing.jl",
-        rev="feat/certified-dominance-witnesses")
+        rev="feat/bounded-dominance-propagation")
 Pkg.add("QUBOTools") # Declare the model dependency in the consumer project.
 using QUBOPreprocessing
 ```
@@ -105,7 +105,7 @@ energy evaluation. Nonfinite numerical results are reported without upgrading
 them to proof. Tests use independent exact binary-value rational references on
 guarded tiny fixtures. Reversible conditioning uses exact rational algebra;
 individual strict-dominance bounds and independent proof verification are now
-implemented. Automatic inference and its deduction trail remain deferred.
+implemented. Automatic strict dominance retains a separate deduction trail.
 
 ## Implemented costs and deferred API
 
@@ -117,22 +117,22 @@ summation order can differ between copies. No benchmark performance envelope,
 hard timing guarantee is claimed by this slice. Workspace work/deadline
 contracts apply to explicit conditioning updates, as described in its manual.
 Generation/report inspection is constant-size. `preprocess` constructs a workspace
-and a no-inference report; it does not materialize a model implicitly.
+and either returns a no-inference report or runs the selected dominance rule;
+it does not materialize a model implicitly.
 
 | Work | Owning issue / delivered state |
 | :-- | :-- |
 | Accepted architecture/API/acceptance contract | [QUBO PR #94](https://github.com/JuliaQUBO/QUBO.jl/pull/94), already merged |
 | Repository and identity foundation | [#1](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/1), this slice |
-| Adjacency, dirty queue, checkpoints, reversible conditioning and bounded work | [#2](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/2), implemented in this slice; full inference remains separate |
-| Enclosures, bounded exact fallback, strict-proof records, independent verifier and safe transport | [#3](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/3), this slice; automatic inference remains separate |
-| Strict dominance | [#4](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/4), deferred |
-| Assumptions, conditional provenance, rollback/unfix/replay and resumption | [#5](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/5), deferred |
+| Adjacency, dirty queue, checkpoints, reversible conditioning and bounded work | [#2](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/2), implemented in implemented |
+| Enclosures, bounded exact fallback, strict-proof records, independent verifier and safe transport | [#3](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/3), implemented |
+| Strict dominance | [#4](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/4), implemented |
+| Assumptions, conditional provenance, rollback/unfix/replay and resumption | [#5](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/5), conservative provenance/replay implemented; branch workload acceptance remains separate |
 | Optional QUBODrivers/MOI/direct/ToQUBO consumer | [#6](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/6), deferred |
 | Performance envelope | [QUBOBenchmarks #30](https://github.com/JuliaQUBO/QUBOBenchmarks.jl/issues/30), deferred |
 | Decomposition integration | [QUBODecomposition #16](https://github.com/JuliaQUBO/QUBODecomposition.jl/issues/16), deferred |
 | Full manual, release/registration and ecosystem adoption | [#7](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/7), deferred |
 
 `checkpoint`, `assume!`, `changes`, `rollback!` and `unfix!` implement explicit
-caller conditioning. `propagate!` remains unimplemented. Under assumptions,
-`materialize` accepts exact Float64 or Rational{BigInt} transport; no future
-inference `limits` arguments or placeholder solver consumers are implemented.
+caller conditioning. `propagate!` performs bounded strict dominance when selected. Under fixings,
+`materialize` accepts exact Float64 or Rational{BigInt} transport; propagation limits are explicit keyword arguments. Solver consumers remain separate.

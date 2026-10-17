@@ -20,4 +20,5 @@ For this slice, the core is QUBOTools plus used Julia standard libraries. Run
 `julia --project=. -e 'using Pkg; Pkg.test()'`, the runnable identity example,
 and the separate documentation build. The test oracle uses independent scalar
 and exact binary-value rational references on explicitly guarded tiny fixtures.
-Do not claim tests for deferred inference, assumption or non-identity transport.
+Run the workspace, certificate and dominance examples for their changed paths.
+Do not claim tests for deferred solver adapters or ecosystem integration.

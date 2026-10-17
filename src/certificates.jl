@@ -12,7 +12,7 @@ is the number of preceding steps in the ordered certificate prefix; every
 preceding deduction is therefore explicit without copying the chain per step.
 `constant` binds the exact conditioned offset. Indices refer to original order.
 """
-struct DominanceStep
+struct DominanceStep <: _ProofRecord
     variable::Int
     value::Int
     lower::_Exact
@@ -20,7 +20,9 @@ struct DominanceStep
     constant::_Exact
     predecessors::Int
     method::Symbol
+    scope_length::Int
 end
+DominanceStep(i,v,lo,hi,c,p,m) = DominanceStep(i,v,lo,hi,c,p,m,-1)
 
 """
     DominanceCertificate
@@ -59,7 +61,8 @@ struct VerificationResult
     term_visits::Int
 end
 
-_caller_scope(ws::Workspace) = Tuple(e.index=>e.value for e in ws._state.trail)
+_caller_scope(ws::Workspace) = Tuple(ws._state.trail[p].index=>ws._state.trail[p].value
+                                    for p in ws._state.callers)
 _direction(s::_Snapshot) = iszero(s.scale) ? 0 :
     (s.sense === QT.Min ? 1 : -1) * (signbit(s.scale) ? -1 : 1)
 
@@ -85,7 +88,7 @@ end
 # Caller supplies predecessor count and persists the returned compact step.
 function _dominance_witness(ws::Workspace, i::Int; max_work=typemax(Int),
                             max_exact_work=typemax(Int), deadline_ns=nothing,
-                            predecessors=0)
+                            predecessors=0,scope_length=-1)
     _limits(max_work,deadline_ns)
     _limits(max_exact_work,deadline_ns)
     st, s = ws._state, ws._snapshot
@@ -112,7 +115,7 @@ function _dominance_witness(ws::Workspace, i::Int; max_work=typemax(Int),
     value = isfinite(lo) && isfinite(hi) ? _strict_value(lo,hi,s.domain) : nothing
     _expired(deadline_ns) && return (nothing,:deadline,:interval,visits,0,0)
     if value !== nothing
-        step = DominanceStep(i,value,_Exact(lo),_Exact(hi),deepcopy(st.constant),predecessors,:interval)
+        step = DominanceStep(i,value,_Exact(lo),_Exact(hi),deepcopy(st.constant),predecessors,:interval,scope_length)
         return (step,:proved,:interval,visits,0,0)
     end
     # Reserve the complete fallback before doing it. Exact work counts the
@@ -135,7 +138,7 @@ function _dominance_witness(ws::Workspace, i::Int; max_work=typemax(Int),
     _expired(deadline_ns) && return (nothing,:deadline,:exact,visits,1,exact_work)
     value = _strict_value(lower,upper,s.domain)
     value === nothing && return (nothing,:not_strict,:exact,visits,1,exact_work)
-    step = DominanceStep(i,value,deepcopy(lower),deepcopy(upper),deepcopy(st.constant),predecessors,:exact)
+    step = DominanceStep(i,value,deepcopy(lower),deepcopy(upper),deepcopy(st.constant),predecessors,:exact,scope_length)
     return (step,:proved,:exact,visits,1,exact_work)
 end
 
@@ -152,20 +155,22 @@ scale, work/deadline exhaustion and unresolved signs yield no certificate.
 The numeric check touches incident adjacency. Successful public proof export
 additionally copies O(n+m) source data and O(k) assumptions; it is an explicit
 verification/export boundary, not an inner-loop propagation API. No deduction
-is installed here. `rules=:dominance` and automatic propagation remain deferred.
+is installed here. Select `rules=:dominance` and call `propagate!` to commit
+a bounded cascade using the workspace's exact caches.
 """
 function prove_dominance(ws::Workspace, label; max_work=typemax(Int),
                          max_exact_work=typemax(Int), deadline_ns=nothing)
     i = _variable(ws,label)
     step, reason, method, visits, fallbacks, exact_work = _dominance_witness(ws,i;
-        max_work,max_exact_work,deadline_ns)
+        max_work,max_exact_work,deadline_ns,predecessors=ws._state.proof_count,
+        scope_length=length(ws._state.callers))
     certificate = if step === nothing
         nothing
     else
         source = deepcopy(ws._snapshot)
         _validate_label_copy(ws._snapshot.labels,source.labels)
         _expired(deadline_ns) && return DominanceAttempt(nothing,:deadline,method,visits,fallbacks,exact_work)
-        DominanceCertificate(generation(ws),checkpoint(ws),_caller_scope(ws),(step,),source)
+        DominanceCertificate(generation(ws),checkpoint(ws),_caller_scope(ws),(_proof_steps(ws)...,step),source)
     end
     return DominanceAttempt(certificate,reason,method,visits,fallbacks,exact_work)
 end
@@ -275,21 +280,40 @@ function verify_certificate(ws::Workspace, cert::DominanceCertificate;
     _expired(deadline_ns) && return VerificationResult(false,:deadline,cost)
     isempty(cert.steps) && return VerificationResult(false,:empty_proof,cost)
     fixed = Dict{Int,Int}()
+    seen = Set{Int}()
     low = s.domain === QT.BoolDomain ? 0 : -1
     for assumption in cert.assumptions
         assumption isa Pair{Int,Int} || return VerificationResult(false,:invalid_scope,cost)
         i,v = assumption
-        1 <= i <= length(s.labels) && !haskey(fixed,i) && v in (low,1) ||
+        1 <= i <= length(s.labels) && !(i in seen) && v in (low,1) ||
             return VerificationResult(false,:invalid_scope,cost)
-        fixed[i] = v
+        push!(seen,i)
     end
+    introduced = 0
     for (k,step) in enumerate(cert.steps)
         step isa DominanceStep && step.predecessors == k-1 ||
             return VerificationResult(false,:invalid_predecessors,cost)
+        # Scope prefixes preserve the actual interleaving of caller assumptions
+        # and strong deductions. Later assumptions constrain only variables
+        # that were free when earlier uniform derivative bounds were proved.
+        count = step.scope_length == -1 ? length(cert.assumptions) : step.scope_length
+        introduced <= count <= length(cert.assumptions) ||
+            return VerificationResult(false,:invalid_scope,cost)
+        for p in introduced+1:count
+            i,v = cert.assumptions[p]
+            haskey(fixed,i) && return VerificationResult(false,:invalid_scope,cost)
+            fixed[i] = v
+        end
+        introduced = count
         valid, reason, visits = _verify_polynomial(s,fixed,step,max_work-cost,deadline_ns)
         cost += visits
         valid || return VerificationResult(false,reason,cost)
         fixed[step.variable] = step.value
+    end
+    for p in introduced+1:length(cert.assumptions)
+        i,v = cert.assumptions[p]
+        haskey(fixed,i) && return VerificationResult(false,:invalid_scope,cost)
+        fixed[i] = v
     end
     return _expired(deadline_ns) ? VerificationResult(false,:deadline,cost) :
                                    VerificationResult(true,:verified,cost)

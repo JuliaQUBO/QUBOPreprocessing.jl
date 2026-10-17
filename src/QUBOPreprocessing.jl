@@ -18,8 +18,11 @@ export Checkpoint, checkpoint, assume!, rollback!, unfix!, changes, assumptions,
 export DominanceStep, DominanceCertificate, DominanceAttempt, VerificationResult,
        prove_dominance, verify_certificate
 
+export propagate!, PropagationReport, deductions, export_certificate
+
 include("trail.jl")
 include("identity.jl")
 include("workspace.jl")
 include("certificates.jl")
+include("propagation.jl")
 end

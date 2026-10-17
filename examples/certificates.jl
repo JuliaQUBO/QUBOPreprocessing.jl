@@ -7,7 +7,7 @@ attempt = prove_dominance(ws,:x;max_work=2,max_exact_work=0)
 @assert attempt.method == :interval
 @assert verify_certificate(ws,attempt.certificate).valid
 @assert only(attempt.certificate.steps).value == 0
-@assert isempty(assumptions(ws)) # proving is read-only; propagation is a later layer
+@assert isempty(assumptions(ws)) # proving is read-only; propagation is a separate mutating call
 
 conditional = Workspace(QT.Model(Dict(:x=>1.0,:y=>0.0),Dict((:x,:y)=>-2.0)))
 root = checkpoint(conditional)

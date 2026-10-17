@@ -123,8 +123,9 @@ end
     Workspace(model; rules=:identity)
 
 Privately snapshot a finite Float64 QUBOTools model and its ordered labels.
-Only `:identity` is supported (no inferred reductions). Explicit caller
-assumptions can be conditioned and rolled back. Source edits never change the snapshot; use
+`:identity` performs no inference; `:dominance` prepares exact bound caches and
+a deterministic queue for [`propagate!`](@ref). Explicit caller assumptions and
+certified deductions have separate provenance and can be rolled back. Source edits never change the snapshot; use
 [`reset!`](@ref) to accept a new source. Labels must have stable equality/hash
 semantics and preserve equality/hash under owned deep copies. Use each workspace
 serially. Model metadata, solutions and warm starts are outside the objective snapshot.
@@ -138,12 +139,12 @@ mutable struct Workspace
     function Workspace(model; rules=:identity)
         _check_rules(rules)
         snapshot = _snapshot(model)
-        state = _incremental(snapshot)
+        state = _incremental(snapshot;rules)
         return new(snapshot, Generation(uuid4(), uuid4()), state)
     end
 end
-_check_rules(rules) = rules === :identity ? nothing :
-    throw(ArgumentError("only rules=:identity is implemented; requested $(repr(rules))"))
+_check_rules(rules) = rules in (:identity,:dominance) ? nothing :
+    throw(ArgumentError("supported rules are :identity and :dominance; requested $(repr(rules))"))
 
 """`generation(ws_or_export)` returns its immutable source/workspace identity."""
 generation(ws::Workspace) = ws._generation
@@ -157,7 +158,7 @@ source. Owned exports remain evidence for their historical generation.
 """
 function reset!(ws::Workspace, model)
     snapshot = _snapshot(model)
-    state = _incremental(snapshot)
+    state = _incremental(snapshot;rules=ws._state.rules)
     token = Generation(generation(ws).workspace, uuid4())
     ws._snapshot = snapshot
     ws._generation = token
@@ -184,14 +185,15 @@ generation(result::ExportResult) = result.generation
 """
     materialize(ws; coefficient_type=Float64)
 
-Explicitly capture an owned export. Without assumptions this is the unchanged
-Float64 identity export. With assumptions, return a [`ConditionedExport`](@ref):
+Explicitly capture an owned export. Without fixings this is the unchanged
+Float64 identity export. With caller assumptions or certified deductions, return
+a [`ConditionedExport`](@ref) with the complete proof chain when present:
 Float64 transport must represent every conditioned coefficient exactly, or the
 call raises `ArgumentError`; use `coefficient_type=Rational{BigInt}` for exact
 transport. Materialization scans/copies the graph; it is never implicit in updates.
 """
 function materialize(ws::Workspace; coefficient_type=Float64)
-    if !isempty(ws._state.trail)
+    if !isempty(ws._state.fixes)
         return _conditioned_export(ws, coefficient_type)
     end
     coefficient_type === Float64 || throw(ArgumentError("only Float64 identity transport is supported"))
@@ -280,10 +282,14 @@ end
 """
     preprocess(model; rules=:identity)
 
-Return `(workspace, identity_report)` using the same snapshot path as Workspace.
-No model is materialized implicitly and no inference is performed.
+Return `(workspace, report)` using the same snapshot path as Workspace.
+`:identity` returns a no-inference `IdentityReport`; `:dominance` runs
+[`propagate!`](@ref) with forwarded keyword limits and returns its report.
+No model is materialized implicitly.
 """
-function preprocess(model; rules=:identity)
+function preprocess(model; rules=:identity, kwargs...)
     ws = Workspace(model; rules)
+    rules === :dominance && return ws, propagate!(ws;kwargs...)
+    isempty(kwargs) || throw(ArgumentError("propagation limits require rules=:dominance"))
     return ws, IdentityReport(generation(ws), :identity, :quiescent, 0, 0)
 end

@@ -1,9 +1,10 @@
 # Sound bounds and proof verification
 
 `prove_dominance(ws, label)` checks one strict unary reduction without changing
-the workspace. The complete dominance queue/propagation and inference undo trail
-remain with issues #4/#5. This slice provides their numerical witness seam and
-an independently structured verifier, with no mandatory external backend.
+the workspace. [Bounded dominance](dominance.md) separately provides the queue,
+propagation and inference undo trail. The standalone helper provides an
+interval/exact witness seam and an independently structured verifier, with no
+mandatory external backend.
 
 ```@example certificates
 using QUBOPreprocessing
@@ -66,7 +67,9 @@ identity nor a plausible solver sample is an optimality proof.
 Each `DominanceCertificate` owns a source snapshot, generation, branch-specific
 checkpoint, explicit caller assumptions and ordered `DominanceStep` records.
 A step records original index/value, signed bounds, exact conditioned constant,
-numeric method and predecessor-prefix length. An ordered prefix is verified
+numeric method, predecessor-prefix length and the number of caller assumptions
+present at its birth. The latter preserves the actual chronological scope when
+new caller pins are added between deductions. An ordered prefix is verified
 sequentially, so deductions cannot be combined as unrelated existential claims.
 All steps in this format are strong. Weak persistency and compatible optimum
 selection require their own supported guarantee; they cannot inherit this one.
@@ -74,8 +77,9 @@ selection require their own supported guarantee; they cannot inherit this one.
 `verify_certificate(ws, certificate)` compares actual source data as well as
 generation, checks the live caller scope and exact current trail-tip checkpoint
 (generation, epoch, depth and serial), then substitutes
-assumptions and each already validated predecessor directly in the original
-polynomial. It does not trust cached fields, adjacency, constant or queue and
+each step's caller prefix and each already validated predecessor directly in
+the original polynomial. Later caller assumptions restrict still-free variables;
+they are not retroactively substituted into earlier bound/constant evidence. It does not trust cached fields, adjacency, constant or queue and
 does not call the producer's bound/conditioning helper. Exact bounds must match
 exact recomputation; interval bounds must enclose the exact range and prove the
 claimed strict sign. A wider but still sound enclosure remains mathematically
