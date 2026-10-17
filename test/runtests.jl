@@ -7,3 +7,4 @@ using LinearAlgebra
 include("identity.jl")
 include("labels.jl")
 include("workspace.jl")
+include("certificates.jl")
