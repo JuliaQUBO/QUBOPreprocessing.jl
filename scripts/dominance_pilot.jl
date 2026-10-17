@@ -87,8 +87,8 @@ end
 
 function main()
     root = normpath(joinpath(@__DIR__,".."))
-    producing_sha = readchomp(Cmd(["git","rev-parse","HEAD"];dir=root))
-    isempty(readchomp(Cmd(["git","status","--porcelain","--untracked-files=normal"];dir=root))) ||
+    producing_sha = readchomp(Cmd(Cmd(["git","rev-parse","HEAD"]);dir=root))
+    isempty(readchomp(Cmd(Cmd(["git","status","--porcelain","--untracked-files=normal"]);dir=root))) ||
         error("pilot provenance requires a clean checkout")
     # Verify oversize rejection without constructing its state space.
     oversized = QT.Model(Dict(i=>0.0 for i in 1:MAX_N+1),Dict{Tuple{Int,Int},Float64}())
