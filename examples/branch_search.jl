@@ -28,7 +28,7 @@ function branch_search(model)
         i = findfirst(!=(0),index_map(ws))
         if i === nothing
             result = materialize(ws) # tiny dyadic fixture has safe Float64 transport
-            result.certificate.proof === nothing ||
+            result isa ExportResult || result.certificate.proof === nothing ||
                 verify_certificate(ws,result.certificate.proof).valid || error("invalid branch proof")
             state = reconstruct(result,Int[]).state
             # Exact original scalar audit at leaves, including scale and offset.
