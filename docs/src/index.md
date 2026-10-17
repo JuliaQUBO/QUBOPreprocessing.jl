@@ -16,7 +16,7 @@ revision, preferably the reviewed commit SHA:
 ```julia
 using Pkg
 Pkg.add(url="https://github.com/JuliaQUBO/QUBOPreprocessing.jl",
-        rev="feat/scoped-branch-workloads")
+        rev="feat/direct-sampler-composition")
 Pkg.add("QUBOTools") # Declare the model dependency in the consumer project.
 using QUBOPreprocessing
 ```
@@ -128,11 +128,11 @@ it does not materialize a model implicitly.
 | Enclosures, bounded exact fallback, strict-proof records, independent verifier and safe transport | [#3](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/3), implemented |
 | Strict dominance | [#4](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/4), implemented |
 | Assumptions, conditional provenance, rollback/unfix/replay and resumption | [#5](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/5), implemented; [branch workload contract](scopes.md) |
-| Optional QUBODrivers/MOI/direct/ToQUBO consumer | [#6](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/6), deferred |
+| Optional QUBODrivers/MOI/direct/ToQUBO consumer | [#6](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/6), implemented; [optional consumer contract](consumers.md) |
 | Performance envelope | [QUBOBenchmarks #30](https://github.com/JuliaQUBO/QUBOBenchmarks.jl/issues/30), deferred |
 | Decomposition integration | [QUBODecomposition #16](https://github.com/JuliaQUBO/QUBODecomposition.jl/issues/16), deferred |
 | Full manual, release/registration and ecosystem adoption | [#7](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/7), deferred |
 
 `checkpoint`, `assume!`, `changes`, `rollback!` and `unfix!` implement explicit
 caller conditioning. `propagate!` performs bounded strict dominance when selected. Under fixings,
-`materialize` accepts exact Float64 or Rational{BigInt} transport; propagation limits are explicit keyword arguments. Solver consumers remain separate.
+`materialize` accepts exact Float64 or Rational{BigInt} transport; propagation limits are explicit keyword arguments. The [optional consumer](consumers.md) loads only when QUBODrivers is imported.

@@ -251,7 +251,9 @@ and ordinary Float64 original-energy evaluation. Reject missing, partial,
 non-real, nonfinite and out-of-domain values. Numerical overflow is reported in
 `energy.finite`; neither the energy nor this reconstruction certifies optimality.
 """
-function reconstruct(result::ExportResult, y::AbstractVector)
+function reconstruct end
+
+function _lift_state(result::ExportResult, y::AbstractVector)
     Base.require_one_based_indexing(y)
     s = result._snapshot
     length(y) == length(s.labels) || throw(ArgumentError("state must cover every original variable"))
@@ -263,10 +265,20 @@ function reconstruct(result::ExportResult, y::AbstractVector)
             throw(ArgumentError("state value at index $i is outside the original domain"))
         state[i] = Int(v)
     end
-    f = QT.Form{Float64}(length(state), _thaw(s.linear), _thaw(s.quadratic),
-                         s.scale, s.offset; sense=s.sense, domain=s.domain)
-    energy = QT.value(state, f)
-    return Reconstruction(state, EnergyEvaluation(energy, isfinite(energy), :float64), generation(result))
+    return state
+end
+function _source_evaluator(s::_Snapshot)
+    return QT.Form{Float64}(length(s.labels), _thaw(s.linear), _thaw(s.quadratic),
+                            s.scale, s.offset; sense=s.sense, domain=s.domain)
+end
+function _evaluate_state(result,state,evaluator)
+    energy = QT.value(state,evaluator)
+    return Reconstruction(state,EnergyEvaluation(energy,isfinite(energy),:float64),generation(result))
+end
+_reconstruct(result,y::AbstractVector,evaluator) = _evaluate_state(result,_lift_state(result,y),evaluator)
+function reconstruct(result::ExportResult,y::AbstractVector)
+    state = _lift_state(result,y)
+    return _evaluate_state(result,state,_source_evaluator(result._snapshot))
 end
 reconstruct(::ExportResult, y) = throw(ArgumentError("state must be a complete ordered vector"))
 

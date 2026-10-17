@@ -3,8 +3,8 @@
 Certified preprocessing for the [accepted certified preprocessing design](https://github.com/JuliaQUBO/QUBO.jl/pull/94).
 **`rules=:identity` and `rules=:dominance` are implemented.** Explicit assumptions
 and certified deductions use reusable sparse conditioning, exact bound caches,
-checkpoints and rollback. Solver adapters and decomposition integration remain
-unavailable.
+checkpoints and rollback. An optional QUBODrivers/MOI consumer supports direct
+solving and ToQUBO composition; decomposition integration remains separate.
 Individual strong-dominance bounds, budgeted exact fallback and independent
 certificate verification are available through `prove_dominance` and
 `verify_certificate`; they do not mutate the workspace. `propagate!` commits strict dominance
@@ -15,7 +15,7 @@ Install from a selected source revision, substituting its exact reviewed SHA:
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/JuliaQUBO/QUBOPreprocessing.jl", rev="feat/scoped-branch-workloads")
+Pkg.add(url="https://github.com/JuliaQUBO/QUBOPreprocessing.jl", rev="feat/direct-sampler-composition")
 Pkg.add("QUBOTools") # Declare the model dependency in the consumer project.
 using QUBOPreprocessing
 import QUBOTools as QT
@@ -88,3 +88,9 @@ exercise scoped fix/unfix and resumable inference for
 [#5](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/5). Optional
 `rollback!(ws, cp; report=true)` reports removed caller and inferred fixings as
 original-index/value pairs in reverse application order without materializing a residual.
+
+Load `QUBODrivers` to activate the optional `sample_preprocessed` and `Optimizer`
+consumer methods. See [consumer guarantees and limits](docs/src/consumers.md) and
+the [direct/ToQUBO example](examples/consumer.jl) for
+[#6](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/6). Core workspace use
+does not load QUBODrivers, MOI, JuMP or ToQUBO.
