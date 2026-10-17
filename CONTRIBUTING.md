@@ -16,9 +16,20 @@ retain access for continuity; future maintainership/access changes need a separa
 handoff. Registration, tagging, releases, hosted documentation and repository
 settings changes are separate maintainer actions.
 
-For this slice, the core is QUBOTools plus used Julia standard libraries. Run
-`julia --project=. -e 'using Pkg; Pkg.test()'`, the runnable identity example,
-and the separate documentation build. The test oracle uses independent scalar
+The core is QUBOTools plus used Julia standard libraries. Run
+`julia --project=. -e 'using Pkg; Pkg.test()'`, the runnable core examples,
+and the separate documentation build (`julia --project=docs docs/make.jl --skip-deploy`).
+The test oracle uses independent scalar
 and exact binary-value rational references on explicitly guarded tiny fixtures.
 Run the workspace, certificate and dominance examples for their changed paths.
-Do not claim tests for deferred solver adapters or ecosystem integration.
+For optional consumer changes, develop the checkout into `test/integration`,
+instantiate that environment, and run `test/integration/runtests.jl` and
+`examples/consumer.jl` there. CI retains minimum/current core and consumer lanes.
+Source coverage reports include both core and optional extension execution.
+
+Documentation PRs build without publishing. The trusted main publisher uses the
+`github-pages` environment and one shared destination lock; a manually selected
+release must match its real tag, published GitHub release and General package tree.
+Never treat a build, coverage badge or uploaded report as proof of deployment,
+visible service results or package registration. Release preparation is tracked in
+[RELEASE.md](RELEASE.md) and issue #7.

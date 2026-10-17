@@ -1,25 +1,126 @@
 name: Documentation
+run-name: "${{ inputs.release_tag && format('Release documentation {0}', inputs.release_tag) || github.event.pull_request.title || github.event.head_commit.message || 'Documentation' }}"
 on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
-permissions:
-  contents: read
-concurrency:
-  group: docs-${{ github.ref }}
-  cancel-in-progress: true
+    inputs:
+      release_tag:
+        description: Published release tag to refresh (empty refreshes dev)
+        type: string
+        required: false
+      release_commit:
+        description: Verified full release commit SHA (required with release_tag)
+        type: string
+        required: false
+
+permissions: {}
+
 jobs:
   build:
     name: Documentation build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v6
-      - uses: julia-actions/setup-julia@v2
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check release provenance gate
+        run: python3 -B -m unittest discover -s .github/tests -p test_validate_release.py
+      - uses: julia-actions/setup-julia@v3
         with:
           version: '1'
       - uses: julia-actions/cache@v3
-      - name: Install separate docs environment
-        run: julia --project=docs --startup-file=no -e 'using Pkg; Pkg.develop(path=pwd()); Pkg.instantiate(); Pkg.status()'
-      - name: Build documentation and run its examples
-        run: julia --project=docs --startup-file=no docs/make.jl
+      - name: Develop local package with released documentation dependencies
+        run: julia --project=docs -e 'using Pkg; Pkg.develop(path=pwd()); Pkg.instantiate(); Pkg.status()'
+      - name: Build, doctest and run offline examples
+        run: julia --project=docs docs/make.jl --skip-deploy
+      - uses: actions/upload-artifact@v7
+        with:
+          name: documentation-build
+          path: docs/build
+          if-no-files-found: error
+          include-hidden-files: true
+
+  publish:
+    name: Publish documentation
+    needs: build
+    # Ref, repository and event establish trust; actor identity does not.
+    if: >-
+      github.repository == 'JuliaQUBO/QUBOPreprocessing.jl' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: documentation-JuliaQUBO-QUBOPreprocessing-gh-pages
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Validate published release provenance
+        id: release
+        run: python3 -B scripts/validate_release.py
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+      - name: Check out verified release source
+        if: steps.release.outputs.tag != ''
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ steps.release.outputs.commit }}
+          path: release-source
+          persist-credentials: false
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1.10'
+      - uses: actions/configure-pages@v6
+      - name: Select documentation source
+        id: source
+        run: |
+          if [ -n "$RELEASE_TAG" ]; then
+            echo "directory=release-source" >> "$GITHUB_OUTPUT"
+          else
+            echo "directory=." >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+      - name: Develop verified package with released documentation dependencies
+        working-directory: ${{ steps.source.outputs.directory }}
+        run: julia --project=docs -e 'using Pkg; Pkg.develop(path=pwd()); Pkg.instantiate(); Pkg.status()'
+      - name: Append verified Documenter publication
+        working-directory: ${{ steps.source.outputs.directory }}
+        run: julia --project=docs docs/make.jl --deploy
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          QUBOPREPROCESSING_RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          QUBOPREPROCESSING_RELEASE_COMMIT: ${{ steps.release.outputs.commit }}
+      - name: Check out the complete publication branch
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: gh-pages
+          path: publication
+          persist-credentials: false
+      - name: Upload Documenter layout for Actions Pages
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: publication
+          # Keep Documenter's .documenter-siteinfo.json; the action excludes
+          # checkout internals and dereferences symbolic and hard links.
+          include-hidden-files: true
+          retention-days: 1
+      - name: Deploy Pages explicitly
+        id: deployment
+        uses: actions/deploy-pages@v5
