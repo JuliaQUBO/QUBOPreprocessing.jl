@@ -3,7 +3,8 @@
 The workspace prepares signed sparse adjacency once and stores exact rational
 boundary fields and a constant. It retains the original domain, sense, scale
 and label order; no full QUBO–Ising casts occur during updates. Dense input is
-read once during initialization. No rule infers a fixing in this slice.
+read once during initialization. `rules=:identity` has no inference;
+[dominance](dominance.md) separately records inferred values.
 
 ```@example workspace
 using QUBOPreprocessing
@@ -26,14 +27,17 @@ restored.state
 
 `assume!` takes an original **label**, including when labels are integers; it
 does not take a compact residual index. Duplicate assignments are no-ops and
-conflicts or invalid values fail before mutation. Caller assumptions only
+conflicts or invalid values fail before mutation. A duplicate of an inferred
+value is also a no-op and does not create an independent caller premise.
+Roll back before imposing such a premise. Caller assumptions only
 describe a restricted problem. A residual optimum lifts to an optimum within
 that scope, which need not contain any original global optimum. The residual
 export has `certificate.scope == :assumptions`; an empty reduction chain makes
-no inference claim. Source fields/scale/offset are exact binary values of the
+no inference claim when only callers are present. With deductions, a separate
+ordered strong proof is included. Source fields/scale/offset are exact binary values of the
 accepted finite Float64 input. Conditioning uses `Rational{BigInt}` internally
 to prevent cancellation drift and overflow in reversible algebra. This is
-algebraic storage, not the inference/proof verifier owned by issue #3.
+algebraic storage; inference additionally records independently verifiable proof evidence.
 
 `checkpoint` is constant-size. Nested `rollback!` restores prior fields,
 constant, fixed flags, pending dirty queue and assumption provenance exactly.
@@ -48,7 +52,10 @@ assumption conservatively builds fresh state and replays retained assumptions
 in their application order. Replacement happens only on success and invalidates
 all old checkpoints. It costs O(n+m + total retained adjacency visits), plus
 exact arithmetic, and allocates a fresh state. It is not a local-cost promise.
-Deduction invalidation and resumable inference remain with issues #4/#5.
+Non-LIFO replay discards all deductions, retains only explicit caller pins,
+and creates a fresh checkpoint epoch. The caller resumes propagation explicitly.
+Local unfix removes the last caller and deductions after it; earlier proofs
+remain valid. `unfix!` rejects inferred variables; roll back before their deduction.
 
 ## Work, allocation and interruption boundaries
 
@@ -56,7 +63,7 @@ Sparse initialization costs O(n+m) structural work/storage; raw dense input
 costs O(n²) to read/copy. Each assumption visits its source degree (including
 already fixed neighbors), updates only free neighbors, and appends compact undo
 records and dirty queue entries. Each affected neighbor is queued at most once;
-this slice does not consume the queue. Rollback costs undone field/trail/queue
+propagation consumes and trails the queue cursor. Rollback costs undone field/trail/queue
 work, without a graph scan or floating subtraction. Mutable state is private to
 each serial workspace. Exact integer bit complexity, allocations and label
 hash/copy costs are additional to structural counts.
@@ -73,14 +80,15 @@ charges replay adjacency visits to `max_work`; initialization still costs
 O(n+m), and deadline checks surround rather than interrupt initialization.
 
 `changes(ws, cp)` and `assumptions(ws)` allocate owned pairs proportional to
-their returned assumptions, without scanning the graph. No-change `changes`
+the fixing records in the requested range, without scanning the graph or
+queue-only history. `deductions(ws; since=cp)` separately returns inferred pairs. No-change `changes`
 and duplicate assumptions avoid graph traversal. `index_map` explicitly scans
 n original positions, returning zero for fixed variables and compact positive
 indices for free variables. The source's original label order is preserved.
 
 `materialize` and `export_model` are explicit O(n+m) boundaries. With no
-assumptions the original bit-preserving identity export is retained. Under
-assumptions, default Float64 export requires **every** transformed coefficient
+fixings the original bit-preserving identity export is retained. Under
+caller or inferred fixings, default Float64 export requires **every** transformed coefficient
 and constant to be exactly representable, otherwise it raises `ArgumentError`.
 Use `materialize(ws; coefficient_type=Rational{BigInt})` for the exact residual;
 a solver must explicitly support that type. This conservative rule does not

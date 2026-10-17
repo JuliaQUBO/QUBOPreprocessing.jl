@@ -2,7 +2,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-function _incremental(s::_Snapshot)
+function _incremental(s::_Snapshot;rules=:identity)
     n = length(s.labels)
     adjacency = [Pair{Int,_Exact}[] for _ in 1:n]
     fields = fill(_Exact(0), n)
@@ -17,9 +17,20 @@ function _incremental(s::_Snapshot)
         push!(adjacency[i], j=>q)
         push!(adjacency[j], i=>q)
     end
+    lower,upper = nothing,nothing
+    if rules === :dominance
+        lower,upper = copy(fields),copy(fields)
+        for i in 1:n, (_,q) in adjacency[i]
+            lower[i] += s.domain === QT.BoolDomain ? min(0,q) : -abs(q)
+            upper[i] += s.domain === QT.BoolDomain ? max(0,q) : abs(q)
+        end
+    end
+    queue = rules === :dominance ? collect(1:n) : Int[]
+    queued = rules === :dominance ? trues(n) : falses(n)
     return _Incremental(Dict{Any,Int}(v=>i for (i,v) in enumerate(s.labels)),
                         adjacency, fields, _Exact(s.offset), fill(Int8(2), n),
-                        Int[], falses(n), _UndoFix[], 0, uuid4())
+                        queue, queued, _UndoEntry[], 0, uuid4(),rules,lower,upper,1,
+                        Int[],Int[],zeros(Int,n),0,0,0,0)
 end
 
 """
@@ -35,19 +46,27 @@ struct Checkpoint
     _epoch::UUID
     _depth::Int
     _serial::UInt64
+    _fix_depth::Int
 end
 
 """`checkpoint(ws)` captures a constant-size position without copying the model."""
 function checkpoint(ws::Workspace)
     t = ws._state.trail
-    return Checkpoint(generation(ws), ws._state.epoch, length(t), isempty(t) ? 0 : t[end].serial)
+    return _checkpoint_at(ws,length(t))
+end
+
+function _checkpoint_at(ws::Workspace,depth::Int)
+    t = ws._state.trail
+    return Checkpoint(generation(ws),ws._state.epoch,depth,depth == 0 ? 0 : t[depth].serial,
+                      depth == 0 ? 0 : t[depth].fix_depth)
 end
 
 function _validate_checkpoint(ws::Workspace, cp::Checkpoint)
     t = ws._state.trail
     cp._generation == generation(ws) && cp._epoch == ws._state.epoch &&
         0 <= cp._depth <= length(t) &&
-        (cp._depth == 0 ? cp._serial == 0 : t[cp._depth].serial == cp._serial) ||
+        (cp._depth == 0 ? cp._serial == 0 && cp._fix_depth == 0 :
+            t[cp._depth].serial == cp._serial && t[cp._depth].fix_depth == cp._fix_depth) ||
         throw(ArgumentError("checkpoint belongs to another workspace, generation or discarded branch"))
     return nothing
 end
@@ -90,7 +109,9 @@ end
     assume!(ws, label, value; max_work=typemax(Int), deadline_ns=nothing)
 
 Condition on one explicit original-label assignment, never a certified deduction.
-Repeat assignments are no-ops; conflicts/invalid values throw before mutation.
+Repeat assignments are no-ops, including a matching certified deduction; they
+do not promote deductions into independent caller assumptions. Roll back before
+imposing such an independent assumption. Conflicts/invalid values throw before mutation.
 Reserve the variable's complete adjacency work before starting. A work/deadline
 stop leaves state unchanged. Preparation checks the deadline per incident edge;
 commit is one atomic algorithmic boundary (not asynchronous interrupt safety).
@@ -106,18 +127,32 @@ function assume!(ws::Workspace, label, value; max_work=typemax(Int), deadline_ns
         st.fixed[i] == v || throw(ArgumentError("conflicting caller assumption"))
         return UpdateReport(:unchanged, 0, 0)
     end
+    return _fix!(ws,i,v;max_work,deadline_ns)
+end
+
+function _fix!(ws::Workspace,i::Int,v::Int;proof=nothing,max_work=typemax(Int),deadline_ns=nothing)
+    st = ws._state
+    st.fixed[i] == 2 || throw(ArgumentError("fixing requires a free variable"))
     edges = st.adjacency[i]
     length(edges) <= max_work || return UpdateReport(:work_limit, 0, 0)
     _expired(deadline_ns) && return UpdateReport(:deadline, 0, 0)
-    old = Pair{Int,_Exact}[]
-    updated = Pair{Int,_Exact}[]
+    old = _NeighborRecord[]
+    updated = _NeighborRecord[]
     visits = 0
     for (j,q) in edges
         _expired(deadline_ns) && return UpdateReport(:deadline, visits, 0)
         visits += 1
         st.fixed[j] == 2 || continue
-        push!(old, j=>st.fields[j])
-        push!(updated, j=>(st.fields[j] + q*v))
+        field = st.fields[j] + q*v
+        if st.lower === nothing
+            push!(old,(j,st.fields[j],st.fields[j],st.fields[j]))
+            push!(updated,(j,field,field,field))
+        else
+            a = ws._snapshot.domain === QT.BoolDomain ? min(0,q) : -abs(q)
+            b = ws._snapshot.domain === QT.BoolDomain ? max(0,q) : abs(q)
+            push!(old,(j,st.fields[j],st.lower[j],st.upper[j]))
+            push!(updated,(j,field,st.lower[j]+q*v-a,st.upper[j]+q*v-b))
+        end
     end
     constant = st.constant + st.fields[i]*v
     _expired(deadline_ns) && return UpdateReport(:deadline, visits, 0)
@@ -125,13 +160,21 @@ function assume!(ws::Workspace, label, value; max_work=typemax(Int), deadline_ns
     # Complete allocation before committing field, queue and trail changes.
     sizehint!(st.queue, length(st.queue) + length(updated))
     sizehint!(st.trail, length(st.trail) + 1)
-    entry = _UndoFix(st.serial + 1, i, v, st.constant, old, length(st.queue))
+    sizehint!(st.fixes,length(st.fixes)+1)
+    proof === nothing && sizehint!(st.callers,length(st.callers)+1)
+    entry = _UndoFix(st.serial + 1,length(st.fixes)+1,i,v,st.constant,old,length(st.queue),proof)
     push!(st.trail, entry)
+    push!(st.fixes,length(st.trail))
+    proof === nothing ? push!(st.callers,length(st.trail)) : (st.proof_count += 1)
+    st.entries[i] = length(st.trail)
     st.serial += 1
     st.constant = constant
     st.fixed[i] = v
-    for (j,field) in updated
+    for (j,field,lower,upper) in updated
         st.fields[j] = field
+        if st.lower !== nothing
+            st.lower[j],st.upper[j] = lower,upper
+        end
         if !st.queued[j]
             push!(st.queue, j)
             st.queued[j] = true
@@ -154,14 +197,25 @@ function rollback!(ws::Workspace, cp::Checkpoint)
     st = ws._state
     while length(st.trail) > cp._depth
         undo = pop!(st.trail)
-        for (j,field) in undo.fields
-            st.fields[j] = field
+        if undo isa _UndoQueue
+            st.head = undo.head
+            st.queued[undo.index] = undo.queued
+        else
+            for (j,field,lower,upper) in undo.fields
+                st.fields[j] = field
+                if st.lower !== nothing
+                    st.lower[j],st.upper[j] = lower,upper
+                end
+            end
+            while length(st.queue) > undo.queue_length
+                st.queued[pop!(st.queue)] = false
+            end
+            st.fixed[undo.index] = 2
+            st.entries[undo.index] = 0
+            pop!(st.fixes)
+            undo.proof === nothing ? pop!(st.callers) : (st.proof_count -= 1)
+            st.constant = undo.constant
         end
-        while length(st.queue) > undo.queue_length
-            st.queued[pop!(st.queue)] = false
-        end
-        st.fixed[undo.index] = 2
-        st.constant = undo.constant
     end
     return ws
 end
@@ -174,7 +228,8 @@ assumptions. No graph scan, residual construction or proof claim is involved.
 """
 function assumptions(ws::Workspace)
     s = ws._snapshot
-    return [_owned_labels([s.labels[e.index]])[1]=>e.value for e in ws._state.trail]
+    st = ws._state
+    return [_owned_labels([s.labels[st.trail[p].index]])[1]=>st.trail[p].value for p in st.callers]
 end
 
 """
@@ -185,8 +240,9 @@ in application order; O(number of changes), with no full residual copy.
 """
 function changes(ws::Workspace, cp::Checkpoint)
     _validate_checkpoint(ws, cp)
-    s, t = ws._snapshot, ws._state.trail
-    return [_owned_labels([s.labels[t[k].index]])[1]=>t[k].value for k in cp._depth+1:length(t)]
+    s, st = ws._snapshot, ws._state
+    entries = (st.trail[st.fixes[k]] for k in cp._fix_depth+1:length(st.fixes))
+    return [_owned_labels([s.labels[e.index]])[1]=>e.value for e in entries if e.proof === nothing]
 end
 
 """
@@ -198,36 +254,46 @@ on success; every prior checkpoint is invalidated. This conservative path costs
 O(n+m + retained adjacency work), plus exact arithmetic, and allocates a new
 workspace state. `max_work` bounds replay adjacency visits, not initialization;
 the latter always costs O(n+m). Deadline/work stops preserve the old state.
-No inferred deductions exist yet; their invalidation belongs to issue #5.
+Later deductions are undone by the local path. Non-LIFO replay discards all
+deductions and replays only explicit caller assumptions, never inferred values.
+Resume inference explicitly with `propagate!`. Removing a deduction directly
+is rejected; use its ancestor checkpoint.
 """
 function unfix!(ws::Workspace, label; max_work=typemax(Int), deadline_ns=nothing)
     _limits(max_work, deadline_ns)
     i = _variable(ws, label)
     st = ws._state
     st.fixed[i] == 2 && return UpdateReport(:unchanged, 0, 0)
+    position = st.entries[i]
+    st.trail[position].proof === nothing || throw(ArgumentError(
+        "unfix! removes caller assumptions; rollback before undoing a certified deduction"))
     _expired(deadline_ns) && return UpdateReport(:deadline, 0, 0)
-    if st.trail[end].index == i
-        d = length(st.trail)-1
-        cp = Checkpoint(generation(ws), st.epoch, d, d == 0 ? 0 : st.trail[d].serial)
+    if st.callers[end] == position
+        cp = _checkpoint_at(ws,position-1)
         rollback!(ws, cp)
         return UpdateReport(:applied, 0, 1)
     end
     work = 0
-    for e in st.trail
+    for p in st.callers
+        e = st.trail[p]
         e.index == i && continue
         degree = length(st.adjacency[e.index])
         degree <= max_work - work || return UpdateReport(:work_limit, 0, 0)
         work += degree
     end
-    staged = Workspace(ws._snapshot, generation(ws), _incremental(ws._snapshot))
+    staged = Workspace(ws._snapshot,generation(ws),_incremental(ws._snapshot;rules=st.rules))
     visits = 0
-    for e in st.trail
+    for p in st.callers
+        e = st.trail[p]
         e.index == i && continue
         r = assume!(staged, ws._snapshot.labels[e.index], e.value; max_work=max_work-visits, deadline_ns)
         visits += r.edge_visits
         r.stop_reason === :applied || return UpdateReport(r.stop_reason, visits, 0)
     end
     _expired(deadline_ns) && return UpdateReport(:deadline, visits, 0)
+    staged._state.total_candidates = st.total_candidates
+    staged._state.total_edges = st.total_edges
+    staged._state.total_exact = st.total_exact
     ws._state = staged._state
     return UpdateReport(:applied, visits, 1)
 end
@@ -246,9 +312,10 @@ end
 """
     ConditionedExport
 
-Owned historical residual under explicit caller assumptions. `status=:certified`
-certifies exact algebra/transport within that scope, not that the assumptions
-retain a global optimum. No inference certificate or solver proof is produced.
+Owned historical residual under explicit caller assumptions and/or certified
+deductions. `status=:certified` certifies exact algebra/transport within that
+scope, not that caller assumptions retain a global optimum. The certificate
+contains the ordered strong-deduction proof when present; no solver proof is produced.
 Original labels/maps, scope and exact residual data are immutable snapshots;
 `export_model` returns a separately owned QUBOTools model.
 """
@@ -292,9 +359,12 @@ function _conditioned_export(ws::Workspace, ::Type{T}) where T
     linear = Tuple(_transport(T, st.fields[i]) for i in free)
     quadratic = Tuple((map[i],map[j],_transport(T,q)) for i in free for (j,q) in st.adjacency[i]
                       if i < j && st.fixed[j] == 2)
-    scope = Tuple(e.index=>e.value for e in st.trail)
+    scope = _caller_scope(ws)
+    proof = _export_certificate(ws,snapshot)
+    steps = proof === nothing ? () : proof.steps
     return ConditionedExport{T}(snapshot, generation(ws), :certified,
-        (scope=:assumptions, assumptions=scope, reduction_chain=(), unchanged_representation=false),
+        (scope=isempty(scope) ? :original : :assumptions, assumptions=scope,
+         reduction_chain=steps, unchanged_representation=false,proof=proof),
         Tuple(st.fixed), Tuple(free), linear, quadratic,
         _transport(T,st.constant), _transport(T,_Exact(s.scale)))
 end

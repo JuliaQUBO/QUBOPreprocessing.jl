@@ -51,3 +51,4 @@ jobs:
           julia --project=. --startup-file=no examples/identity.jl
           julia --project=. --startup-file=no examples/workspace.jl
           julia --project=. --startup-file=no examples/certificates.jl
+          julia --project=. --startup-file=no examples/dominance.jl

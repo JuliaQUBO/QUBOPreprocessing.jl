@@ -1,19 +1,21 @@
 # QUBOPreprocessing.jl
 
-Identity foundation for the [accepted certified preprocessing design](https://github.com/JuliaQUBO/QUBO.jl/pull/94).
-**Only `rules=:identity` is implemented.** Explicit assumptions now use reusable
-sparse conditioning, exact algebra, checkpoints and rollback. Automatic
-propagation, solver adapters and decomposition integration remain unavailable.
+Certified preprocessing for the [accepted certified preprocessing design](https://github.com/JuliaQUBO/QUBO.jl/pull/94).
+**`rules=:identity` and `rules=:dominance` are implemented.** Explicit assumptions
+and certified deductions use reusable sparse conditioning, exact bound caches,
+checkpoints and rollback. Solver adapters and decomposition integration remain
+unavailable.
 Individual strong-dominance bounds, budgeted exact fallback and independent
 certificate verification are available through `prove_dominance` and
-`verify_certificate`; they never mutate the workspace or infer a whole cascade.
+`verify_certificate`; they do not mutate the workspace. `propagate!` commits strict dominance
+cascades with resumable work/deduction/exact/deadline limits.
 Candidate version 0.1.0 is unreleased and unregistered.
 
 Install from a selected source revision, substituting its exact reviewed SHA:
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/JuliaQUBO/QUBOPreprocessing.jl", rev="feat/certified-dominance-witnesses")
+Pkg.add(url="https://github.com/JuliaQUBO/QUBOPreprocessing.jl", rev="feat/bounded-dominance-propagation")
 Pkg.add("QUBOTools") # Declare the model dependency in the consumer project.
 using QUBOPreprocessing
 import QUBOTools as QT
@@ -59,6 +61,7 @@ julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
 julia --project=. examples/identity.jl
 julia --project=. examples/workspace.jl
 julia --project=. examples/certificates.jl
+julia --project=. examples/dominance.jl
 julia --project=docs -e 'using Pkg; Pkg.develop(path=pwd()); Pkg.instantiate()'
 julia --project=docs docs/make.jl
 ```
@@ -69,8 +72,12 @@ continuity. Human review is required before merging AI-assisted contributions.
 Source is licensed under MPL-2.0; respective contributors retain ownership.
 
 The [bootstrap issue #1](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/1)
-tracks this slice. See the manual's acceptance matrix for later owners.
+tracks the bootstrap. See the manual's acceptance matrix for later owners.
 The reversible conditioning slice addresses [#2](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/2).
 The [certificate manual](docs/src/certificates.md) and
 [runnable proof example](examples/certificates.jl) address
 [#3](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/3).
+
+The [dominance manual](docs/src/dominance.md), [cascade example](examples/dominance.jl)
+and [bounded on/off pilot](scripts/dominance_pilot.jl) address
+[#4](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/4).

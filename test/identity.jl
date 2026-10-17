@@ -188,7 +188,7 @@ end
 
 @testset "explicit refusals" begin
     m = fixture([:x,:y], [1.0,0.0], zeros(2,2))
-    for rules in (:dominance, :unknown, (), nothing)
+    for rules in (:unknown, (), nothing)
         @test_throws ArgumentError Workspace(m; rules)
         @test_throws ArgumentError preprocess(m; rules)
     end
@@ -223,7 +223,4 @@ end
     @test_throws ArgumentError Workspace(d)
     m.variable_map.map[:x] = 2
     @test_throws ArgumentError Workspace(m)
-    for name in (:propagate!,)
-        @test !isdefined(QUBOPreprocessing, name)
-    end
 end
