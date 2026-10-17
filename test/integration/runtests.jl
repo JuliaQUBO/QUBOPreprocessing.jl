@@ -9,6 +9,7 @@ const Ext = Base.get_extension(QUBOPreprocessing,:QUBOPreprocessingQUBODriversEx
 
 include("scripted_child.jl")
 include("direct.jl")
+include("boundaries.jl")
 
 @testset "public QUBODrivers conformance" begin
     QD.test(Ext.SamplerOptimizer;examples=true)

@@ -80,9 +80,6 @@ function QP.sample_preprocessed(input,child_factory;rules=nothing,max_work=typem
     child_variables = 0
     function finish(reason;scope_optimal=false)
         scope = exported === nothing ? :unknown : exported.certificate.scope
-        expired = QP._expired(deadline_ns)
-        expired && (reason=:deadline;scope_optimal=false)
-        scope_optimal && scope === :assumptions && reason === :optimal && (reason=:scope_optimal)
         source = ws === nothing ? nothing : ws._snapshot
         metadata = (total_seconds=0.0,phases=copy(timings),
             work_used=budget.used,work_remaining=budget.remaining,child_work_reserved=child_allowance,
@@ -95,6 +92,10 @@ function QP.sample_preprocessed(input,child_factory;rules=nothing,max_work=typem
             domain=source === nothing ? nothing : source.domain,
             scale=source === nothing ? nothing : source.scale,
             offset=source === nothing ? nothing : source.offset)
+        # Owned label/evidence copying is a cooperative boundary too. Decide
+        # status only after it completes, so a late copy cannot preserve proof.
+        QP._expired(deadline_ns) && (reason=:deadline;scope_optimal=false)
+        scope_optimal && scope === :assumptions && reason === :optimal && (reason=:scope_optimal)
         metadata = merge(metadata,(total_seconds=Float64(time_ns()-begin_ns)/1e9,))
         return QP.SolverResult(ws,ws === nothing ? nothing : QP.generation(ws),scope,reason,
             samples,reads,scope_optimal && scope === :original,scope_optimal,child_status,exported,metadata)
@@ -150,6 +151,7 @@ function QP.sample_preprocessed(input,child_factory;rules=nothing,max_work=typem
     end
     timings[:verification] = Float64(time_ns()-t)/1e9
     child_variables = QT.dimension(model)
+    max_results > 0 || return finish(:result_limit)
     if child_variables == 0
         phase = :reconstruction
         t = time_ns()
@@ -162,7 +164,6 @@ function QP.sample_preprocessed(input,child_factory;rules=nothing,max_work=typem
         return finish(:optimal;scope_optimal=true)
     end
     child_variables <= max_child_variables || return finish(:capacity_limit)
-    max_results > 0 || return finish(:result_limit)
     phase = :child
     t = time_ns()
     child = try
@@ -274,8 +275,13 @@ function QUBODrivers.sample(opt::SamplerOptimizer{Float64})
     result = QP.sample_preprocessed(QT.backend(opt),MOI.get(opt,ChildFactory());options...)
     MOI.set(opt,LastResult(),result)
     s = QT.backend(opt)
-    samples = Sample{Float64,Int}[Sample{Float64,Int}(copy(r.state),r.energy.value,k)
-                                for (r,k) in zip(result.samples,result.reads)]
+    # SampleSet sorts approximate Float64 energy ties by reads, which can move
+    # an exactly worse row ahead of certified rank 1. Publish that incumbent
+    # alone when claiming optimality; the owned direct result retains all rows.
+    count = result.optimal ? 1 : length(result.samples)
+    samples = Sample{Float64,Int}[Sample{Float64,Int}(copy(result.samples[i].state),
+                                result.samples[i].energy.value,result.reads[i]) for i in 1:count]
+    emitted_reads = sum(QT.reads(sample) for sample in samples;init=0)
     termination = result.optimal ? MOI.OPTIMAL :
         result.stop_reason in (:deadline,:child_timeout) ? MOI.TIME_LIMIT :
         !isempty(samples) ? MOI.LOCALLY_SOLVED :
@@ -287,12 +293,22 @@ function QUBODrivers.sample(opt::SamplerOptimizer{Float64})
         "termination_status"=>termination,
         "algorithm"=>Dict("name"=>"Certified strict dominance + supplied child"),
         "backend"=>Dict("name"=>"QUBOPreprocessing.jl","version"=>string(Base.pkgversion(QP))),
-        "reads"=>Dict("number_of_reads"=>sum(result.reads),"final_number_of_reads"=>sum(result.reads)),
+        "reads"=>Dict("number_of_reads"=>emitted_reads,"final_number_of_reads"=>emitted_reads),
         "seeds"=>Dict{String,Any}(),"time"=>Dict("total"=>elapsed,"effective"=>elapsed),
         "preprocessing"=>Dict("scope"=>String(result.scope),"scope_optimal"=>result.scope_optimal,
             "work_used"=>result.metadata.work_used,"child_called"=>result.metadata.child_called,
             "child_variables"=>result.metadata.child_variables,"child_status"=>String(result.child_status)))
-    return SampleSet{Float64}(samples,metadata;sense=QT.sense(s),domain=QT.domain(s))
+    out = SampleSet{Float64}(samples,metadata;sense=QT.sense(s),domain=QT.domain(s))
+    final_metadata = QT.metadata(out)
+    if QP._expired(get(options,:deadline_ns,nothing))
+        final_metadata["termination_status"] = MOI.TIME_LIMIT
+        final_metadata["status"] = "deadline"
+        final_metadata["preprocessing"]["scope_optimal"] = false
+    end
+    elapsed = Float64(time_ns()-start)/1e9
+    final_metadata["time"]["total"] = elapsed
+    final_metadata["time"]["effective"] = elapsed
+    return out
 end
 function MOI.get(opt::SamplerOptimizer,::MOI.TerminationStatus)
     metadata = QT.metadata(QT.solution(opt))

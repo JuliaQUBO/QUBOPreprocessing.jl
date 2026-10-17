@@ -20,7 +20,8 @@ rule and current caller scope. Each call resumes propagation, explicitly capture
 and verifies the residual chain, invokes the child only if free variables remain,
 validates complete child states and recomputes original energies. One original
 source evaluator is built per call and reused for all samples. No missing free
-value is supplied from a previous solve or guessed optimum. Original labels,+sense, domain, scale, offset and fixed-value proof records remain in the result.
+value is supplied from a previous solve or guessed optimum. Original labels,
+sense, domain, scale, offset and fixed-value proof records remain in the result.
 The returned workspace is live; exports, samples and report metadata retain their
 captured identities. Use its generation and verifier before reusing historical
 proofs after branch/reset operations.
@@ -49,6 +50,8 @@ unexpired allowance. The adapter trusts the supplied solver's public certificate
 it does not independently prove an arbitrary solver optimal. QUBODrivers 0.6.5's
 generic ExactSampler public status is `LOCALLY_SOLVED`, so the direct result
 remains `:feasible` despite its exhaustive implementation or metadata name.
+Version0.6.6 corrects completed ExactSampler solves to public `OPTIMAL`; the adapter
+honors that status while retaining the same export, proof and reconstruction checks.
 Tests use a separately guarded exact child whose public certificate is explicitly
 backed by exact enumeration. If all variables are fixed, the adapter handles the
 zero-dimensional residual locally and needs no child certificate or dispatch.
@@ -82,7 +85,9 @@ and return a nonnegative conservative reservation it honors. Without that
 contract, finite-work dispatch returns `:unsupported_work_limit`. An unbounded
 work allowance does not claim an unknown child's internal work was measured.
 The same reservation is charged even when the child fails. `max_results=1024`
-bounds the number of rows reconstructed; maximum supported setting is one million.
+bounds the number of rows reconstructed, including local all-fixed/empty results;
+zero returns `:result_limit` without reconstruction. Maximum supported setting is
+one million.
 
 `max_deductions` and `max_exact_work` constrain propagation. A stopped sound
 prefix can still be sent to the child if the shared allowance remains. The
@@ -115,6 +120,15 @@ compilation/penalty objective creates a new generation, even with the same shape
 Inspect the last owned `SolverResult` through
 `MOI.RawOptimizerAttribute("preprocessing_result")` on the raw adapter. Explicit
 post-sample transformations lose any inherited optimality claim.
+
+When the wrapper reports `OPTIMAL`, it publishes only the certified first lifted
+incumbent and its multiplicity. QUBOTools SampleSet normalization can reorder
+approximately equal Float64 energies by read count; restricting this path to
+the certified row preserves its public result1 guarantee even when original
+energy differences round away. The direct API and owned `preprocessing_result`
+retain all validated rows in child order. Wrapper read metadata describes only
+the emitted rows. The wrapper rechecks the deadline after constructing its public
+sample container; the owned direct result records its earlier completion boundary.
 
 The example `examples/consumer.jl` solves both a plain QUBO and a ToQUBO source
 with two binary variables and a bounded integer represented by two bits. All

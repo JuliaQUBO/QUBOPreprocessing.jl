@@ -64,8 +64,14 @@ end
         @test all(all(v in (0,1) for v in x.state) for x in got.samples)
     end
     ordinary = sample_preprocessed(nofix,QD.ExactSampler.Optimizer)
-    @test ordinary.child_status === :LOCALLY_SOLVED
-    @test !ordinary.optimal # sampler name/metadata never replaces its public status
+    public_child = QD.ExactSampler.Optimizer()
+    v = MOI.VariableIndex.(1:2)
+    QD.set_model!(public_child,QT.Model(Dict(v[1]=>0.0,v[2]=>0.0),Dict((v[1],v[2])=>-1.0)))
+    MOI.optimize!(public_child)
+    public_status = MOI.get(public_child,MOI.TerminationStatus())
+    @test ordinary.child_status === Symbol(string(public_status))
+    @test ordinary.optimal == (public_status === MOI.OPTIMAL)
+    @test ScriptedChild.scalar(nofix,first(ordinary.samples).state) == independent_optimum(nofix)
     fully = QT.Model(Dict(:a=>1.0,:b=>2.0),Dict{Tuple{Symbol,Symbol},Float64}();offset=0.5)
     @test sample_preprocessed(fully,()->error("all-fixed dispatch")).optimal
     empty_model = QT.Model(Dict{Int,Float64}(),Dict{Tuple{Int,Int},Float64}();offset=2.0)

@@ -32,6 +32,10 @@ function QUBODrivers.sample(opt::Optimizer{Float64})
     order = sortperm(energies;rev=QUBOTools.sense(model) === QUBOTools.Max)
     samples = Sample{Float64,Int}[
         Sample{Float64,Int}(states[k],Float64(energies[k]),1) for k in order]
+    if mode === :ranked
+        samples = [Sample{Float64,Int}(states[k],Float64(energies[k]),rank)
+                   for (rank,k) in enumerate(order)]
+    end
     term = MOI.OPTIMAL
     if mode === :heuristic
         samples = [Sample{Float64,Int}(fill(low,n),Float64(scalar(model,fill(low,n))),1)]
@@ -54,9 +58,15 @@ function QUBODrivers.sample(opt::Optimizer{Float64})
         "origin"=>"guarded test child","status"=>string(term),"termination_status"=>term,
         "algorithm"=>Dict("name"=>"exact scalar enumeration"),
         "backend"=>Dict("name"=>"test","version"=>"0.1.0"),
-        "reads"=>Dict("number_of_reads"=>length(samples),"final_number_of_reads"=>length(samples)),
+        "reads"=>Dict("number_of_reads"=>sum(QUBOTools.reads(s) for s in samples;init=0),
+                      "final_number_of_reads"=>sum(QUBOTools.reads(s) for s in samples;init=0)),
         "seeds"=>Dict{String,Any}(),"time"=>Dict("total"=>1e-9,"effective"=>1e-9))
     out = SampleSet{Float64}(samples,metadata;sense=QUBOTools.sense(model),domain=QUBOTools.domain(model))
+    if mode === :ranked
+        # The child certifies exact public rank 1, independently of SampleSet's
+        # approximate-energy/read-frequency ordering.
+        sort!(out.data;by=s->scalar(model,QUBOTools.state(s)),rev=QUBOTools.sense(model) === QUBOTools.Max)
+    end
     if mode === :failure_incumbent
         QUBOTools.attach!(opt,out)
         error("scripted failure after a complete incumbent")
