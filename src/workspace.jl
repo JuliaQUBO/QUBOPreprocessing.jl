@@ -413,7 +413,7 @@ function export_model(r::ConditionedExport{T}) where T
     return QT.Model{V,T,U}(vm, f)
 end
 
-function reconstruct(r::ConditionedExport, y::AbstractVector)
+function _lift_state(r::ConditionedExport, y::AbstractVector)
     Base.require_one_based_indexing(y)
     length(y) == length(r._free) || throw(ArgumentError("state must cover every free variable"))
     low = r._snapshot.domain === QT.BoolDomain ? 0 : -1
@@ -424,8 +424,10 @@ function reconstruct(r::ConditionedExport, y::AbstractVector)
             throw(ArgumentError("state value is outside the original domain"))
         state[i] = Int(v)
     end
-    identity = ExportResult(r._snapshot, generation(r), :certified,
-                            (scope=:original, reduction_chain=(), unchanged_representation=true))
-    return reconstruct(identity, state)
+    return state
+end
+function reconstruct(r::ConditionedExport,y::AbstractVector)
+    state = _lift_state(r,y)
+    return _evaluate_state(r,state,_source_evaluator(r._snapshot))
 end
 reconstruct(::ConditionedExport, y) = throw(ArgumentError("state must be a complete ordered residual vector"))

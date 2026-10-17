@@ -53,3 +53,36 @@ jobs:
           julia --project=. --startup-file=no examples/certificates.jl
           julia --project=. --startup-file=no examples/dominance.jl
           julia --project=. --startup-file=no examples/branch_search.jl
+  consumers:
+    name: Direct and ToQUBO / Julia ${{ matrix.julia }} / ${{ matrix.dependencies }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - julia: '1.10'
+            dependencies: floor
+          - julia: '1'
+            dependencies: compatible
+    steps:
+      - uses: actions/checkout@v6
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia }}
+      - uses: julia-actions/cache@v3
+      - name: Install optional integration environment
+        env:
+          DEPENDENCY_PROFILE: ${{ matrix.dependencies }}
+        run: >-
+          julia --project=test/integration --startup-file=no -e 'using Pkg;
+          Pkg.develop(path=pwd());
+          if ENV["DEPENDENCY_PROFILE"] == "floor";
+          Pkg.add([PackageSpec(name="QUBOTools",version=v"0.16.2"),
+          PackageSpec(name="QUBODrivers",version=v"0.6.5"),
+          PackageSpec(name="ToQUBO",version=v"0.7.1")]);
+          Pkg.pin(["QUBOTools","QUBODrivers","ToQUBO"]); end;
+          Pkg.instantiate(); Pkg.status()'
+      - name: Direct, conformance and ToQUBO tests
+        run: julia --project=test/integration --startup-file=no test/integration/runtests.jl
+      - name: Optional consumer example
+        run: julia --project=test/integration --startup-file=no examples/consumer.jl

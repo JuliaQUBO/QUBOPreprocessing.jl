@@ -9,9 +9,16 @@ QUBOTools = "60eb5b62-0a39-4ddc-84c5-97d2adff9319"
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 
+[weakdeps]
+QUBODrivers = "a3f166f7-2cd3-47b6-9e1e-6fbfe0449eb0"
+
+[extensions]
+QUBOPreprocessingQUBODriversExt = "QUBODrivers"
+
 [compat]
 LinearAlgebra = "1.10"
 QUBOTools = "0.16.2"
+QUBODrivers = "0.6.5"
 SparseArrays = "1.10"
 UUIDs = "1.10"
 julia = "1.10"
