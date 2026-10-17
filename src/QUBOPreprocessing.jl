@@ -13,7 +13,7 @@ export Workspace, Generation, generation, reset!, materialize, ExportResult,
        EnergyEvaluation, preprocess, IdentityReport
 
 export Checkpoint, checkpoint, assume!, rollback!, unfix!, changes, assumptions,
-       UpdateReport, ConditionedExport
+       UpdateReport, RollbackReport, ConditionedExport
 
 export DominanceStep, DominanceCertificate, DominanceAttempt, VerificationResult,
        prove_dominance, verify_certificate
