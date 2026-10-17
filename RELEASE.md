@@ -63,7 +63,7 @@ example/tests. A version field or version-pinned install alone is insufficient.
 
 ## Hosted documentation
 
-The prepared publisher targets Actions Pages at
+The publisher targets Actions Pages at
 `https://juliaqubo.github.io/QUBOPreprocessing.jl/`. Configure Pages with
 `build_type=workflow` and the `github-pages` environment for main under separately
 authorized settings work. A missing configuration/service activation remains an

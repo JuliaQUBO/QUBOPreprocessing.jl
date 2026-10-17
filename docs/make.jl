@@ -32,9 +32,10 @@ makedocs(
     format=Documenter.HTML(prettyurls=true,
         canonical="https://juliaqubo.github.io/QUBOPreprocessing.jl/$channel/",
         edit_link=isempty(release_tag) ? "main" : nothing),
-    pages=["Foundation" => "index.md", "Reversible conditioning" => "workspace.md",
+    pages=["Overview" => "index.md", "Reversible conditioning" => "workspace.md",
            "Certificates" => "certificates.md", "Dominance" => "dominance.md",
-           "Branch workloads" => "scopes.md", "Optional consumers" => "consumers.md", "API" => "api.md"],
+           "Branch workloads" => "scopes.md", "Optional consumers" => "consumers.md",
+           "Operating envelope" => "performance.md", "API" => "api.md"],
     checkdocs=:exports,
     warnonly=false,
 )

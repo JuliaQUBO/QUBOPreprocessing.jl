@@ -1,29 +1,29 @@
 # Certified preprocessing
 
-This candidate package implements the first strict-dominance rule of the
+This package implements bounded strict-dominance preprocessing from the
 [accepted certified preprocessing design](https://github.com/JuliaQUBO/QUBO.jl/blob/c0ab77d34e2281cfd6bd06e6c9c2f5ce13994670/docs/src/design.md#certified-preprocessing).
 **`rules=:identity`** performs no inference; **`rules=:dominance`** enables
-[bounded strict-dominance propagation](dominance.md). Candidate version 0.1.0 is not a
-release. [Reversible conditioning](workspace.md) implements the incremental
+[bounded strict-dominance propagation](dominance.md). [Reversible conditioning](workspace.md) implements the incremental
 algebra and assumption trail. [Sound bounds and proof verification](certificates.md)
 checks both individual strict-dominance proofs and complete propagated chains.
 
-## Install and run from source
+## Install and run
 
-Until General registration actually occurs, use an explicitly selected source
-revision, preferably the reviewed commit SHA:
+Install a version published in General with `Pkg.add("QUBOPreprocessing")`.
+When preparing or reviewing a version before registration, select its reviewed
+full source revision explicitly instead. Declare QUBOTools directly when
+constructing models in a consumer project.
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/JuliaQUBO/QUBOPreprocessing.jl",
-        rev="feat/direct-sampler-composition")
-Pkg.add("QUBOTools") # Declare the model dependency in the consumer project.
+Pkg.add(["QUBOPreprocessing", "QUBOTools"])
 using QUBOPreprocessing
 ```
 
-The branch can change during review. Use its commit SHA for reproducible use.
-Do not use an unqualified package-name installation before registration.
-Build this manual locally; there is no advertised hosted manual.
+The source install form is
+`Pkg.add(url="https://github.com/JuliaQUBO/QUBOPreprocessing.jl", rev=reviewed_sha)`.
+Registry installation and exact-source installation are separate checks; see
+[release instructions](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/blob/main/RELEASE.md).
 
 ```@example identity
 using QUBOPreprocessing
@@ -107,31 +107,28 @@ guarded tiny fixtures. Reversible conditioning uses exact rational algebra;
 individual strict-dominance bounds and independent proof verification are now
 implemented. Automatic strict dominance retains a separate deduction trail.
 
-## Implemented costs and deferred API
+## Costs and composition
 
 Snapshotting, materialization and model retrieval copy stored objective/label
 data explicitly. Sparse structural work/storage is O(n+m); dense storage copying
 can cost O(n²). Reconstruction validates all n entries, constructs evaluation
 storage and evaluates the original objective. Dictionary iteration and numerical
-summation order can differ between copies. No benchmark performance envelope,
-hard timing guarantee is claimed by this slice. Workspace work/deadline
+summation order can differ between copies. The [measured operating envelope](performance.md) records repeated sparse reuse,
+complete one-shot costs and their limits; it provides no hard timing guarantee. Workspace work/deadline
 contracts apply to explicit conditioning updates, as described in its manual.
 Generation/report inspection is constant-size. `preprocess` constructs a workspace
 and either returns a no-inference report or runs the selected dominance rule;
 it does not materialize a model implicitly.
 
-| Work | Owning issue / delivered state |
-| :-- | :-- |
-| Accepted architecture/API/acceptance contract | [QUBO PR #94](https://github.com/JuliaQUBO/QUBO.jl/pull/94), already merged |
-| Repository and identity foundation | [#1](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/1), this slice |
-| Adjacency, dirty queue, checkpoints, reversible conditioning and bounded work | [#2](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/2), implemented |
-| Enclosures, bounded exact fallback, strict-proof records, independent verifier and safe transport | [#3](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/3), implemented |
-| Strict dominance | [#4](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/4), implemented |
-| Assumptions, conditional provenance, rollback/unfix/replay and resumption | [#5](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/5), implemented; [branch workload contract](scopes.md) |
-| Optional QUBODrivers/MOI/direct/ToQUBO consumer | [#6](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/6), implemented; [optional consumer contract](consumers.md) |
-| Performance envelope | [QUBOBenchmarks #30](https://github.com/JuliaQUBO/QUBOBenchmarks.jl/issues/30), deferred |
-| Decomposition integration | [QUBODecomposition #16](https://github.com/JuliaQUBO/QUBODecomposition.jl/issues/16), deferred |
-| Full manual, release/registration and ecosystem adoption | [#7](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/7), deferred |
+Use the [workspace manual](workspace.md) for exact conditioning and ownership,
+[certificates](certificates.md) for scoped proofs and numeric transport,
+[dominance](dominance.md) for bounded propagation and
+[branch workloads](scopes.md) for rollback, arbitrary unfix and resumption.
+The [optional consumer](consumers.md) covers direct/MOI/ToQUBO composition.
+For decomposition, select a QUBODecomposition version that documents support
+for opt-in root preprocessing, and follow its installation and support policy. Release and
+ecosystem adoption evidence is tracked in
+[issue #7](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/7).
 
 `checkpoint`, `assume!`, `changes`, `rollback!` and `unfix!` implement explicit
 caller conditioning. `propagate!` performs bounded strict dominance when selected. Under fixings,
