@@ -6,7 +6,7 @@ makedocs(
     sitename="QUBOPreprocessing.jl",
     authors="QUBOPreprocessing contributors",
     format=Documenter.HTML(prettyurls=get(ENV,"CI","false") == "true"),
-    pages=["Identity foundation" => "index.md", "API" => "api.md"],
+    pages=["Foundation" => "index.md", "Reversible conditioning" => "workspace.md", "API" => "api.md"],
     checkdocs=:exports,
     warnonly=false,
 )

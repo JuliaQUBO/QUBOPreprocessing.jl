@@ -12,5 +12,10 @@ export Workspace, Generation, generation, reset!, materialize, ExportResult,
        export_model, original_variables, index_map, reconstruct, Reconstruction,
        EnergyEvaluation, preprocess, IdentityReport
 
+export Checkpoint, checkpoint, assume!, rollback!, unfix!, changes, assumptions,
+       UpdateReport, ConditionedExport
+
+include("trail.jl")
 include("identity.jl")
+include("workspace.jl")
 end
