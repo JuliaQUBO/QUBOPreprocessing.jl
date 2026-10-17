@@ -1,7 +1,12 @@
 # A bounded, deterministic test generator; no process-global RNG is used.
 function trace_bits(seed)
     state = Ref(UInt64(seed))
-    return () -> (state[] = state[] * UInt64(6364136223846793005) + UInt64(1442695040888963407))
+    # Low LCG bits have short periods and correlate with conditional draws.
+    # Select from the upper half, then guard actual trace coverage below.
+    return () -> begin
+        state[] = state[] * UInt64(6364136223846793005) + UInt64(1442695040888963407)
+        state[] >> 32
+    end
 end
 
 function algebra_state(ws)
@@ -40,6 +45,10 @@ end
 @testset "reversible exact conditioning traces" begin
     labels = [(7,"z"), (1,"a"), (4,"middle"), (2,"isolate")]
     for kind in (:sparse,:dense,:dict), domain in (:bool,:spin), sense in (:min,:max), alpha in (0.0,-2.0,0.5)
+        touched = Set{Int}()
+        replay_count = 0
+        rollback_count = 0
+        maxdepth = 0
         L = [0.5,-1.25,0.0,0.0]
         Q = [0.0 0.75 -0.5 0.0; 0.0 0.0 1.125 0.0; 0.0 0.0 0.0 0.0; 0.0 0.0 0.0 0.0]
         ws = Workspace(fixture(labels,L,Q; kind,domain,sense,scale=alpha,offset=-0.25))
@@ -50,6 +59,7 @@ end
             choice = randbits() % 4
             if choice == 0 && length(checkpoints) > 1
                 cp, expected = pop!(checkpoints)
+                length(assumptions(ws)) > cp._depth && (rollback_count += 1)
                 rollback!(ws,cp)
                 @test algebra_state(ws) == expected
             elseif choice == 1 && !isempty(assumptions(ws))
@@ -57,6 +67,7 @@ end
                 fixed = assumptions(ws)
                 victim = first(fixed)
                 retained = fixed[2:end]
+                length(fixed) > 1 && (replay_count += 1)
                 @test unfix!(ws,first(victim)).stop_reason === :applied
                 @test assumptions(ws) == retained
                 @test_throws ArgumentError changes(ws,old)
@@ -68,10 +79,37 @@ end
                 existing = Dict(assumptions(ws))
                 value = get(existing, labels[i], isodd(randbits()) ? 1 : low)
                 r = assume!(ws,labels[i],value)
+                push!(touched,i)
                 @test r.stop_reason in (:applied,:unchanged)
             end
+            maxdepth = max(maxdepth,length(assumptions(ws)))
             check_conditioning(ws,labels,L,Q,alpha,-0.25,domain)
         end
+        @test replay_count > 0
+        @test rollback_count > 0
+        @test touched == Set(1:4)
+        @test maxdepth >= 3
+
+        # Explicit multi-retained replay and all-fixed paths do not depend on
+        # the generator covering a fortunate sequence.
+        ws = Workspace(fixture(labels,L,Q; kind,domain,sense,scale=alpha,offset=-0.25))
+        assume!(ws,labels[1],low)
+        assume!(ws,labels[2],1)
+        assume!(ws,labels[4],low)
+        check_conditioning(ws,labels,L,Q,alpha,-0.25,domain)
+        stale = checkpoint(ws)
+        @test unfix!(ws,labels[1]).stop_reason === :applied
+        @test assumptions(ws) == [labels[2]=>1,labels[4]=>low]
+        check_conditioning(ws,labels,L,Q,alpha,-0.25,domain)
+        @test_throws ArgumentError rollback!(ws,stale)
+        assume!(ws,labels[1],1)
+        assume!(ws,labels[3],low)
+        historical = check_conditioning(ws,labels,L,Q,alpha,-0.25,domain)
+        @test all(==(0),index_map(historical))
+        @test unfix!(ws,labels[4]).stop_reason === :applied
+        @test length(assumptions(ws)) == 3
+        check_conditioning(ws,labels,L,Q,alpha,-0.25,domain)
+        @test reconstruct(historical,Int[]).state == [1,1,low,low]
     end
 end
 

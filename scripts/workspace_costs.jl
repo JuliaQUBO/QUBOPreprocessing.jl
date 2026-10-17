@@ -30,13 +30,13 @@ function measure(n)
     nochange = @timed for _ in 1:1000; changes(ws,cp); end
     assume!(ws,1,1)
     materialize(ws)
-    export = @timed materialize(ws)
+    export_measurement = @timed materialize(ws)
     return (; n, setup_seconds=setup.time, setup_bytes=setup.bytes,
             fix_rollback_seconds_per_call=updates.time/1000,
             fix_rollback_bytes_per_call=updates.bytes/1000,
             nochange_seconds_per_call=nochange.time/1000,
             nochange_bytes_per_call=nochange.bytes/1000,
-            materialize_seconds=export.time, materialize_bytes=export.bytes)
+            materialize_seconds=export_measurement.time, materialize_bytes=export_measurement.bytes)
 end
 
 measure(10) # warm code shared by the two reported sizes
