@@ -110,6 +110,7 @@ report the valid prefix/evidence available at that point.
 
 ## MOI and ToQUBO
 
+The factory is not exported; use its qualified name alongside other solver packages.
 Use `() -> QUBOPreprocessing.Optimizer(child_factory; options...)` as a supplied
 MOI/JuMP optimizer, or inside `ToQUBO.Optimizer`. It uses QUBODrivers' public
 model-copy/sampler interfaces, snapshots the accepted compiled QUBO afresh each
