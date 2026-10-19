@@ -1,5 +1,10 @@
 # Reversible conditioning
 
+Use a workspace directly when a search or neighborhood method revisits the same
+model under different assumptions. The [branch walkthrough](guide.md#guide-branches)
+shows the complete loop; this reference explains what each update captures and
+which costs you need to budget.
+
 The workspace prepares signed sparse adjacency once and stores exact rational
 boundary fields and a constant. It retains the original domain, sense, scale
 and label order; no full QUBO–Ising casts occur during updates. Dense input is

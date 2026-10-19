@@ -1,5 +1,10 @@
 # Optional direct and ToQUBO consumers
 
+Use an adapter when you want preprocessing to manage the whole solver boundary,
+including original-state reconstruction. The [direct and ToQUBO walkthroughs](guide.md#guide-direct)
+show how to connect it; this reference explains stops, refusals, shared costs and
+the guarantees you can attach to the result.
+
 The core workspace loads without QUBODrivers, MathOptInterface, JuMP, ToQUBO or a
 concrete solver. Load QUBODrivers ≥0.6.5 to activate the Julia extension:
 

@@ -1,5 +1,10 @@
 # Bounded strict dominance
 
+After constructing a workspace, dominance is the inference step that may reduce
+the solver input. This page explains which signs justify a fixing and how to
+resume a bounded pass. See the [solve walkthrough](guide.md#guide-solve)
+for what to do with its residual and report.
+
 Select `Workspace(model; rules=:dominance)` and call `propagate!` explicitly,
 or use `preprocess(model; rules=:dominance, limits...)`. Identity remains the
 default. Neither path dispatches a solver or implicitly materializes a residual.
