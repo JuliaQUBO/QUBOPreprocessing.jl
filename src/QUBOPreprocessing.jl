@@ -19,7 +19,7 @@ export DominanceStep, DominanceCertificate, DominanceAttempt, VerificationResult
        prove_dominance, verify_certificate
 
 export propagate!, PropagationReport, deductions, export_certificate
-export sample_preprocessed, Optimizer, SolverResult
+export sample_preprocessed, SolverResult
 
 include("trail.jl")
 include("identity.jl")

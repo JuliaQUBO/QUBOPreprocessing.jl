@@ -9,15 +9,13 @@ and restores solver states to the original QUBO. Reusable workspaces support
 assumptions, bounded propagation, checkpoints and rollback, so a search algorithm
 can update a boundary without rebuilding the whole problem at every step.
 
-Install a release published in Julia General with Julia 1.10 or later:
+With Julia 1.10 or later, install QUBOPreprocessing and QUBOTools:
 
 ```julia
 using Pkg
 Pkg.add(["QUBOPreprocessing", "QUBOTools"])
 ```
 
-Before registration, install an explicitly reviewed source revision instead:
-`Pkg.add(url="https://github.com/JuliaQUBO/QUBOPreprocessing.jl", rev=reviewed_sha)`.
 Declare QUBOTools directly in the consumer project when constructing its models.
 
 ```julia
@@ -49,6 +47,5 @@ See the [performance envelope](docs/src/performance.md) before selecting repeate
 or one-shot preprocessing, and [release notes](CHANGELOG.md) for supported scope.
 
 Tests, documentation builds and contribution policy are in [CONTRIBUTING.md](CONTRIBUTING.md).
-Maintainer and release authority: [@bernalde](https://github.com/bernalde), with the
-JuliaQUBO organization retaining access for continuity. Source is licensed under
+Source is licensed under
 [MPL-2.0](LICENSE); respective contributors retain ownership.

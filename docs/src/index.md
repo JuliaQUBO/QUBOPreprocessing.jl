@@ -9,21 +9,13 @@ checks both individual strict-dominance proofs and complete propagated chains.
 
 ## Install and run
 
-Install a version published in General with `Pkg.add("QUBOPreprocessing")`.
-When preparing or reviewing a version before registration, select its reviewed
-full source revision explicitly instead. Declare QUBOTools directly when
-constructing models in a consumer project.
+Install QUBOPreprocessing and QUBOTools with Julia 1.10 or later:
 
 ```julia
 using Pkg
 Pkg.add(["QUBOPreprocessing", "QUBOTools"])
 using QUBOPreprocessing
 ```
-
-The source install form is
-`Pkg.add(url="https://github.com/JuliaQUBO/QUBOPreprocessing.jl", rev=reviewed_sha)`.
-Registry installation and exact-source installation are separate checks; see
-[release instructions](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/blob/main/RELEASE.md).
 
 ```@example identity
 using QUBOPreprocessing
@@ -126,9 +118,7 @@ Use the [workspace manual](workspace.md) for exact conditioning and ownership,
 [branch workloads](scopes.md) for rollback, arbitrary unfix and resumption.
 The [optional consumer](consumers.md) covers direct/MOI/ToQUBO composition.
 For decomposition, select a QUBODecomposition version that documents support
-for opt-in root preprocessing, and follow its installation and support policy. Release and
-ecosystem adoption evidence is tracked in
-[issue #7](https://github.com/JuliaQUBO/QUBOPreprocessing.jl/issues/7).
+for opt-in root preprocessing, and follow its installation and support policy.
 
 `checkpoint`, `assume!`, `changes`, `rollback!` and `unfix!` implement explicit
 caller conditioning. `propagate!` performs bounded strict dominance when selected. Under fixings,

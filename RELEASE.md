@@ -34,6 +34,10 @@ mutable status claims in the README or frozen manual.
    candidate installation and `scripts/install_smoke.jl`; the cheap core must not
    activate QUBODrivers/MOI/JuMP/ToQUBO. Record installed source/tree/versions.
 
+Candidate source installation uses a full reviewed commit SHA:
+`Pkg.add(url="https://github.com/JuliaQUBO/QUBOPreprocessing.jl", rev=reviewed_sha)`.
+Keep this maintainer validation path here rather than in the user installation guide.
+
 ## Infrastructure and tagging order
 
 Merge reviewed coverage/docs/TagBot infrastructure before the final release-notes

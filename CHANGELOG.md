@@ -19,6 +19,8 @@ First public release of the bounded certified preprocessing API.
 ### Breaking changes
 
 This is the first public release; there is no earlier release to migrate from.
+The optional solver factory is accessed as `QUBOPreprocessing.Optimizer`; it is
+not exported into the caller's namespace.
 
 ### Compatibility and limits
 

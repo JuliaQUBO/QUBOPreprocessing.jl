@@ -10,7 +10,7 @@
         direct = sample_preprocessed(model,ScriptedChild.factory(:ranked);rules=:identity)
         @test direct.optimal && first(direct.samples).state == [best]
         @test length(direct.samples)==2 && direct.reads==[1,2]
-        opt = Optimizer(ScriptedChild.factory(:ranked);rules=:identity)
+        opt = QUBOPreprocessing.Optimizer(ScriptedChild.factory(:ranked);rules=:identity)
         QD.set_model!(opt,deepcopy(model));MOI.optimize!(opt)
         @test MOI.get(opt,MOI.TerminationStatus()) === MOI.OPTIMAL
         actual = Int(MOI.get(opt,MOI.VariablePrimal(1),MOI.VariableIndex(1)))

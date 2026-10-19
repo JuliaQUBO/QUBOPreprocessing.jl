@@ -33,3 +33,16 @@ release must match its real tag, published GitHub release and General package tr
 Never treat a build, coverage badge or uploaded report as proof of deployment,
 visible service results or package registration. Release preparation is tracked in
 [RELEASE.md](RELEASE.md) and issue #7.
+
+## User documentation and namespace conventions
+
+Write the README and manual entry pages for someone trying the package: explain
+what it does, show a runnable example, and link to the next task. Keep registration
+state, reviewed-source install checks, release authority and acceptance evidence
+in RELEASE.md or issue records. A conditional preregistration paragraph still
+becomes release bookkeeping in a frozen user manual. Guide pages should connect
+examples and choices; detailed guarantees can remain in reference sections.
+
+Keep the solver factory qualified as `QUBOPreprocessing.Optimizer`, following
+ToQUBO and QUBODrivers. An unexported supported API still needs explicit reference
+documentation and an integration test of its qualified call.

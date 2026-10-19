@@ -60,10 +60,11 @@ Sampling distributions and physical-read semantics are not preserved.
 function sample_preprocessed end
 
 """
-    Optimizer(fresh_child_factory; kwargs...)
+    QUBOPreprocessing.Optimizer(fresh_child_factory; kwargs...)
 
 Optional QUBODrivers/MOI optimizer factory, available after loading QUBODrivers.
-Use `() -> Optimizer(child_factory; ...)` with MOI/JuMP/ToQUBO. It shares the
+Use `() -> QUBOPreprocessing.Optimizer(child_factory; ...)` with MOI/JuMP/ToQUBO.
+The factory is accessed by its qualified name to avoid solver namespace collisions. It shares the
 [`sample_preprocessed`](@ref) implementation, snapshots the accepted compiled
 QUBO on each solve, restores every logical QUBO variable before source decoding,
 and reports the public child's proof status conservatively. A compiled optimum
