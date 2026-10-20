@@ -1,20 +1,38 @@
 # Use preprocessing in a solver workflow
 
 Preprocessing sits between your model and your solver. It can remove variables
-whose values are certified, then restore those variables after the solver returns
-a state for the smaller problem. If your algorithm repeatedly changes assumptions,
-you can keep the same workspace and undo a branch before trying the next one.
+whose values are proved to hold in every optimum, then restore those variables
+after the solver returns a state for the smaller problem. Such a proved fixing
+is a *deduction*. An *assumption* is a value you choose, for example to explore
+one branch of a search; deductions made under that assumption apply within that
+branch. If your algorithm repeatedly changes assumptions, you can keep the same
+workspace and undo a branch before trying the next one.
 
 This guide starts with a complete core-only solve. It then reuses a workspace
 across two branches and finishes with the optional solver adapters. The
 [model reference](representation.md) collects the input, ownership and numerical
 contracts used throughout.
 
+Choose the path that matches your task:
+
+- For one model and a solver of your choice, follow the complete solve below.
+- For repeated branch decisions on the same model, continue with
+  [workspace reuse](@ref guide-branches).
+- To let an adapter manage the solve and reconstruction, use the
+  [direct QUBODrivers adapter](@ref guide-direct) or the
+  [JuMP/ToQUBO composition](@ref guide-toqubo).
+
+Start a Julia session with QUBOPreprocessing and QUBOTools installed as shown on
+[the overview](index.md#Install-and-run). Run each section's code blocks in order;
+blocks within a section share their variables.
+
 ## [Preprocess, solve and reconstruct](@id guide-solve)
 
 Consider a binary minimization problem with objective `3bias - x*y`. The positive
 coefficient forces `bias=0` in every optimum. Neither `x` nor `y` can be fixed by
-strict dominance at the root: ties remain until the other variable is known.
+strict dominance at the root (before any assumptions): ties remain until the
+other variable is known. Here `bias` is an ordinary binary variable named
+`:bias`, not a constant offset.
 
 ```@example guide_solve
 using QUBOPreprocessing
@@ -35,6 +53,12 @@ There are three different objects here. `ws` holds reusable working state;
 `reduced` captures an owned snapshot of the reduction and its maps; `residual`
 is the QUBOTools model to give your solver. Creating and exporting the snapshot
 are explicit full-model operations, so you choose when to pay for them.
+The output `[:x, :y]` shows that `bias` was removed and that the remaining solver
+state must list `x` first and `y` second. The `:quiescent` report means propagation
+has finished for the selected rule; it does not mean the residual is solved.
+The `verify_certificate(...).valid` check independently verifies the recorded
+reduction proof against this workspace. It checks why removing `bias` is sound;
+the next step still needs to solve for `x` and `y`.
 
 For this two-variable residual, we can solve the whole problem by evaluating its
 four states. This small enumeration is here to make the example self-contained;
@@ -50,6 +74,10 @@ original_state = Dict(zip(original_variables(reduced), restored.state))
 @assert restored.energy.finite && restored.energy.value == -1.0
 (original_state, restored.energy.value)
 ```
+
+The result assigns `bias=0`, `x=1` and `y=1`, with original objective value `-1`.
+The dictionary makes the original labels explicit; use `restored.state` directly
+when your caller already works in `original_variables(reduced)` order.
 
 `reconstruct` uses the captured maps to restore `bias`, validates the complete
 state, and evaluates the original objective. It does not itself decide whether
@@ -79,7 +107,8 @@ A branch decision has a different meaning from a deduction. For `x - 2x*y`,
 assuming `y=0` makes `x=0` optimal in that branch. The original problem instead
 has its minimum at `x=y=1`. The workspace keeps your assumptions and its
 conditional deductions separate so undoing the branch also removes the facts
-that depended on it.
+that depended on it. Solving this branch alone is therefore insufficient to
+solve the original problem; the later loop also explores `y=1`.
 
 ```@example guide_branch
 using QUBOPreprocessing
@@ -100,8 +129,9 @@ report = propagate!(ws; max_work=100)
 
 Use original labels with `assume!`; a label is not a residual index. The two
 queries above return only fixing records added since the checkpoint, without
-building a residual. That is enough when a surrounding algorithm only needs
-to learn which values changed.
+building a residual. Here `changes` reports your choice `y=0`, while `deductions`
+reports the consequence `x=0`. That is enough when a surrounding algorithm only
+needs to learn which values changed.
 
 To solve or inspect this branch, explicitly capture its residual. Both variables
 are now fixed, so reconstruction needs no child state. The scope records why
@@ -116,6 +146,10 @@ rollback!(ws, root)
 @assert isempty(assumptions(ws)) && isempty(deductions(ws))
 branch_state.energy.value
 ```
+
+This branch has energy `0`. Rollback returns the workspace to the checkpoint
+before `y=0`, removing both that assumption and the deduction `x=0`, so it can
+safely explore `y=1` next.
 
 The snapshot remains a historical result after rollback; it does not describe
 the current workspace. Captured proof certificates require the matching current
@@ -146,6 +180,11 @@ end
 @assert isempty(assumptions(ws)) && isempty(deductions(ws))
 branch_energies
 ```
+
+The two entries are optima of different restricted problems: `y=0` gives energy
+`0`, and `y=1` gives `-1`. Because these branches cover both values of `y`, the
+smaller value solves this tiny original problem. In a larger search, comparing
+some branch results is insufficient without accounting for the remaining branches.
 
 The limits in this example fit its tiny graph. In a real loop, inspect each
 report: a refused `assume!` leaves the workspace unchanged, whereas interrupted
@@ -180,6 +219,7 @@ model = QT.Model(Dict(:bias => 3.0, :x => 0.0, :y => 0.0),
                  Dict((:x, :y) => -1.0))
 solved = sample_preprocessed(model, QD.ExactSampler.Optimizer;
                             rules=:dominance, max_child_variables=8)
+@show solved.stop_reason solved.optimal solved.scope_optimal
 if !isempty(solved.samples)
     best = first(solved.samples)
     @assert length(best.state) == 3
@@ -190,7 +230,9 @@ end
 Pass a factory for a fresh empty child, not a sampler that already holds a model.
 Model input defaults to dominance in this adapter; an existing workspace retains
 its chosen rule and caller scope. Samples already contain original-order states
-and original numerical energies.
+and original numerical energies. The example's best state has energy `-1`.
+If no sample is returned, inspect `solved.stop_reason` before changing the solver
+or retrying with a larger allowance.
 
 Always inspect `stop_reason`, `optimal` and `scope_optimal` as well as the samples.
 A stop or refusal may return no sample. A heuristic child stays heuristic; a
@@ -220,16 +262,20 @@ source = Model(() -> ToQUBO.Optimizer(() -> QUBOPreprocessing.Optimizer(
 @objective(source, Min, x - 2y)
 @constraint(source, x >= 1)
 optimize!(source)
+@show termination_status(source) primal_status(source)
 @assert has_values(source)
 chosen = round.(Int, value.((x, y)))
 @assert chosen == (1, 1) && chosen[1] >= 1
 @assert objective_value(source) == -1.0
 ```
 
-Check feasibility and objective values in the original source model, as shown
-here. A certified optimum of an inadequately penalized QUBO can still violate a
-source constraint. The [consumer example](consumers.md#MOI-and-ToQUBO) and
-`examples/consumer.jl` extend this to a bounded integer with several compiled bits.
+The solution is `x=1, y=1`, which satisfies `x ≥ 1` and gives objective `-1`.
+`has_values` checks that there is a result to read; inspect `termination_status`
+to decide whether the solver claims an optimum. Check feasibility and objective
+values in the original source model, as shown here. A certified optimum of an
+inadequately penalized QUBO can still violate a source constraint. The
+[consumer example](consumers.md#MOI-and-ToQUBO) and `examples/consumer.jl` extend
+this to a bounded integer with several compiled bits.
 
 ## Choose the next reference
 
