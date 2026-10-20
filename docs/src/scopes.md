@@ -1,5 +1,9 @@
 # Repeated branch workloads
 
+Once a one-shot reduction works, a search can reuse its workspace instead of
+rebuilding it for every branch. Start with the [two-branch walkthrough](guide.md#guide-branches);
+this reference covers the scope, undo and replay details needed by a larger algorithm.
+
 Temporary caller decisions restrict the optimization problem. A conditional
 deduction is strong within that branch; it does not certify an unconditional
 original-global reduction. The workspace distinguishes caller pins, root-global

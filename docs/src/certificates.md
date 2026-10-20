@@ -1,5 +1,10 @@
 # Sound bounds and proof verification
 
+A solver result and a reduction proof answer different questions. Use this page
+when another consumer needs to check why a variable was fixed, or when you need
+to decide whether a captured proof still applies. The [user guide](guide.md) shows
+where verification fits in a complete solve.
+
 `prove_dominance(ws, label)` checks one strict unary reduction without changing
 the workspace. [Bounded dominance](dominance.md) separately provides the queue,
 propagation and inference undo trail. The standalone helper provides an
