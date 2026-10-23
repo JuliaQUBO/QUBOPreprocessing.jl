@@ -39,7 +39,7 @@ function _pop_queue!(ws::Workspace)
     st.serial == typemax(UInt64) && throw(ArgumentError("trail serial exhausted; reset workspace"))
     i = st.queue[st.head]
     entry = _UndoQueue(st.serial+1,length(st.fixes),i,st.head,st.queued[i])
-    sizehint!(st.trail,length(st.trail)+1)
+    _reserve!(st.trail,length(st.trail)+1)
     push!(st.trail,entry)
     st.serial += 1
     st.queued[i] = false
@@ -121,7 +121,7 @@ function propagate!(ws::Workspace;map::Union{Nothing,DomainGaugeMap}=nothing,
         remaining >= 1 && degree <= (remaining-1)÷3 || return finish(:verification_limit)
         reserved = 1+3*degree
         st.serial <= typemax(UInt64)-2 || throw(ArgumentError("trail serial exhausted; reset workspace"))
-        sizehint!(st.trail,length(st.trail)+2)
+        _reserve!(st.trail,length(st.trail)+2)
         result = _fix!(ws,i,step.value;proof=step,max_work=max_work-candidates-edges,deadline_ns)
         edges += result.edge_visits
         exact += reserved

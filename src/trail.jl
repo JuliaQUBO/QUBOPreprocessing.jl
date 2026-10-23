@@ -6,6 +6,12 @@ const _Exact = Rational{BigInt}
 abstract type _ProofRecord end
 const _NeighborRecord = Tuple{Int,_Exact,_Exact,_Exact}
 
+@static if VERSION >= v"1.11.0-DEV"
+    _reserve!(a::Vector, sz::Int) = sizehint!(a, sz; shrink=false)
+else
+    _reserve!(a::Vector, sz::Int) = sizehint!(a, sz)
+end
+
 struct _UndoFix
     serial::UInt64
     fix_depth::Int
