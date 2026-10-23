@@ -21,6 +21,35 @@ function _same_source(a::_Snapshot, b::_Snapshot)
            _same_storage(a.linear, b.linear) && _same_storage(a.quadratic, b.quadratic)
 end
 
+mutable struct _GaugeConstantCursor
+    epoch::UUID
+    depth::Int
+    tip_serial::UInt64
+    constant::_Exact
+    serials::Vector{UInt64}
+    constants::Vector{_Exact}
+end
+
+function _source_gauged_bool_constant(s::_Snapshot, g::Tuple{Vararg{Int}})
+    n = length(s.labels)
+    f = QT.Form{Float64}(n, _thaw(s.linear), _thaw(s.quadratic), s.scale, s.offset;
+                         sense=s.sense, domain=s.domain)
+    is_bool = s.domain === QT.BoolDomain
+    c = _Exact(s.offset)
+    for (i, v) in QT.linear_terms(f)
+        val_i = is_bool ? ((1 - g[i]) ÷ 2) : -g[i]
+        val_i == 0 && continue
+        c += _Exact(v) * val_i
+    end
+    for ((i, j), v) in QT.quadratic_terms(f)
+        val_i = is_bool ? ((1 - g[i]) ÷ 2) : -g[i]
+        val_j = is_bool ? ((1 - g[j]) ÷ 2) : -g[j]
+        (val_i == 0 || val_j == 0) && continue
+        c += _Exact(v) * (val_i * val_j)
+    end
+    return c
+end
+
 """
     DomainGaugeMap
 
@@ -53,6 +82,7 @@ struct DomainGaugeMap
     _identity_gauge::Bool
     _validated::Bool
     _root_bool_constant::_Exact
+    _cursor::_GaugeConstantCursor
     function DomainGaugeMap(
         generation::Generation,
         source_domain::Symbol,
@@ -64,8 +94,6 @@ struct DomainGaugeMap
         _label_map::Dict{Any,Int},
         _source::_Snapshot;
         _allow_unvalidated::Bool=false,
-        _root_bool_constant::_Exact=_Exact(0),
-        _has_root_bool_constant::Bool=false,
     )
         if !_allow_unvalidated
             source_domain === _domain_symbol(_source.domain) &&
@@ -82,7 +110,14 @@ struct DomainGaugeMap
                 throw(ArgumentError("DomainGaugeMap label map does not match source labels"))
         end
         id_gauge = all(==(1), gauge)
-        has_root = target_domain === :spin || id_gauge || _has_root_bool_constant
+        n = length(_source.labels)
+        if !_allow_unvalidated && target_domain === :bool && !id_gauge
+            root_c = _source_gauged_bool_constant(_source, gauge)
+            cursor = _GaugeConstantCursor(UUID(UInt128(0)), 0, UInt64(0), root_c, zeros(UInt64, n), fill(_Exact(0), n))
+        else
+            root_c = _Exact(0)
+            cursor = _GaugeConstantCursor(UUID(UInt128(0)), 0, UInt64(0), root_c, UInt64[], _Exact[])
+        end
         return new(
             generation,
             source_domain,
@@ -94,8 +129,9 @@ struct DomainGaugeMap
             _label_map,
             _source,
             id_gauge,
-            !_allow_unvalidated && has_root,
-            _root_bool_constant,
+            !_allow_unvalidated,
+            root_c,
+            cursor,
         )
     end
 end
@@ -128,37 +164,6 @@ function _parse_gauge(ws::Workspace, gauge)
     end
 end
 
-function _compute_root_gauged_bool_constant(ws::Workspace, g::Tuple{Vararg{Int}})
-    st = ws._state
-    c = _spin_constant(ws)
-    for i in eachindex(st.fixed)
-        st.fixed[i] == 2 || continue
-        c -= g[i] * _spin_field(ws, i)
-        for (j, q) in st.adjacency[i]
-            i < j && st.fixed[j] == 2 || continue
-            c += (g[i] * g[j]) * _spin_coupling(ws, q)
-        end
-    end
-    src_dom = _domain_symbol(ws._snapshot.domain)
-    for r in eachindex(st.fixes)
-        pos = st.fixes[r]
-        entry = st.trail[pos]::_UndoFix
-        i = entry.index
-        s_i = src_dom === :bool ? (2 * entry.value - 1) : entry.value
-        u_i = (g[i] * s_i + 1) ÷ 2
-        u_i == 0 && continue
-        g_i = g[i]
-        h_i = _spin_field(ws, i)
-        csum = _Exact(0)
-        for (j, q) in st.adjacency[i]
-            (st.fixed[j] == 2 || st.entries[j] > pos) || continue
-            csum += (g_i * g[j]) * _spin_coupling(ws, q)
-        end
-        c -= (2 * g_i * h_i - 2 * csum) * u_i
-    end
-    return c
-end
-
 """
     domain_map(ws; domain=..., gauge=nothing)
 
@@ -176,9 +181,7 @@ function domain_map(ws::Workspace; domain::Symbol=_domain_symbol(ws._snapshot.do
     source = ws._snapshot
     _validate_label_copy(source.labels, deepcopy(source.labels))
     lmap = Dict{Any,Int}(v => i for (i, v) in enumerate(source.labels))
-    id_gauge = all(==(1), g)
-    root_c = (domain === :bool && !id_gauge) ? _compute_root_gauged_bool_constant(ws, g) : _Exact(0)
-    return DomainGaugeMap(
+    m = DomainGaugeMap(
         generation(ws),
         _domain_symbol(source.domain),
         domain,
@@ -187,10 +190,12 @@ function domain_map(ws::Workspace; domain::Symbol=_domain_symbol(ws._snapshot.do
         source.offset,
         g,
         lmap,
-        source;
-        _root_bool_constant=root_c,
-        _has_root_bool_constant=true,
+        source,
     )
+    if domain === :bool && !m._identity_gauge && !isempty(ws._state.fixes)
+        _mapped_constant(ws, m)
+    end
+    return m
 end
 
 function _check_domain_map(ws::Workspace, m::DomainGaugeMap)
@@ -206,6 +211,10 @@ function _check_domain_map(ws::Workspace, m::DomainGaugeMap)
     length(m._label_map) == length(s.labels) &&
         all(i -> get(m._label_map, s.labels[i], 0) == i, eachindex(s.labels)) ||
         return (false, :different_source)
+    if m.target_domain === :bool && !m._identity_gauge
+        m._root_bool_constant == _source_gauged_bool_constant(s, m.gauge) ||
+            return (false, :invalid_map)
+    end
     return (true, :verified)
 end
 
@@ -350,31 +359,12 @@ function _mapped_coupling(ws::Workspace, i::Int, j::Int, q::_Exact, m::Union{Not
                                        sign_ij * _bool_coupling(ws, q)
 end
 
-function _mapped_constant(ws::Workspace, m::Union{Nothing,DomainGaugeMap})
+function _direct_mapped_constant(ws::Workspace, m::Union{Nothing,DomainGaugeMap})
     m === nothing && return ws._state.constant
     if m.target_domain === :spin
         return _spin_constant(ws)
     elseif m._identity_gauge
         return _bool_constant(ws)
-    elseif m._validated
-        st = ws._state
-        c = m._root_bool_constant
-        for r in eachindex(st.fixes)
-            pos = st.fixes[r]
-            entry = st.trail[pos]::_UndoFix
-            i = entry.index
-            u_i = _map_index_value(m, i, entry.value)
-            u_i == 0 && continue
-            g_i = m.gauge[i]
-            h_i = _spin_field(ws, i)
-            csum = _Exact(0)
-            for (j, q) in st.adjacency[i]
-                (st.fixed[j] == 2 || st.entries[j] > pos) || continue
-                csum += (g_i * m.gauge[j]) * _spin_coupling(ws, q)
-            end
-            c += (2 * g_i * h_i - 2 * csum) * u_i
-        end
-        return c
     else
         st = ws._state
         c = _spin_constant(ws)
@@ -387,6 +377,58 @@ function _mapped_constant(ws::Workspace, m::Union{Nothing,DomainGaugeMap})
             end
         end
         return c
+    end
+end
+
+function _mapped_constant(ws::Workspace, m::Union{Nothing,DomainGaugeMap})
+    m === nothing && return ws._state.constant
+    if m.target_domain === :spin
+        return _spin_constant(ws)
+    elseif m._identity_gauge
+        return _bool_constant(ws)
+    elseif m._validated
+        st = ws._state
+        cur = m._cursor
+        k = length(st.fixes)
+        tip = k == 0 ? UInt64(0) : st.trail[st.fixes[k]].serial
+        if cur.epoch == st.epoch && cur.depth == k && cur.tip_serial == tip
+            return cur.constant
+        end
+        if cur.epoch != st.epoch
+            cur.epoch = st.epoch
+            cur.depth = 0
+            cur.tip_serial = UInt64(0)
+            cur.constant = m._root_bool_constant
+        end
+        d = min(cur.depth, k)
+        while d > 0 && cur.serials[d] != st.trail[st.fixes[d]].serial
+            d -= 1
+        end
+        c = d == 0 ? m._root_bool_constant : cur.constants[d]
+        for r in (d + 1):k
+            pos = st.fixes[r]
+            entry = st.trail[pos]::_UndoFix
+            i = entry.index
+            u_i = _map_index_value(m, i, entry.value)
+            if u_i != 0
+                g_i = m.gauge[i]
+                h_i = _spin_field(ws, i)
+                csum = _Exact(0)
+                for (j, q) in st.adjacency[i]
+                    (st.fixed[j] == 2 || st.entries[j] > pos) || continue
+                    csum += (g_i * m.gauge[j]) * _spin_coupling(ws, q)
+                end
+                c += (2 * g_i * h_i - 2 * csum) * u_i
+            end
+            cur.serials[r] = entry.serial
+            cur.constants[r] = c
+        end
+        cur.depth = k
+        cur.tip_serial = tip
+        cur.constant = c
+        return c
+    else
+        return _direct_mapped_constant(ws, m)
     end
 end
 

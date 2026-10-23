@@ -437,11 +437,12 @@ function _conditioned_export(ws::Workspace, ::Type{T}; map::Union{Nothing,Domain
     steps = proof === nothing ? () : proof.steps
     unchanged = isempty(st.fixes) && (owned_map === nothing ||
         (owned_map.target_domain === owned_map.source_domain && owned_map._identity_gauge))
+    c_export = _direct_mapped_constant(ws, owned_map)
     return ConditionedExport{T}(snapshot, generation(ws), :certified,
         (scope=isempty(scope) ? :original : :assumptions, assumptions=scope,
          reduction_chain=steps, unchanged_representation=unchanged,proof=proof),
         Tuple(st.fixed), Tuple(free), linear, quadratic,
-        _transport(T,_mapped_constant(ws,owned_map)), _transport(T,_Exact(s.scale)), owned_map)
+        _transport(T, c_export), _transport(T,_Exact(s.scale)), owned_map)
 end
 
 function export_model(r::ConditionedExport{T}) where T

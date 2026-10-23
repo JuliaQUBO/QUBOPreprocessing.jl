@@ -222,6 +222,19 @@ end
     @test_throws ArgumentError effective_field(ws, :x; map=unvalidated_zero_gauge)
     @test verify_certificate(ws, cert_spin; map=unvalidated_zero_gauge).stop_reason === :invalid_gauge
 
+    # Direct DomainGaugeMap constructor derives _root_bool_constant internally and cannot be forged.
+    ws_fx = Workspace(fixture([:x], [2.0], zeros(1, 1); domain=:bool))
+    direct_bmap = DomainGaugeMap(generation(ws_fx), :bool, :bool, :min, 1.0, 0.0, (-1,),
+        Dict{Any,Int}(:x => 1), ws_fx._snapshot)
+    @test conditioned_constant(ws_fx; map=direct_bmap) == 2
+    res_fx = materialize(ws_fx, direct_bmap)
+    @test res_fx.status === :certified
+    @test QT.offset(export_model(res_fx)) == 2.0
+    @test reconstruct(res_fx, [0]).state == [1]
+    @test reconstruct(res_fx, [0]).energy.value == 2.0
+    @test_throws MethodError DomainGaugeMap(generation(ws_fx), :bool, :bool, :min, 1.0, 0.0, (-1,),
+        Dict{Any,Int}(:x => 1), ws_fx._snapshot; _root_bool_constant=Rational{BigInt}(100))
+
     # Multi-step cascade export and verification in mapped coordinates (both spin and binary).
     root = checkpoint(ws)
     assume!(ws, :z, 1)
@@ -321,6 +334,32 @@ end
         @test res_s == res_l == (1, :proved, 2, 1, 1, 2, 1, true, expected_c_unchanged)
         bytes_s = @allocated mapped_local_cycle(small, cps, ms)
         bytes_l = @allocated mapped_local_cycle(large, cpl, ml)
+        @test bytes_l <= bytes_s + 2048
+    end
+
+    # Pre-existing fixing history (5 fixings vs 1,000 fixings) must not make local queries scale with history length.
+    for i in 6:10
+        assume!(small, i, isodd(i) ? 1 : 0)
+    end
+    for i in 1001:2000
+        assume!(large, i, isodd(i) ? 1 : 0)
+    end
+    cps_hist, cpl_hist = checkpoint(small), checkpoint(large)
+    for dom in (:spin, :bool), gauged in (false, true)
+        gs = gauged ? [iseven(i) ? -1 : 1 for i in 1:10] : nothing
+        gl = gauged ? [iseven(i) ? -1 : 1 for i in 1:2000] : nothing
+        ms = domain_map(small; domain=dom, gauge=gs)
+        ml = domain_map(large; domain=dom, gauge=gl)
+        for _ in 1:3
+            mapped_local_cycle(small, cps_hist, ms)
+            mapped_local_cycle(large, cpl_hist, ml)
+        end
+        res_s = mapped_local_cycle(small, cps_hist, ms)
+        res_l = mapped_local_cycle(large, cpl_hist, ml)
+        expected_c_unchanged = (dom === :bool && !gauged)
+        @test res_s == res_l == (1, :proved, 2, 1, 1, 2, 1, true, expected_c_unchanged)
+        bytes_s = @allocated mapped_local_cycle(small, cps_hist, ms)
+        bytes_l = @allocated mapped_local_cycle(large, cpl_hist, ml)
         @test bytes_l <= bytes_s + 2048
     end
 

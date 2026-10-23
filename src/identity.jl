@@ -249,10 +249,13 @@ end
 """
     reconstruct(result, y)
 
-Validate a complete one-based original-domain vector and return an owned state
-and ordinary Float64 original-energy evaluation. Reject missing, partial,
-non-real, nonfinite and out-of-domain values. Numerical overflow is reported in
-`energy.finite`; neither the energy nor this reconstruction certifies optimality.
+Validate a complete one-based residual-domain vector (matching the original
+domain for unmapped exports, or `map.target_domain` when materialized through a
+[`DomainGaugeMap`](@ref)) and return an owned state in original-variable order
+and original domain together with an ordinary Float64 original-energy
+evaluation. Reject missing, partial, non-real, nonfinite and out-of-domain
+values. Numerical overflow is reported in `energy.finite`; neither the energy
+nor this reconstruction certifies optimality.
 """
 function reconstruct end
 
