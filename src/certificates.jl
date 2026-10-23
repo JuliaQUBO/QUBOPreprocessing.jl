@@ -102,7 +102,7 @@ function _dominance_witness(ws::Workspace, i::Int; map::Union{Nothing,DomainGaug
     degree <= max_work || return (nothing,:work_limit,:none,0,0,0)
     _expired(deadline_ns) && return (nothing,:deadline,:none,0,0,0)
     target_dom = map === nothing ? s.domain : _qt_domain(map.target_domain)
-    gauged_bool = map !== nothing && map.target_domain === :bool && !all(==(1), map.gauge)
+    gauged_bool = map !== nothing && map.target_domain === :bool && !map._identity_gauge
     init_field = if map === nothing
         direction * st.fields[i]
     elseif map.target_domain === :spin
@@ -142,7 +142,7 @@ function _dominance_witness(ws::Workspace, i::Int; map::Union{Nothing,DomainGaug
     _expired(deadline_ns) && return (nothing,:deadline,:interval,visits,0,0)
     if mapped_val !== nothing
         value = map === nothing ? mapped_val : _lift_index_value(map, i, mapped_val)
-        c_val = _mapped_constant(ws, map)
+        c_val = map === nothing ? st.constant : (map.target_domain === :spin ? _spin_constant(ws) : _bool_constant(ws))
         step = DominanceStep(i,value,_Exact(lo),_Exact(hi),deepcopy(c_val),predecessors,:interval,scope_length)
         return (step,:proved,:interval,visits,0,0)
     end
@@ -181,7 +181,7 @@ function _dominance_witness(ws::Workspace, i::Int; map::Union{Nothing,DomainGaug
     mapped_val = _strict_value(lower,upper,target_dom)
     mapped_val === nothing && return (nothing,:not_strict,:exact,visits,1,exact_work)
     value = map === nothing ? mapped_val : _lift_index_value(map, i, mapped_val)
-    c_val = _mapped_constant(ws, map)
+    c_val = map === nothing ? st.constant : (map.target_domain === :spin ? _spin_constant(ws) : _bool_constant(ws))
     step = DominanceStep(i,value,deepcopy(lower),deepcopy(upper),deepcopy(c_val),predecessors,:exact,scope_length)
     return (step,:proved,:exact,visits,1,exact_work)
 end
@@ -228,44 +228,66 @@ function _root_spin_polynomial(s::_Snapshot, adjacency::Vector{Vector{Pair{Int,_
     return spin_fields, spin_const
 end
 
-function _step_constant_at(ws::Workspace, fixed::Dict{Int,Int},
-                           spin_fields::Vector{_Exact}, spin_const::_Exact,
-                           to_map::Union{Nothing,DomainGaugeMap})
+function _root_target_polynomial(ws::Workspace, to_map::Union{Nothing,DomainGaugeMap})
     s, st = ws._snapshot, ws._state
+    n = length(s.labels)
+    spin_fields, spin_const = _root_spin_polynomial(s, st.adjacency)
     target_dom = to_map === nothing ? _domain_symbol(s.domain) : to_map.target_domain
-    target_dom === :spin && return deepcopy(spin_const)
-    gauge = to_map === nothing ? ntuple(_ -> 1, length(s.labels)) : to_map.gauge
-    c = spin_const
-    for i in eachindex(s.labels)
-        haskey(fixed, i) && continue
-        c -= gauge[i] * spin_fields[i]
+    if target_dom === :spin
+        if to_map === nothing || to_map._identity_gauge
+            return spin_fields, spin_const
+        end
+        g = to_map.gauge
+        target_fields = Vector{_Exact}(undef, n)
+        for i in 1:n
+            target_fields[i] = g[i] * spin_fields[i]
+        end
+        return target_fields, spin_const
+    end
+    target_fields = Vector{_Exact}(undef, n)
+    target_const = spin_const
+    for i in 1:n
+        g_i = to_map === nothing ? 1 : to_map.gauge[i]
+        h_g = g_i * spin_fields[i]
+        target_fields[i] = 2 * h_g
+        target_const -= h_g
+    end
+    for i in 1:n
+        g_i = to_map === nothing ? 1 : to_map.gauge[i]
         for (j, q) in st.adjacency[i]
-            i < j && !haskey(fixed, j) || continue
-            J_ij = _spin_coupling(ws, q)
-            c += (gauge[i] * gauge[j]) * J_ij
+            i < j || continue
+            g_j = to_map === nothing ? 1 : to_map.gauge[j]
+            J_g = (g_i * g_j) * _spin_coupling(ws, q)
+            target_fields[i] -= 2 * J_g
+            target_fields[j] -= 2 * J_g
+            target_const += J_g
         end
     end
-    return deepcopy(c)
+    return target_fields, target_const
 end
 
 function _transport_steps(ws::Workspace, assumptions::Tuple, steps::Tuple,
                           from_map::Union{Nothing,DomainGaugeMap},
-                          to_map::Union{Nothing,DomainGaugeMap})
-    isempty(steps) && return ()
+                          to_map::Union{Nothing,DomainGaugeMap};
+                          tail_step::Union{Nothing,DominanceStep}=nothing)
+    (isempty(steps) && tail_step === nothing) && return ()
     s, st = ws._snapshot, ws._state
-    spin_fields, spin_const = _root_spin_polynomial(s, st.adjacency)
-    fixed = Dict{Int,Int}()
+    target_fields, target_const = _root_target_polynomial(ws, to_map)
+    fixed = falses(length(s.labels))
     function apply_fix!(idx::Int, val::Int)
-        s_val = s.domain === QT.BoolDomain ? (2 * val - 1) : val
-        spin_const += spin_fields[idx] * s_val
-        for (nbr, q) in st.adjacency[idx]
-            haskey(fixed, nbr) && continue
-            spin_fields[nbr] += _spin_coupling(ws, q) * s_val
+        u_val = to_map === nothing ? val : _map_index_value(to_map, idx, val)
+        if u_val != 0
+            target_const += target_fields[idx] * u_val
+            for (nbr, q) in st.adjacency[idx]
+                fixed[nbr] && continue
+                target_fields[nbr] += _mapped_coupling(ws, idx, nbr, q, to_map) * u_val
+            end
         end
-        fixed[idx] = val
+        fixed[idx] = true
     end
     introduced = 0
-    out = Vector{DominanceStep}(undef, length(steps))
+    total_len = length(steps) + (tail_step === nothing ? 0 : 1)
+    out = Vector{DominanceStep}(undef, total_len)
     for (k, step) in enumerate(steps)
         count = step.scope_length == -1 ? length(assumptions) : step.scope_length
         for p in introduced+1:count
@@ -274,10 +296,19 @@ function _transport_steps(ws::Workspace, assumptions::Tuple, steps::Tuple,
         end
         introduced = count
         new_lo, new_hi = _convert_step_bounds(s, step, from_map, to_map)
-        new_c = _step_constant_at(ws, fixed, spin_fields, spin_const, to_map)
-        out[k] = DominanceStep(step.variable, step.value, new_lo, new_hi, new_c,
+        out[k] = DominanceStep(step.variable, step.value, new_lo, new_hi, deepcopy(target_const),
                                step.predecessors, step.method, step.scope_length)
         apply_fix!(step.variable, step.value)
+    end
+    if tail_step !== nothing
+        count = tail_step.scope_length == -1 ? length(assumptions) : tail_step.scope_length
+        for p in introduced+1:count
+            idx, val = assumptions[p]
+            apply_fix!(idx, val)
+        end
+        out[total_len] = DominanceStep(tail_step.variable, tail_step.value,
+                                       tail_step.lower, tail_step.upper, deepcopy(target_const),
+                                       tail_step.predecessors, tail_step.method, tail_step.scope_length)
     end
     return Tuple(out)
 end
@@ -301,7 +332,7 @@ a bounded cascade using the workspace's exact caches.
 """
 function prove_dominance(ws::Workspace, label; map::Union{Nothing,DomainGaugeMap}=nothing,
                          max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing)
-    map === nothing || _validate_domain_map(ws, map)
+    map === nothing || _validate_domain_map(ws, map; full=true)
     i = _variable(ws,label)
     step, reason, method, visits, fallbacks, exact_work = _dominance_witness(ws,i;
         map,max_work,max_exact_work,deadline_ns,predecessors=ws._state.proof_count,
@@ -312,9 +343,12 @@ function prove_dominance(ws::Workspace, label; map::Union{Nothing,DomainGaugeMap
         source = deepcopy(ws._snapshot)
         _validate_label_copy(ws._snapshot.labels,source.labels)
         owned_map = map === nothing ? nothing : deepcopy(map)
-        prefix = _proof_steps(ws; map=owned_map)
+        raw_prefix = Tuple(deepcopy(ws._state.trail[p].proof) for p in ws._state.fixes
+                           if ws._state.trail[p].proof !== nothing)
+        steps = owned_map === nothing ? (raw_prefix..., step) :
+            _transport_steps(ws, _caller_scope(ws), raw_prefix, nothing, owned_map; tail_step=step)
         _expired(deadline_ns) && return DominanceAttempt(nothing,:deadline,method,visits,fallbacks,exact_work)
-        DominanceCertificate(generation(ws),checkpoint(ws),_caller_scope(ws),(prefix...,step),source,owned_map)
+        DominanceCertificate(generation(ws),checkpoint(ws),_caller_scope(ws),steps,source,owned_map)
     end
     return DominanceAttempt(certificate,reason,method,visits,fallbacks,exact_work)
 end
@@ -329,13 +363,13 @@ stale generations, mismatched source/variable ordering, invalid gauges or
 stale branch scopes with `ArgumentError`.
 """
 function transport_certificate(ws::Workspace, cert::DominanceCertificate, map::DomainGaugeMap)
-    _validate_domain_map(ws, map)
+    _validate_domain_map(ws, map; full=true)
     generation(ws) == generation(cert) || throw(ArgumentError("certificate belongs to a stale generation"))
     _same_source(ws._snapshot, cert._source) || throw(ArgumentError("certificate source does not match workspace"))
     cert.assumptions == _caller_scope(ws) && cert._scope_checkpoint._depth == length(ws._state.trail) ||
         throw(ArgumentError("certificate scope does not match current workspace trail"))
     _validate_checkpoint(ws, cert._scope_checkpoint)
-    cert._map === nothing || _validate_domain_map(ws, cert._map)
+    cert._map === nothing || _validate_domain_map(ws, cert._map; full=true)
     isempty(cert.steps) && throw(ArgumentError("certificate contains no proof steps"))
     source = deepcopy(ws._snapshot)
     _validate_label_copy(ws._snapshot.labels, source.labels)

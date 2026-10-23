@@ -50,6 +50,54 @@ struct DomainGaugeMap
     gauge::Tuple{Vararg{Int}}
     _label_map::Dict{Any,Int}
     _source::_Snapshot
+    _identity_gauge::Bool
+    _validated::Bool
+    _root_bool_constant::_Exact
+    function DomainGaugeMap(
+        generation::Generation,
+        source_domain::Symbol,
+        target_domain::Symbol,
+        sense::Symbol,
+        scale::Float64,
+        offset::Float64,
+        gauge::Tuple{Vararg{Int}},
+        _label_map::Dict{Any,Int},
+        _source::_Snapshot;
+        _allow_unvalidated::Bool=false,
+        _root_bool_constant::_Exact=_Exact(0),
+        _has_root_bool_constant::Bool=false,
+    )
+        if !_allow_unvalidated
+            source_domain === _domain_symbol(_source.domain) &&
+                target_domain in (:bool, :spin) &&
+                sense === _sense_symbol(_source.sense) &&
+                isequal(scale, _source.scale) &&
+                isequal(offset, _source.offset) ||
+                throw(ArgumentError("DomainGaugeMap metadata does not match source snapshot"))
+            length(gauge) == length(_source.labels) &&
+                all(g -> g in (-1, 1), gauge) ||
+                throw(ArgumentError("DomainGaugeMap gauge must contain ±1 for every source variable"))
+            length(_label_map) == length(_source.labels) &&
+                all(i -> get(_label_map, _source.labels[i], 0) == i, eachindex(_source.labels)) ||
+                throw(ArgumentError("DomainGaugeMap label map does not match source labels"))
+        end
+        id_gauge = all(==(1), gauge)
+        has_root = target_domain === :spin || id_gauge || _has_root_bool_constant
+        return new(
+            generation,
+            source_domain,
+            target_domain,
+            sense,
+            scale,
+            offset,
+            gauge,
+            _label_map,
+            _source,
+            id_gauge,
+            !_allow_unvalidated && has_root,
+            _root_bool_constant,
+        )
+    end
 end
 generation(m::DomainGaugeMap) = m.generation
 original_variables(m::DomainGaugeMap) = _owned_labels(m._source.label_type[m._source.labels...])
@@ -80,6 +128,37 @@ function _parse_gauge(ws::Workspace, gauge)
     end
 end
 
+function _compute_root_gauged_bool_constant(ws::Workspace, g::Tuple{Vararg{Int}})
+    st = ws._state
+    c = _spin_constant(ws)
+    for i in eachindex(st.fixed)
+        st.fixed[i] == 2 || continue
+        c -= g[i] * _spin_field(ws, i)
+        for (j, q) in st.adjacency[i]
+            i < j && st.fixed[j] == 2 || continue
+            c += (g[i] * g[j]) * _spin_coupling(ws, q)
+        end
+    end
+    src_dom = _domain_symbol(ws._snapshot.domain)
+    for r in eachindex(st.fixes)
+        pos = st.fixes[r]
+        entry = st.trail[pos]::_UndoFix
+        i = entry.index
+        s_i = src_dom === :bool ? (2 * entry.value - 1) : entry.value
+        u_i = (g[i] * s_i + 1) ÷ 2
+        u_i == 0 && continue
+        g_i = g[i]
+        h_i = _spin_field(ws, i)
+        csum = _Exact(0)
+        for (j, q) in st.adjacency[i]
+            (st.fixed[j] == 2 || st.entries[j] > pos) || continue
+            csum += (g_i * g[j]) * _spin_coupling(ws, q)
+        end
+        c -= (2 * g_i * h_i - 2 * csum) * u_i
+    end
+    return c
+end
+
 """
     domain_map(ws; domain=..., gauge=nothing)
 
@@ -88,7 +167,8 @@ Construct a checked [`DomainGaugeMap`](@ref) tied to `ws` and its current
 workspace's source domain). `gauge` may be `nothing` (all `+1`), a one-based
 vector of `±1` in original variable order, or a dictionary of `label => ±1`
 entries. Constructing a map validates and copies original label metadata in
-`O(n)` without performing a whole-model quadratic matrix cast.
+`O(n)` without performing a whole-model quadratic matrix cast (or `O(n+m)` once
+when precomputing the root constant offset for a non-identity binary gauge).
 """
 function domain_map(ws::Workspace; domain::Symbol=_domain_symbol(ws._snapshot.domain), gauge=nothing)
     _qt_domain(domain)
@@ -96,6 +176,8 @@ function domain_map(ws::Workspace; domain::Symbol=_domain_symbol(ws._snapshot.do
     source = ws._snapshot
     _validate_label_copy(source.labels, deepcopy(source.labels))
     lmap = Dict{Any,Int}(v => i for (i, v) in enumerate(source.labels))
+    id_gauge = all(==(1), g)
+    root_c = (domain === :bool && !id_gauge) ? _compute_root_gauged_bool_constant(ws, g) : _Exact(0)
     return DomainGaugeMap(
         generation(ws),
         _domain_symbol(source.domain),
@@ -105,7 +187,9 @@ function domain_map(ws::Workspace; domain::Symbol=_domain_symbol(ws._snapshot.do
         source.offset,
         g,
         lmap,
-        source,
+        source;
+        _root_bool_constant=root_c,
+        _has_root_bool_constant=true,
     )
 end
 
@@ -115,7 +199,8 @@ function _check_domain_map(ws::Workspace, m::DomainGaugeMap)
     m.source_domain === _domain_symbol(s.domain) && m.target_domain in (:bool, :spin) &&
         m.sense === _sense_symbol(s.sense) && isequal(m.scale, s.scale) && isequal(m.offset, s.offset) ||
         return (false, :invalid_map)
-    length(m.gauge) == length(s.labels) && all(g -> g in (-1, 1), m.gauge) ||
+    length(m.gauge) == length(s.labels) && all(g -> g in (-1, 1), m.gauge) &&
+        m._identity_gauge == all(==(1), m.gauge) ||
         return (false, :invalid_gauge)
     _same_source(s, m._source) || return (false, :different_source)
     length(m._label_map) == length(s.labels) &&
@@ -124,17 +209,15 @@ function _check_domain_map(ws::Workspace, m::DomainGaugeMap)
     return (true, :verified)
 end
 
-function _validate_domain_map(ws::Workspace, m::DomainGaugeMap)
-    if generation(ws) == generation(m) && m._source === ws._snapshot &&
-       m.source_domain === _domain_symbol(ws._snapshot.domain) &&
-       m.target_domain in (:bool, :spin) && length(m.gauge) == length(ws._snapshot.labels)
+function _validate_domain_map(ws::Workspace, m::DomainGaugeMap; full::Bool=false)
+    if !full && m._validated && generation(ws) == generation(m) && m._source === ws._snapshot
         return nothing
     end
     ok, reason = _check_domain_map(ws, m)
     ok || throw(ArgumentError("invalid domain/gauge map for workspace ($reason)"))
     return nothing
 end
-_validate_domain_map(::Workspace, m) =
+_validate_domain_map(::Workspace, m; full::Bool=false) =
     throw(ArgumentError("expected a DomainGaugeMap; got $(typeof(m))"))
 
 materialize(ws::Workspace, map::DomainGaugeMap; coefficient_type=Float64) =
@@ -246,7 +329,7 @@ function _mapped_field(ws::Workspace, i::Int, m::Union{Nothing,DomainGaugeMap})
     g_i = m.gauge[i]
     if m.target_domain === :spin
         return g_i * _spin_field(ws, i)
-    elseif all(==(1), m.gauge)
+    elseif m._identity_gauge
         return _bool_field(ws, i)
     else
         st = ws._state
@@ -271,8 +354,27 @@ function _mapped_constant(ws::Workspace, m::Union{Nothing,DomainGaugeMap})
     m === nothing && return ws._state.constant
     if m.target_domain === :spin
         return _spin_constant(ws)
-    elseif all(==(1), m.gauge)
+    elseif m._identity_gauge
         return _bool_constant(ws)
+    elseif m._validated
+        st = ws._state
+        c = m._root_bool_constant
+        for r in eachindex(st.fixes)
+            pos = st.fixes[r]
+            entry = st.trail[pos]::_UndoFix
+            i = entry.index
+            u_i = _map_index_value(m, i, entry.value)
+            u_i == 0 && continue
+            g_i = m.gauge[i]
+            h_i = _spin_field(ws, i)
+            csum = _Exact(0)
+            for (j, q) in st.adjacency[i]
+                (st.fixed[j] == 2 || st.entries[j] > pos) || continue
+                csum += (g_i * m.gauge[j]) * _spin_coupling(ws, q)
+            end
+            c += (2 * g_i * h_i - 2 * csum) * u_i
+        end
+        return c
     else
         st = ws._state
         c = _spin_constant(ws)

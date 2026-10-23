@@ -196,13 +196,43 @@ end
     @test_throws ArgumentError materialize(ws, other_map)
     @test verify_certificate(ws, cert_spin; map=other_map).stop_reason === :stale_generation
 
-    # Multi-step cascade export and verification in mapped coordinates.
+    # Direct DomainGaugeMap constructor enforces bijection and metadata invariants.
+    @test_throws ArgumentError DomainGaugeMap(smap.generation, smap.source_domain, smap.target_domain,
+        smap.sense, smap.scale, smap.offset, (0, 1, -1), smap._label_map, smap._source)
+    @test_throws ArgumentError DomainGaugeMap(smap.generation, :spin, smap.target_domain,
+        smap.sense, smap.scale, smap.offset, (-1, 1, -1), smap._label_map, smap._source)
+    @test_throws ArgumentError DomainGaugeMap(smap.generation, smap.source_domain, :ising,
+        smap.sense, smap.scale, smap.offset, (-1, 1, -1), smap._label_map, smap._source)
+    @test_throws ArgumentError DomainGaugeMap(smap.generation, smap.source_domain, smap.target_domain,
+        smap.sense, smap.scale, smap.offset, (-1, 1, -1), Dict{Any,Int}(:x => 2, :y => 1, :z => 3), smap._source)
+
+    # Post-construction mutation of _label_map is caught at export boundaries.
+    mutated_map = domain_map(ws; domain=:spin, gauge=[-1, 1, -1])
+    mutated_map._label_map[:x] = 2
+    @test_throws ArgumentError materialize(ws, mutated_map)
+    @test_throws ArgumentError prove_dominance(ws, :x; map=mutated_map)
+    @test_throws ArgumentError export_certificate(ws; map=mutated_map)
+    @test_throws ArgumentError transport_certificate(ws, cert_spin, mutated_map)
+
+    # Unvalidated forged map with invalid gauge is rejected at both workspace and verifier boundaries.
+    unvalidated_zero_gauge = DomainGaugeMap(smap.generation, smap.source_domain, smap.target_domain,
+        smap.sense, smap.scale, smap.offset, (0, 1, -1), smap._label_map, smap._source;
+        _allow_unvalidated=true)
+    @test_throws ArgumentError materialize(ws, unvalidated_zero_gauge)
+    @test_throws ArgumentError effective_field(ws, :x; map=unvalidated_zero_gauge)
+    @test verify_certificate(ws, cert_spin; map=unvalidated_zero_gauge).stop_reason === :invalid_gauge
+
+    # Multi-step cascade export and verification in mapped coordinates (both spin and binary).
     root = checkpoint(ws)
     assume!(ws, :z, 1)
     propagate!(ws; map=smap)
     casc_cert = export_certificate(ws; map=smap)
     @test length(casc_cert.steps) == 2
     @test verify_certificate(ws, casc_cert; map=smap).valid
+    casc_bool_id = export_certificate(ws; map=bmap_id)
+    @test verify_certificate(ws, casc_bool_id; map=bmap_id).valid
+    casc_bool_g = export_certificate(ws; map=bmap_g)
+    @test verify_certificate(ws, casc_bool_g; map=bmap_g).valid
     rollback!(ws, root)
     @test verify_certificate(ws, casc_cert; map=smap).stop_reason === :stale_scope
 
@@ -275,17 +305,34 @@ end
     small = Workspace(sparse_chain(10); rules=:dominance)
     large = Workspace(sparse_chain(2000); rules=:dominance)
     @test propagate!(small).deductions == propagate!(large).deductions == 0
-    ms = domain_map(small; domain=:spin, gauge=[isodd(i) ? -1 : 1 for i in 1:10])
-    ml = domain_map(large; domain=:spin, gauge=[isodd(i) ? -1 : 1 for i in 1:2000])
     cps, cpl = checkpoint(small), checkpoint(large)
-    for _ in 1:3
-        mapped_local_cycle(small, cps, ms)
-        mapped_local_cycle(large, cpl, ml)
+    for dom in (:spin, :bool), gauged in (false, true)
+        gs = gauged ? [iseven(i) ? -1 : 1 for i in 1:10] : nothing
+        gl = gauged ? [iseven(i) ? -1 : 1 for i in 1:2000] : nothing
+        ms = domain_map(small; domain=dom, gauge=gs)
+        ml = domain_map(large; domain=dom, gauge=gl)
+        for _ in 1:3
+            mapped_local_cycle(small, cps, ms)
+            mapped_local_cycle(large, cpl, ml)
+        end
+        res_s = mapped_local_cycle(small, cps, ms)
+        res_l = mapped_local_cycle(large, cpl, ml)
+        expected_c_unchanged = (dom === :bool && !gauged)
+        @test res_s == res_l == (1, :proved, 2, 1, 1, 2, 1, true, expected_c_unchanged)
+        bytes_s = @allocated mapped_local_cycle(small, cps, ms)
+        bytes_l = @allocated mapped_local_cycle(large, cpl, ml)
+        @test bytes_l <= bytes_s + 2048
     end
-    res_s = mapped_local_cycle(small, cps, ms)
-    res_l = mapped_local_cycle(large, cpl, ml)
-    @test res_s == res_l == (1, :proved, 2, 1, 1, 2, 1, true, false)
-    bytes_s = @allocated mapped_local_cycle(small, cps, ms)
-    bytes_l = @allocated mapped_local_cycle(large, cpl, ml)
-    @test bytes_l <= bytes_s + 2048
+
+    # Binary and gauged certificate export scales linearly O(n+m+steps), not quadratically.
+    indep_n = 200
+    indep_m = QT.Model{Int,Float64,Int}(
+        Dict{Int,Float64}(i => (isodd(i) ? 2.0 : -3.0) for i in 1:indep_n),
+        Dict{Tuple{Int,Int},Float64}(); scale=1.0, offset=0.5, sense=:min, domain=:bool)
+    ws_indep = Workspace(indep_m; rules=:dominance)
+    @test propagate!(ws_indep).deductions == indep_n
+    bmap_indep = domain_map(ws_indep; domain=:bool, gauge=[isodd(i) ? -1 : 1 for i in 1:indep_n])
+    cert_indep = export_certificate(ws_indep; map=bmap_indep)
+    @test length(cert_indep.steps) == indep_n
+    @test verify_certificate(ws_indep, cert_indep; map=bmap_indep).valid
 end

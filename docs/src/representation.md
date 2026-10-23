@@ -122,10 +122,13 @@ requires every converted coefficient and constant to be exactly representable in
 
 ## Reconstruction and numerical evaluation
 
-`reconstruct(result, y)` accepts a complete one-based vector in residual/original
-index order. Each entry must be a finite real exactly in `{0,1}` or `{-1,1}`
-according to the original domain. It rejects missing, malformed, partial and
-out-of-domain states and returns an owned `Vector{Int}`.
+`reconstruct(result, y)` accepts a complete one-based vector in residual index
+order. Each entry must be a finite real exactly in `{0,1}` or `{-1,1}`
+according to the residual's target domain (which equals the original domain for
+unmapped exports, or `map.target_domain` when materialized through a
+[`DomainGaugeMap`](@ref)). It rejects missing, malformed, partial and
+out-of-domain states and returns an owned `Vector{Int}` in original-variable
+order and original domain.
 
 `restored.energy` is an ordinary QUBOTools Float64 evaluation with `method=:float64`
 and a `finite` flag. Floating rounding, cancellation, overflow and summation

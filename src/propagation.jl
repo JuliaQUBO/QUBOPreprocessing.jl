@@ -173,7 +173,7 @@ O(n+m+number of steps), plus scalar bit/label-copy costs. Verify with
 No inference, solver dispatch or residual materialization occurs here.
 """
 function export_certificate(ws::Workspace; map::Union{Nothing,DomainGaugeMap}=nothing)
-    map === nothing || _validate_domain_map(ws, map)
+    map === nothing || _validate_domain_map(ws, map; full=true)
     ws._state.proof_count == 0 && return nothing
     source = deepcopy(ws._snapshot)
     _validate_label_copy(ws._snapshot.labels,source.labels)

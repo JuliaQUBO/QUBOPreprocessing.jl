@@ -422,7 +422,7 @@ _transport(::Type{_Exact}, q::_Exact) = deepcopy(q)
 
 function _conditioned_export(ws::Workspace, ::Type{T}; map::Union{Nothing,DomainGaugeMap}=nothing) where T
     T in (Float64, _Exact) || throw(ArgumentError("supported transport: Float64 or Rational{BigInt}"))
-    map === nothing || _validate_domain_map(ws, map)
+    map === nothing || _validate_domain_map(ws, map; full=true)
     s, st = ws._snapshot, ws._state
     snapshot = deepcopy(s)
     _validate_label_copy(s.labels, snapshot.labels)
@@ -436,7 +436,7 @@ function _conditioned_export(ws::Workspace, ::Type{T}; map::Union{Nothing,Domain
     proof = _export_certificate(ws,snapshot;map=owned_map)
     steps = proof === nothing ? () : proof.steps
     unchanged = isempty(st.fixes) && (owned_map === nothing ||
-        (owned_map.target_domain === owned_map.source_domain && all(==(1), owned_map.gauge)))
+        (owned_map.target_domain === owned_map.source_domain && owned_map._identity_gauge))
     return ConditionedExport{T}(snapshot, generation(ws), :certified,
         (scope=isempty(scope) ? :original : :assumptions, assumptions=scope,
          reduction_chain=steps, unchanged_representation=unchanged,proof=proof),
