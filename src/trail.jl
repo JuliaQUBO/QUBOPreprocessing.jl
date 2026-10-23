@@ -56,6 +56,7 @@ const _UndoEntry = Union{_UndoFix,_UndoReduction,_UndoQueue}
 mutable struct _Incremental
     labels::Dict{Any,Int}
     adjacency::Vector{Vector{Pair{Int,_Exact}}}
+    adj_pos::Vector{Dict{Int,Int}}
     fields::Vector{_Exact}
     constant::_Exact
     fixed::Vector{Int8} # 2 denotes free in either source domain
@@ -72,10 +73,13 @@ mutable struct _Incremental
     callers::Vector{Int}
     entries::Vector{Int}
     proof_count::Int
+    first_proof_pos::Int
+    marginal_count::Int
     total_candidates::Int
     total_edges::Int
     total_exact::Int
     dual_fields::Vector{_Exact}
     dual_constant::_Exact
     degrees::Vector{Int}
+    initial_degrees::Vector{Int}
 end

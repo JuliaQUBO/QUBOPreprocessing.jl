@@ -44,6 +44,78 @@
     @test persistency(c_mixed) === :weak
 end
 
+function assert_universal_lifting_and_persistency(
+    res,
+    L_orig,
+    Q_orig,
+    scale_orig,
+    offset_orig,
+    domain::Symbol,
+    sense::Symbol,
+    optima,
+    opt_energy,
+)
+    R = Rational{BigInt}
+    res_model = export_model(res)
+    m = QT.dimension(res_model)
+    res_dom = res._map === nothing ? domain : res._map.target_domain
+    L_res = R[res._linear...]
+    Q_res = zeros(R, m, m)
+    for (i, j, q) in res._quadratic
+        Q_res[i, j] = R(q)
+    end
+    scale_res = R(res._scale)
+    offset_res = R(res._constant)
+
+    # 1. Every residual state's residual energy matches the original energy of its reconstructed state.
+    for y in states(m, res_dom)
+        rec = reconstruct(res, y)
+        e_res = reference(L_res, Q_res, scale_res, offset_res, y, R)
+        e_orig = reference(L_orig, Q_orig, scale_orig, offset_orig, rec.state, R)
+        @test e_res == e_orig
+    end
+
+    # 2. Universal lifting guarantee: independently identify ALL residual optima and verify
+    # that EVERY residual optimum lifts to an original global optimum with matching optimal energy.
+    res_optima = oracle_optima(L_res, Q_res, scale_res, offset_res, res_dom, sense, ())
+    @test !isempty(res_optima)
+    lifted_optima = Vector{Int}[]
+    for y_opt in res_optima
+        e_res_opt = reference(L_res, Q_res, scale_res, offset_res, y_opt, R)
+        @test e_res_opt == opt_energy
+        rec_opt = reconstruct(res, y_opt)
+        @test rec_opt.state in optima
+        @test reference(L_orig, Q_orig, scale_orig, offset_orig, rec_opt.state, R) == opt_energy
+        push!(lifted_optima, rec_opt.state)
+    end
+
+    # 3. Strong persistency guarantee: check every :strong step against EVERY original optimum.
+    steps = res.certificate.reduction_chain
+    for step in steps
+        persistency(step) === :strong || continue
+        for x_opt in optima
+            if step isa DominanceStep
+                @test x_opt[step.variable] == step.value
+            elseif step isa RelationStep
+                s_u = domain === :bool ? (2 * x_opt[step.eliminated] - 1) : x_opt[step.eliminated]
+                s_v = domain === :bool ? (2 * x_opt[step.representative] - 1) : x_opt[step.representative]
+                @test s_u == step.orig_sign * s_v
+            elseif step isa EliminationStep
+                idx = 1
+                for (bit_pos, nbr) in enumerate(step.neighbors)
+                    x_opt[nbr] == 1 && (idx += 1 << (bit_pos - 1))
+                end
+                @test x_opt[step.variable] == step.table[idx]
+            end
+        end
+    end
+
+    # 4. When all steps are :strong, EVERY original optimum is preserved and recovered by lifting.
+    if all(s -> persistency(s) === :strong, steps)
+        @test Set(lifted_optima) == Set(optima)
+    end
+end
+
 @testset "end-to-end composed chains and reverse-order reconstruction" begin
     R = Rational{BigInt}
     # 5-variable model where:
@@ -129,17 +201,9 @@ end
         for active_map in (nothing, gmap)
             res = active_map === nothing ? materialize(ws; coefficient_type=R) :
                                            materialize(ws, active_map; coefficient_type=R)
-            res_model = export_model(res)
-            res_dom = active_map === nothing ? domain : active_map.target_domain
-            best_lifted = nothing
-            for y in states(QT.dimension(res_model), res_dom)
-                rec = reconstruct(res, y)
-                e_orig = reference(L_float, Q_float, scale, offset_val, rec.state, R)
-                if best_lifted === nothing || (sense === :min ? e_orig < best_lifted : e_orig > best_lifted)
-                    best_lifted = e_orig
-                end
-            end
-            @test best_lifted == opt_energy
+            assert_universal_lifting_and_persistency(
+                res, L_float, Q_float, scale, offset_val, domain, sense, optima, opt_energy,
+            )
         end
 
         # Step 4: Eliminate :v3 (degree 1) and :v5 (degree 0) to reduce to 0 variables!
@@ -148,8 +212,9 @@ end
         full_export = materialize(ws; coefficient_type=R)
         @test QT.dimension(export_model(full_export)) == 0
         @test verify_certificate(ws, full_export.certificate.proof).valid
-        full_rec = reconstruct(full_export, Int[])
-        @test reference(L_float, Q_float, scale, offset_val, full_rec.state, R) == opt_energy
+        assert_universal_lifting_and_persistency(
+            full_export, L_float, Q_float, scale, offset_val, domain, sense, optima, opt_energy,
+        )
 
         # Rollback step-by-step and verify exact state restoration
         rollback!(ws, cp3)
@@ -407,5 +472,59 @@ end
     @test rep_assume.stop_reason === :applied
     @test isempty(reductions(ws_branch))
     @test Dict(assumptions(ws_branch)) == Dict(:w => -1, :u => 1)
+
+    # Regression test (Finding 1): Evolved exact rational coupling after contraction must be enclosed
+    # in the interval dominance pass rather than rounded via Float64(q).
+    # F(u, v, w) = (1 + 2^-52)*w - 4*u*v + u*w + 2^-54*v*w in spin minimization:
+    # Contracting u into v produces coupling (1 + 2^-54) between v and w.
+    # Exact lower bound for w is (1 + 2^-52) - (1 + 2^-54) = 3 * 2^-54 > 0, whereas rounding
+    # (1 + 2^-54) to 1.0 before outward addition would emit an invalid interval lower bound prevfloat(2^-52) == 2^-53 > 3 * 2^-54.
+    L_encl = [0.0, 0.0, 1.0 + ldexp(1.0, -52)]
+    Q_encl = [0.0 -4.0 1.0; 0.0 0.0 ldexp(1.0, -54); 0.0 0.0 0.0]
+    ws_encl = Workspace(fixture([:u, :v, :w], L_encl, Q_encl; domain=:spin); rules=:dominance)
+    @test contract_relation!(ws_encl, :u, :v).stop_reason === :applied
+    att_w = prove_dominance(ws_encl, :w)
+    @test att_w.stop_reason === :proved
+    @test att_w.method === :exact
+    @test last(att_w.certificate.steps).lower == Rational{BigInt}(3) // (BigInt(1) << 54)
+    @test verify_certificate(ws_encl, att_w.certificate).valid
+
+    # Regression test (Finding 2 & 4): Degenerate multi-optimum universal lifting and swap-remove rollback
+    # Model on 5 binary variables [:d, :u, :v, :e, :f] with multiple degenerate optima:
+    # - :d has field +3 (strong dominance d = 0)
+    # - :u and :v have strong equality 4*(u - v)^2 = 4*u + 4*v - 8*u*v, plus u*f - v*f (which cancels (v, f) when u = v!)
+    #   and v also has edge to :e so cancelling (v, e) or (v, f) tests non-tail swap-remove in adjacency[v].
+    # - :e has field -1 and coupling +2*e*v (strict local elimination table(0)=1, table(1)=0, contributing -1 + v to v,
+    #   and if we also add -v to v's initial field so v's net field after eliminating :e is 0, then both v=0 and v=1,
+    #   and both f=0 and f=1 are optimal: 4 degenerate global optima!).
+    L_deg = [3.0, 4.0, 3.0, -1.0, 0.0]
+    Q_deg = [
+        0.0  0.0  0.0  0.0  0.0;
+        0.0  0.0 -8.0  0.0  1.0;
+        0.0  0.0  0.0  2.0 -1.0;
+        0.0  0.0  0.0  0.0  0.0;
+        0.0  0.0  0.0  0.0  0.0
+    ]
+    m_deg = fixture([:d, :u, :v, :e, :f], L_deg, Q_deg)
+    opt_deg = oracle_optima(L_deg, Q_deg, 1.0, 0.0, :bool, :min, ())
+    @test length(opt_deg) == 4 # (d=0, u=v in {0,1}, e=1-v, f in {0,1}) all have energy -1
+    ws_deg = Workspace(m_deg; rules=:dominance)
+    cp_deg0 = checkpoint(ws_deg)
+    @test apply_dominance!(ws_deg, :d).stop_reason === :applied
+    # Before contracting u -> v, adjacency[v] has [u => -8, e => 2, f => -1];
+    # contracting u -> v swap-removes u (at pos 1, non-tail!) and cancels (v, f) to 0!
+    @test contract_relation!(ws_deg, :u, :v).stop_reason === :applied
+    @test eliminate_variable!(ws_deg, :e).stop_reason === :applied
+    res_deg = materialize(ws_deg; coefficient_type=Rational{BigInt})
+    assert_universal_lifting_and_persistency(
+        res_deg, L_deg, Q_deg, 1.0, 0.0, :bool, :min, opt_deg, Rational{BigInt}(-1),
+    )
+    rollback!(ws_deg, cp_deg0)
+    for a in 1:5
+        for (pos, (b, _)) in enumerate(ws_deg._state.adjacency[a])
+            @test ws_deg._state.adj_pos[a][b] == pos
+        end
+    end
 end
+
 

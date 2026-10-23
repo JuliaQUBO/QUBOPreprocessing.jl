@@ -373,10 +373,13 @@ function _dominance_witness(ws::Workspace, i::Int; map::Union{Nothing,DomainGaug
         visits += 1
         st.fixed[j] == 2 || continue
         if map === nothing
-            # Adjacency coefficients are unchanged exact source Float64 values.
-            coefficient = direction*Float64(q)
-            a,b = s.domain === QT.BoolDomain ? (min(0.0,coefficient),max(0.0,coefficient)) :
-                                                 (-abs(coefficient),abs(coefficient))
+            c_lo, c_hi = _enclose(direction * q)
+            if s.domain === QT.BoolDomain
+                a, b = min(0.0, c_lo), max(0.0, c_hi)
+            else
+                m = max(abs(c_lo), abs(c_hi))
+                a, b = -m, m
+            end
         elseif map.target_domain === :spin
             c_lo, c_hi = _enclose(direction * _mapped_coupling(ws, i, j, q, map))
             m = max(abs(c_lo), abs(c_hi))
@@ -728,6 +731,7 @@ mutable struct _PolyState
     active::BitVector
     fields::Vector{_Exact}
     adj::Vector{Vector{Pair{Int,_Exact}}}
+    adj_pos::Vector{Dict{Int,Int}}
     constant::_Exact
     h_spin::Vector{_Exact}
     c_spin::_Exact
@@ -739,6 +743,7 @@ function _init_poly_state(s::_Snapshot; map::Union{Nothing,DomainGaugeMap}=nothi
     n = length(s.labels)
     fields = fill(_Exact(0), n)
     adj = [Pair{Int,_Exact}[] for _ in 1:n]
+    adj_pos = [Dict{Int,Int}() for _ in 1:n]
     f = QT.Form{Float64}(n, _thaw(s.linear), _thaw(s.quadratic), s.scale, s.offset;
                          sense=s.sense, domain=s.domain)
     for (i, v) in QT.linear_terms(f)
@@ -751,7 +756,9 @@ function _init_poly_state(s::_Snapshot; map::Union{Nothing,DomainGaugeMap}=nothi
         iszero(v) && continue
         q = _Exact(v)
         push!(adj[i], j => q)
+        adj_pos[i][j] = length(adj[i])
         push!(adj[j], i => q)
+        adj_pos[j][i] = length(adj[j])
         quad_sum += q
     end
     constant = _Exact(s.offset)
@@ -779,7 +786,7 @@ function _init_poly_state(s::_Snapshot; map::Union{Nothing,DomainGaugeMap}=nothi
             end
         end
     end
-    return _PolyState(n, s.domain, s.sense, s.scale, trues(n), fields, adj, constant,
+    return _PolyState(n, s.domain, s.sense, s.scale, trues(n), fields, adj, adj_pos, constant,
                       h_spin, c_spin, c_gauged_bool, map)
 end
 
@@ -876,16 +883,37 @@ function _poly_apply_deltas!(p::_PolyState, u::Int, const_delta::_Exact, field_d
         p.fields[w] += f_map[w]
         p.h_spin[w] += is_bool ? (f_map[w] // 2 + qsum_map[w] // 4) : f_map[w]
     end
+    for (w, _) in u_active_edges
+        pos_w = get(p.adj_pos[w], u, 0)
+        if pos_w != 0
+            last_pos = length(p.adj[w])
+            if pos_w != last_pos
+                tail_pair = p.adj[w][last_pos]
+                p.adj[w][pos_w] = tail_pair
+                p.adj_pos[w][tail_pair.first] = pos_w
+            end
+            pop!(p.adj[w])
+            delete!(p.adj_pos[w], u)
+        end
+    end
     for ((j, k), dq) in merged_q
         iszero(dq) && continue
         for (a, b) in ((j, k), (k, j))
-            pos = findfirst(pair -> pair.first == b, p.adj[a])
-            if pos === nothing
+            pos = get(p.adj_pos[a], b, 0)
+            if pos == 0
                 push!(p.adj[a], b => dq)
+                p.adj_pos[a][b] = length(p.adj[a])
             else
                 q_new = p.adj[a][pos].second + dq
                 if iszero(q_new)
-                    deleteat!(p.adj[a], pos)
+                    last_pos = length(p.adj[a])
+                    if pos != last_pos
+                        tail_pair = p.adj[a][last_pos]
+                        p.adj[a][pos] = tail_pair
+                        p.adj_pos[a][tail_pair.first] = pos
+                    end
+                    pop!(p.adj[a])
+                    delete!(p.adj_pos[a], b)
                 else
                     p.adj[a][pos] = b => q_new
                 end
@@ -1015,7 +1043,9 @@ function _transport_one_step(
         if already_in_target
             new_lo, new_hi = step.lower, step.upper
         elseif step.method === :marginal
-            _, _, _, delta_marg = _poly_marginal_diff(p, step.variable, to_map)
+            from_g = from_map === nothing ? 1 : from_map.gauge[step.variable]
+            to_g = to_map === nothing ? 1 : to_map.gauge[step.variable]
+            delta_marg = (from_g * to_g) * step.lower
             new_lo, new_hi = deepcopy(delta_marg), deepcopy(delta_marg)
         else
             new_lo, new_hi = _convert_step_bounds(s, step, from_map, to_map)

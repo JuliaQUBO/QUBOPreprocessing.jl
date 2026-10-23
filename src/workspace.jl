@@ -5,6 +5,7 @@
 function _incremental(s::_Snapshot;rules=:identity)
     n = length(s.labels)
     adjacency = [Pair{Int,_Exact}[] for _ in 1:n]
+    adj_pos = [Dict{Int,Int}() for _ in 1:n]
     fields = fill(_Exact(0), n)
     f = QT.Form{Float64}(n, _thaw(s.linear), _thaw(s.quadratic), s.scale, s.offset;
                          sense=s.sense, domain=s.domain)
@@ -15,9 +16,12 @@ function _incremental(s::_Snapshot;rules=:identity)
         iszero(v) && continue
         q = _Exact(v)
         push!(adjacency[i], j=>q)
+        adj_pos[i][j] = length(adjacency[i])
         push!(adjacency[j], i=>q)
+        adj_pos[j][i] = length(adjacency[j])
     end
     degrees = [length(adj) for adj in adjacency]
+    initial_degrees = copy(degrees)
     dual_fields = Vector{_Exact}(undef, n)
     quad_sum = _Exact(0)
     for i in 1:n
@@ -44,9 +48,10 @@ function _incremental(s::_Snapshot;rules=:identity)
     queue = rules === :dominance ? collect(1:n) : Int[]
     queued = rules === :dominance ? trues(n) : falses(n)
     return _Incremental(Dict{Any,Int}(v=>i for (i,v) in enumerate(s.labels)),
-                        adjacency, fields, _Exact(s.offset), fill(Int8(2), n),
+                        adjacency, adj_pos, fields, _Exact(s.offset), fill(Int8(2), n),
                         queue, queued, _UndoEntry[], 0, uuid4(),rules,lower,upper,1,
-                        Int[],Int[],zeros(Int,n),0,0,0,0,dual_fields,dual_constant,degrees)
+                        Int[],Int[],zeros(Int,n),0,0,0,0,0,0,dual_fields,dual_constant,
+                        degrees, initial_degrees)
 end
 
 """
@@ -147,40 +152,28 @@ function assume!(ws::Workspace, label, value; map::Union{Nothing,DomainGaugeMap}
         _lift_index_value(map, i, u_val)
     end
     st = ws._state
-    for p in st.callers
-        e = st.trail[p]::_UndoFix
-        if e.index == i
-            e.value == v || throw(ArgumentError("conflicting caller assumption"))
-            return UpdateReport(:unchanged, 0, 0)
-        end
-    end
     if st.fixed[i] in (-1, 0, 1)
         st.fixed[i] == v || throw(ArgumentError("conflicting caller assumption"))
         return UpdateReport(:unchanged, 0, 0)
     end
-    has_marginal = any(k -> begin
-        entry = st.trail[st.fixes[k]]
-        entry.proof !== nothing && hasproperty(entry.proof, :method) && entry.proof.method === :marginal
-    end, eachindex(st.fixes))
-    if st.fixed[i] != 2 || has_marginal
-        first_ded_idx = findfirst(k -> st.trail[st.fixes[k]].proof !== nothing, eachindex(st.fixes))
-        first_ded_idx !== nothing || throw(ArgumentError("inconsistent variable status"))
-        pos = st.fixes[first_ded_idx]
-        replay_list = Pair{Int,Int}[(st.trail[p]::_UndoFix).index => (st.trail[p]::_UndoFix).value
-                                    for p in st.callers if p > pos]
-        push!(replay_list, i => v)
-        cancelled_deg = Dict{Int,Int}()
-        for k in first_ded_idx:length(st.fixes)
-            entry = st.trail[st.fixes[k]]
-            if entry isa _UndoReduction
-                for (op, a, _, _) in entry.adj_edits
-                    op === :insert && (cancelled_deg[a] = get(cancelled_deg, a, 0) + 1)
-                end
-            end
+    if st.fixed[i] != 2 || st.marginal_count > 0
+        pos = st.first_proof_pos
+        pos > 0 || throw(ArgumentError("inconsistent variable status"))
+        c_idx = length(st.callers)
+        while c_idx >= 1 && st.callers[c_idx] > pos
+            c_idx -= 1
         end
+        replay_start = c_idx + 1
+        replay_count = length(st.callers) - c_idx + 1
+        replay_list = Vector{Pair{Int,Int}}(undef, replay_count)
+        for (offset, k) in enumerate(replay_start:length(st.callers))
+            e = st.trail[st.callers[k]]::_UndoFix
+            replay_list[offset] = e.index => e.value
+        end
+        replay_list[replay_count] = i => v
         planned_visits = 0
         for (idx, _) in replay_list
-            deg = length(st.adjacency[idx]) + get(cancelled_deg, idx, 0)
+            deg = st.initial_degrees[idx]
             deg <= max_work - planned_visits || return UpdateReport(:work_limit, 0, 0)
             for _ in 1:deg
                 _expired(deadline_ns) && return UpdateReport(:deadline, planned_visits, 0)
@@ -242,7 +235,13 @@ function _fix!(ws::Workspace,i::Int,v::Int;proof=nothing,max_work=typemax(Int),d
     entry = _UndoFix(st.serial + 1,length(st.fixes)+1,i,v,st.constant,old,length(st.queue),proof,st.dual_constant,old_dual)
     push!(st.trail, entry)
     push!(st.fixes,length(st.trail))
-    proof === nothing ? push!(st.callers,length(st.trail)) : (st.proof_count += 1)
+    if proof === nothing
+        push!(st.callers,length(st.trail))
+    else
+        st.proof_count == 0 && (st.first_proof_pos = length(st.trail))
+        st.proof_count += 1
+        hasproperty(proof, :method) && proof.method === :marginal && (st.marginal_count += 1)
+    end
     st.entries[i] = length(st.trail)
     st.serial += 1
     st.constant = constant
@@ -264,6 +263,33 @@ function _fix!(ws::Workspace,i::Int,v::Int;proof=nothing,max_work=typemax(Int),d
         end
     end
     return UpdateReport(:applied, visits, 1)
+end
+
+function _adj_set!(st::_Incremental, adj_edits::Vector{_AdjacencyEdit}, a::Int, b::Int, q_new::_Exact)
+    pos = get(st.adj_pos[a], b, 0)
+    if pos == 0
+        !iszero(q_new) || return nothing
+        push!(st.adjacency[a], b => q_new)
+        st.adj_pos[a][b] = length(st.adjacency[a])
+        push!(adj_edits, (:pop, a, 0, b => _Exact(0)))
+    else
+        old_pair = st.adjacency[a][pos]
+        if iszero(q_new)
+            last_pos = length(st.adjacency[a])
+            if pos != last_pos
+                tail_pair = st.adjacency[a][last_pos]
+                st.adjacency[a][pos] = tail_pair
+                st.adj_pos[a][tail_pair.first] = pos
+            end
+            pop!(st.adjacency[a])
+            delete!(st.adj_pos[a], b)
+            push!(adj_edits, (:swap_remove, a, pos, old_pair))
+        else
+            st.adjacency[a][pos] = b => q_new
+            push!(adj_edits, (:update, a, pos, old_pair))
+        end
+    end
+    return nothing
 end
 
 function _apply_reduction!(
@@ -311,13 +337,10 @@ function _apply_reduction!(
     merged_quad_deltas = Tuple{Int,Int,_Exact}[
         (j, k, dq) for ((j, k), dq) in sort!(collect(merged_q); by=first) if !iszero(dq)
     ]
-    for (j, k, _) in merged_quad_deltas
-        edge_work = length(st.adjacency[j]) + length(st.adjacency[k])
-        edge_work <= max_work - visits || return UpdateReport(:work_limit, visits, 0)
-        for _ in 1:edge_work
-            _expired(deadline_ns) && return UpdateReport(:deadline, visits, 0)
-            visits += 1
-        end
+    for _ in merged_quad_deltas
+        2 <= max_work - visits || return UpdateReport(:work_limit, visits, 0)
+        _expired(deadline_ns) && return UpdateReport(:deadline, visits, 0)
+        visits += 2
     end
     touched = sort!(collect(touched_set))
     old_fields = Vector{_NeighborRecord}(undef, length(touched))
@@ -334,6 +357,7 @@ function _apply_reduction!(
     hi_map = Dict{Int,_Exact}(w => _Exact(0) for w in touched)
     qsum_map = Dict{Int,_Exact}(w => _Exact(0) for w in touched)
     deg_map = Dict{Int,Int}(w => 0 for w in touched)
+    grow_map = Dict{Int,Int}(w => 0 for w in touched)
     for (w, q_uw) in u_free_edges
         deg_map[w] -= 1
         qsum_map[w] -= q_uw
@@ -347,12 +371,14 @@ function _apply_reduction!(
         hi_map[w] += df
     end
     for (j, k, dq) in merged_quad_deltas
-        pos_j = findfirst(p -> p.first == k, st.adjacency[j])
-        q_old = pos_j === nothing ? _Exact(0) : st.adjacency[j][pos_j].second
+        pos_j = get(st.adj_pos[j], k, 0)
+        q_old = pos_j == 0 ? _Exact(0) : st.adjacency[j][pos_j].second
         q_new = q_old + dq
-        if pos_j === nothing
+        if pos_j == 0
             deg_map[j] += 1
             deg_map[k] += 1
+            grow_map[j] += 1
+            grow_map[k] += 1
         elseif iszero(q_new)
             deg_map[j] -= 1
             deg_map[k] -= 1
@@ -393,25 +419,20 @@ function _apply_reduction!(
     _reserve!(st.queue, length(st.queue) + length(touched))
     _reserve!(st.trail, length(st.trail) + 1)
     _reserve!(st.fixes, length(st.fixes) + 1)
+    for w in touched
+        grow_map[w] > 0 && _reserve!(st.adjacency[w], length(st.adjacency[w]) + grow_map[w])
+    end
     adj_edits = _AdjacencyEdit[]
+    _reserve!(adj_edits, length(u_free_edges) + 2 * length(merged_quad_deltas))
+    for (w, _) in u_free_edges
+        _adj_set!(st, adj_edits, w, u, _Exact(0))
+    end
     for (j, k, dq) in merged_quad_deltas
-        for (a, b) in ((j, k), (k, j))
-            pos = findfirst(p -> p.first == b, st.adjacency[a])
-            if pos === nothing
-                push!(st.adjacency[a], b => dq)
-                push!(adj_edits, (:pop, a, 0, b => _Exact(0)))
-            else
-                old_pair = st.adjacency[a][pos]
-                q_new = old_pair.second + dq
-                if iszero(q_new)
-                    deleteat!(st.adjacency[a], pos)
-                    push!(adj_edits, (:insert, a, pos, old_pair))
-                else
-                    st.adjacency[a][pos] = b => q_new
-                    push!(adj_edits, (:update, a, pos, old_pair))
-                end
-            end
-        end
+        pos_j = get(st.adj_pos[j], k, 0)
+        q_old = pos_j == 0 ? _Exact(0) : st.adjacency[j][pos_j].second
+        q_new = q_old + dq
+        _adj_set!(st, adj_edits, j, k, q_new)
+        _adj_set!(st, adj_edits, k, j, q_new)
     end
     entry = _UndoReduction(
         st.serial + 1,
@@ -431,6 +452,7 @@ function _apply_reduction!(
     )
     push!(st.trail, entry)
     push!(st.fixes, length(st.trail))
+    st.proof_count == 0 && (st.first_proof_pos = length(st.trail))
     st.proof_count += 1
     st.entries[u] = length(st.trail)
     st.serial += 1
@@ -510,9 +532,18 @@ function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
             for r in length(undo.adj_edits):-1:1
                 op, a, pos, old_pair = undo.adj_edits[r]
                 if op === :pop
-                    pop!(st.adjacency[a])
-                elseif op === :insert
-                    insert!(st.adjacency[a], pos, old_pair)
+                    popped = pop!(st.adjacency[a])
+                    delete!(st.adj_pos[a], popped.first)
+                elseif op === :swap_remove
+                    if pos <= length(st.adjacency[a])
+                        moved_pair = st.adjacency[a][pos]
+                        push!(st.adjacency[a], moved_pair)
+                        st.adj_pos[a][moved_pair.first] = length(st.adjacency[a])
+                        st.adjacency[a][pos] = old_pair
+                    else
+                        push!(st.adjacency[a], old_pair)
+                    end
+                    st.adj_pos[a][old_pair.first] = pos
                 else
                     st.adjacency[a][pos] = old_pair
                 end
@@ -534,6 +565,7 @@ function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
             st.entries[undo.index] = 0
             pop!(st.fixes)
             st.proof_count -= 1
+            st.proof_count == 0 && (st.first_proof_pos = 0)
             st.constant = undo.constant
             st.dual_constant = undo.dual_constant
         else
@@ -554,7 +586,13 @@ function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
             st.degrees[undo.index] = length(undo.fields)
             st.entries[undo.index] = 0
             pop!(st.fixes)
-            undo.proof === nothing ? pop!(st.callers) : (st.proof_count -= 1)
+            if undo.proof === nothing
+                pop!(st.callers)
+            else
+                st.proof_count -= 1
+                st.proof_count == 0 && (st.first_proof_pos = 0)
+                hasproperty(undo.proof, :method) && undo.proof.method === :marginal && (st.marginal_count -= 1)
+            end
             st.constant = undo.constant
             st.dual_constant = undo.dual_constant
         end

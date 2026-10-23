@@ -163,7 +163,7 @@ function apply_dominance!(ws::Workspace, label;
     step = if map === nothing
         raw_step
     elseif raw_step.method === :marginal
-        _, _, _, dm = _poly_marginal_diff(_init_poly_from_ws(ws), i, nothing)
+        dm = map.gauge[i] * raw_step.lower
         DominanceStep(i, raw_step.value, deepcopy(dm), deepcopy(dm), deepcopy(st.constant),
                       raw_step.predecessors, :marginal, raw_step.scope_length, raw_step.persistency)
     else
@@ -173,17 +173,6 @@ function apply_dominance!(ws::Workspace, label;
     end
     rep = _fix!(ws, i, step.value; proof=step, max_work=max_work - visits, deadline_ns)
     return UpdateReport(rep.stop_reason, visits + rep.edge_visits, rep.changed)
-end
-
-function _init_poly_from_ws(ws::Workspace)
-    st, s = ws._state, ws._snapshot
-    n = length(s.labels)
-    active = BitVector(st.fixed[k] == 2 for k in 1:n)
-    adj = [Pair{Int,_Exact}[p for p in st.adjacency[k] if st.fixed[p.first] == 2] for k in 1:n]
-    h_spin = s.domain === QT.SpinDomain ? copy(st.fields) : copy(st.dual_fields)
-    c_spin = _spin_constant(ws)
-    return _PolyState(n, s.domain, s.sense, s.scale, active, copy(st.fields), adj, st.constant,
-                      h_spin, c_spin, c_spin, nothing)
 end
 
 """
