@@ -729,9 +729,13 @@ mutable struct _PolyState
     fields::Vector{_Exact}
     adj::Vector{Vector{Pair{Int,_Exact}}}
     constant::_Exact
+    h_spin::Vector{_Exact}
+    c_spin::_Exact
+    c_gauged_bool::_Exact
+    map::Union{Nothing,DomainGaugeMap}
 end
 
-function _init_poly_state(s::_Snapshot; deadline=nothing)
+function _init_poly_state(s::_Snapshot; map::Union{Nothing,DomainGaugeMap}=nothing, deadline=nothing)
     n = length(s.labels)
     fields = fill(_Exact(0), n)
     adj = [Pair{Int,_Exact}[] for _ in 1:n]
@@ -741,40 +745,136 @@ function _init_poly_state(s::_Snapshot; deadline=nothing)
         _expired(deadline) && return nothing
         fields[i] = _Exact(v)
     end
+    quad_sum = _Exact(0)
     for ((i, j), v) in QT.quadratic_terms(f)
         _expired(deadline) && return nothing
         iszero(v) && continue
         q = _Exact(v)
         push!(adj[i], j => q)
         push!(adj[j], i => q)
+        quad_sum += q
     end
-    return _PolyState(n, s.domain, s.sense, s.scale, trues(n), fields, adj, _Exact(s.offset))
+    constant = _Exact(s.offset)
+    is_bool = s.domain === QT.BoolDomain
+    h_spin = Vector{_Exact}(undef, n)
+    if is_bool
+        for i in 1:n
+            csum = sum((q for (_, q) in adj[i]); init=_Exact(0))
+            h_spin[i] = fields[i] // 2 + csum // 4
+        end
+        c_spin = constant + sum(fields; init=_Exact(0)) // 2 + quad_sum // 4
+    else
+        copyto!(h_spin, fields)
+        c_spin = constant
+    end
+    c_gauged_bool = c_spin
+    if map !== nothing && map.target_domain === :bool
+        g = map.gauge
+        for i in 1:n
+            c_gauged_bool -= g[i] * h_spin[i]
+            for (j, q) in adj[i]
+                i < j || continue
+                J_ij = is_bool ? (q // 4) : q
+                c_gauged_bool += (g[i] * g[j]) * J_ij
+            end
+        end
+    end
+    return _PolyState(n, s.domain, s.sense, s.scale, trues(n), fields, adj, constant,
+                      h_spin, c_spin, c_gauged_bool, map)
 end
 
 _direction_poly(p::_PolyState) = iszero(p.scale) ? 0 :
     (p.sense === QT.Min ? 1 : -1) * (signbit(p.scale) ? -1 : 1)
 
 function _poly_fix!(p::_PolyState, i::Int, v::Int)
+    is_bool = p.domain === QT.BoolDomain
+    s_i = is_bool ? (2 * v - 1) : v
+    if p.map !== nothing && p.map.target_domain === :bool
+        u_i = _map_index_value(p.map, i, v)
+        if u_i != 0
+            g = p.map.gauge
+            g_i = g[i]
+            csum = _Exact(0)
+            for (j, q) in p.adj[i]
+                p.active[j] || continue
+                J_ij = is_bool ? (q // 4) : q
+                csum += (g_i * g[j]) * J_ij
+            end
+            p.c_gauged_bool += (2 * g_i * p.h_spin[i] - 2 * csum) * u_i
+        end
+    end
     p.constant += p.fields[i] * v
+    p.c_spin += p.h_spin[i] * s_i
     for (j, q) in p.adj[i]
         p.active[j] || continue
         p.fields[j] += q * v
+        J_ij = is_bool ? (q // 4) : q
+        p.h_spin[j] += J_ij * s_i
     end
     p.active[i] = false
     return nothing
 end
 
 function _poly_apply_deltas!(p::_PolyState, u::Int, const_delta::_Exact, field_deltas, quad_deltas)
-    p.constant += const_delta
+    is_bool = p.domain === QT.BoolDomain
+    u_active_edges = Pair{Int,_Exact}[w => q for (w, q) in p.adj[u] if p.active[w]]
+    touched_set = Set{Int}(w for (w, _) in u_active_edges)
     for (w, df) in field_deltas
         iszero(df) && continue
-        p.fields[w] += df
+        push!(touched_set, w)
     end
     merged_q = Dict{Tuple{Int,Int},_Exact}()
     for (a, b, dq) in quad_deltas
         iszero(dq) && continue
         j, k = min(a, b), max(a, b)
         merged_q[(j, k)] = get(merged_q, (j, k), _Exact(0)) + dq
+        push!(touched_set, j)
+        push!(touched_set, k)
+    end
+    touched = sort!(collect(touched_set))
+    f_map = Dict{Int,_Exact}(w => _Exact(0) for w in touched)
+    qsum_map = Dict{Int,_Exact}(w => _Exact(0) for w in touched)
+    for (w, q_uw) in u_active_edges
+        qsum_map[w] -= q_uw
+    end
+    for (w, df) in field_deltas
+        iszero(df) && continue
+        f_map[w] += df
+    end
+    for ((j, k), dq) in merged_q
+        iszero(dq) && continue
+        qsum_map[j] += dq
+        qsum_map[k] += dq
+    end
+    old_f_u = p.fields[u]
+    old_h_u = p.h_spin[u]
+    total_f_delta = -old_f_u + sum(values(f_map); init=_Exact(0))
+    total_q_delta = -sum((q for (_, q) in u_active_edges); init=_Exact(0)) +
+                    sum((dq for (_, dq) in merged_q); init=_Exact(0))
+    dc_spin = is_bool ? (const_delta + total_f_delta // 2 + total_q_delta // 4) : const_delta
+    p.constant += const_delta
+    p.c_spin += dc_spin
+    if p.map !== nothing && p.map.target_domain === :bool
+        g = p.map.gauge
+        dc_gb = dc_spin + g[u] * old_h_u
+        for w in touched
+            dh_w = is_bool ? (f_map[w] // 2 + qsum_map[w] // 4) : f_map[w]
+            dc_gb -= g[w] * dh_w
+        end
+        for (w, q_uw) in u_active_edges
+            J_uw = is_bool ? (q_uw // 4) : q_uw
+            dc_gb -= (g[u] * g[w]) * J_uw
+        end
+        for ((j, k), dq) in merged_q
+            iszero(dq) && continue
+            dJ_jk = is_bool ? (dq // 4) : dq
+            dc_gb += (g[j] * g[k]) * dJ_jk
+        end
+        p.c_gauged_bool += dc_gb
+    end
+    for w in touched
+        p.fields[w] += f_map[w]
+        p.h_spin[w] += is_bool ? (f_map[w] // 2 + qsum_map[w] // 4) : f_map[w]
     end
     for ((j, k), dq) in merged_q
         iszero(dq) && continue
@@ -835,61 +935,9 @@ function _poly_relation_deltas(p::_PolyState, u::Int, v::Int, orig_σ::Int)
     end
 end
 
-function _poly_gauged_spin(p::_PolyState, g::Tuple{Vararg{Int}})
-    n = p.n
-    h_spin = fill(_Exact(0), n)
-    c_spin = p.constant
-    free_couplings = Tuple{Int,Int,_Exact}[]
-    for i in 1:n
-        p.active[i] || continue
-        for (j, q) in p.adj[i]
-            (p.active[j] && i < j && !iszero(q)) || continue
-            push!(free_couplings, (i, j, q))
-        end
-    end
-    if p.domain === QT.BoolDomain
-        for i in 1:n
-            p.active[i] || continue
-            h_spin[i] = p.fields[i] // 2
-            c_spin += p.fields[i] // 2
-        end
-        for (i, j, b_ij) in free_couplings
-            J_ij = b_ij // 4
-            h_spin[i] += J_ij
-            h_spin[j] += J_ij
-            c_spin += J_ij
-        end
-    else
-        for i in 1:n
-            p.active[i] || continue
-            h_spin[i] = p.fields[i]
-        end
-    end
-    h_gauged = fill(_Exact(0), n)
-    for i in 1:n
-        p.active[i] || continue
-        h_gauged[i] = g[i] * h_spin[i]
-    end
-    J_gauged = Tuple{Int,Int,_Exact}[
-        (i, j, g[i] * g[j] * (p.domain === QT.BoolDomain ? (q // 4) : q))
-        for (i, j, q) in free_couplings
-    ]
-    return h_gauged, J_gauged, c_spin
-end
-
 function _poly_mapped_constant(p::_PolyState, active_map::Union{Nothing,DomainGaugeMap})
     active_map === nothing && return p.constant
-    h_gauged, J_gauged, c_spin = _poly_gauged_spin(p, active_map.gauge)
-    active_map.target_domain === :spin && return c_spin
-    constant = c_spin
-    for i in 1:p.n
-        p.active[i] || continue
-        constant -= h_gauged[i]
-    end
-    for (_, _, J_ij) in J_gauged
-        constant += J_ij
-    end
-    return constant
+    return active_map.target_domain === :spin ? p.c_spin : p.c_gauged_bool
 end
 
 function _poly_marginal_diff(p::_PolyState, i::Int, active_map::Union{Nothing,DomainGaugeMap}, deadline=nothing)
@@ -1007,7 +1055,7 @@ function _transport_steps(ws::Workspace, assumptions::Tuple, steps::Tuple,
                           tail_step::Union{Nothing,_ProofRecord}=nothing)
     (isempty(steps) && tail_step === nothing) && return ()
     s = ws._snapshot
-    p = _init_poly_state(s)
+    p = _init_poly_state(s; map=to_map)
     introduced = 0
     total_len = length(steps) + (tail_step === nothing ? 0 : 1)
     out = Vector{_ProofRecord}(undef, total_len)
@@ -1202,28 +1250,37 @@ function _verify_dominance_step(
             end
         end
     else
-        h_gauged, J_gauged, _ = _poly_gauged_spin(p, active_map.gauge)
+        is_bool = p.domain === QT.BoolDomain
+        g = active_map.gauge
+        g_u = g[u]
+        h_gauged_u = g_u * p.h_spin[u]
         if active_map.target_domain === :spin
-            lower = direction * h_gauged[u]
+            lower = direction * h_gauged_u
             upper = lower
-            for (i, j, J_ij) in J_gauged
-                (i == u || j == u) || continue
-                c = abs(direction * J_ij)
+            for (nbr, q) in p.adj[u]
+                _expired(deadline) && return (false, :deadline, cost)
+                p.active[nbr] || continue
+                J_uw = (g_u * g[nbr]) * (is_bool ? (q // 4) : q)
+                c = abs(direction * J_uw)
                 lower -= c
                 upper += c
             end
         else
-            a_bool = 2 * h_gauged[u]
-            for (i, j, J_ij) in J_gauged
-                (i == u || j == u) && (a_bool -= 2 * J_ij)
+            a_bool = 2 * h_gauged_u
+            for (nbr, q) in p.adj[u]
+                p.active[nbr] || continue
+                J_uw = (g_u * g[nbr]) * (is_bool ? (q // 4) : q)
+                a_bool -= 2 * J_uw
             end
             lower = direction * a_bool
             upper = lower
-            for (i, j, J_ij) in J_gauged
-                (i == u || j == u) || continue
-                b_ij = direction * (4 * J_ij)
-                lower += min(0, b_ij)
-                upper += max(0, b_ij)
+            for (nbr, q) in p.adj[u]
+                _expired(deadline) && return (false, :deadline, cost)
+                p.active[nbr] || continue
+                J_uw = (g_u * g[nbr]) * (is_bool ? (q // 4) : q)
+                b_uw = direction * (4 * J_uw)
+                lower += min(0, b_uw)
+                upper += max(0, b_uw)
             end
         end
     end
@@ -1263,17 +1320,19 @@ function _verify_relation_step(
     c_expected = _poly_mapped_constant(p, active_map)
     _expired(deadline) && return (false, :deadline, cost)
     c_expected == step.constant || return (false, :invalid_constant, cost)
-    g = active_map === nothing ? ntuple(_ -> 1, p.n) : active_map.gauge
-    h_gauged, J_gauged, _ = _poly_gauged_spin(p, g)
-    rad = abs(direction * h_gauged[u])
+    is_bool = p.domain === QT.BoolDomain
+    g_u = active_map === nothing ? 1 : active_map.gauge[u]
+    rad = abs(direction * g_u * p.h_spin[u])
     center = _Exact(0)
-    for (i, j, J_ij) in J_gauged
-        (i == u || j == u) || continue
-        other = i == u ? j : i
-        if other == v
-            center = -step.sign * (direction * J_ij)
+    for (nbr, q) in p.adj[u]
+        _expired(deadline) && return (false, :deadline, cost)
+        p.active[nbr] || continue
+        g_nbr = active_map === nothing ? 1 : active_map.gauge[nbr]
+        J_uw = (g_u * g_nbr) * (is_bool ? (q // 4) : q)
+        if nbr == v
+            center = -step.sign * (direction * J_uw)
         else
-            rad += abs(direction * J_ij)
+            rad += abs(direction * J_uw)
         end
     end
     lower = center - rad
@@ -1424,7 +1483,7 @@ function verify_certificate(ws::Workspace, cert::DominanceCertificate;
             return VerificationResult(false,:invalid_scope,cost)
         push!(seen,i)
     end
-    p = _init_poly_state(s; deadline=deadline_ns)
+    p = _init_poly_state(s; map=active_map, deadline=deadline_ns)
     p === nothing && return VerificationResult(false,:deadline,cost)
     base_step_cost = length(s.linear.values) + length(s.quadratic.values)
     introduced = 0

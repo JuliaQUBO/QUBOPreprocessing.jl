@@ -180,7 +180,10 @@ function _init_poly_from_ws(ws::Workspace)
     n = length(s.labels)
     active = BitVector(st.fixed[k] == 2 for k in 1:n)
     adj = [Pair{Int,_Exact}[p for p in st.adjacency[k] if st.fixed[p.first] == 2] for k in 1:n]
-    return _PolyState(n, s.domain, s.sense, s.scale, active, copy(st.fields), adj, st.constant)
+    h_spin = s.domain === QT.SpinDomain ? copy(st.fields) : copy(st.dual_fields)
+    c_spin = _spin_constant(ws)
+    return _PolyState(n, s.domain, s.sense, s.scale, active, copy(st.fields), adj, st.constant,
+                      h_spin, c_spin, c_spin, nothing)
 end
 
 """
