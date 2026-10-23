@@ -400,8 +400,6 @@ struct ConditionedExport{T}
     _scale::T
     _map::Union{Nothing,DomainGaugeMap}
 end
-ConditionedExport{T}(s,g,st,cert,fix,free,lin,quad,c,sc) where T =
-    ConditionedExport{T}(s,g,st,cert,fix,free,lin,quad,c,sc,nothing)
 generation(r::ConditionedExport) = r.generation
 original_variables(r::ConditionedExport) = _owned_labels(r._snapshot.label_type[r._snapshot.labels...])
 function index_map(r::ConditionedExport)

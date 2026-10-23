@@ -386,7 +386,7 @@ function _mapped_constant(ws::Workspace, m::Union{Nothing,DomainGaugeMap})
         return _spin_constant(ws)
     elseif m._identity_gauge
         return _bool_constant(ws)
-    elseif m._validated
+    else
         st = ws._state
         cur = m._cursor
         k = length(st.fixes)
@@ -427,8 +427,6 @@ function _mapped_constant(ws::Workspace, m::Union{Nothing,DomainGaugeMap})
         cur.tip_serial = tip
         cur.constant = c
         return c
-    else
-        return _direct_mapped_constant(ws, m)
     end
 end
 

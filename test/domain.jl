@@ -140,6 +140,13 @@ end
     @test attempt.method === :exact
     @test only(attempt.certificate.steps).value == 0
     @test verify_certificate(ws_dom, attempt.certificate; map=dmap).valid
+    for bmap in (domain_map(ws_dom; domain=:bool), domain_map(ws_dom; domain=:bool, gauge=[-1, 1]))
+        att_b = prove_dominance(ws_dom, :x; map=bmap)
+        @test att_b.stop_reason === :proved
+        @test att_b.method === :exact
+        @test only(att_b.certificate.steps).value == 0
+        @test verify_certificate(ws_dom, att_b.certificate; map=bmap).valid
+    end
 end
 
 @testset "domain-transported proof verification and rejection of wrong gauge, stale map or ordering" begin
@@ -238,6 +245,9 @@ end
     # Multi-step cascade export and verification in mapped coordinates (both spin and binary).
     root = checkpoint(ws)
     assume!(ws, :z, 1)
+    att_scoped = prove_dominance(ws, :x; map=smap)
+    @test att_scoped.stop_reason === :proved
+    @test verify_certificate(ws, att_scoped.certificate; map=smap).valid
     propagate!(ws; map=smap)
     casc_cert = export_certificate(ws; map=smap)
     @test length(casc_cert.steps) == 2
@@ -249,7 +259,24 @@ end
     rollback!(ws, root)
     @test verify_certificate(ws, casc_cert; map=smap).stop_reason === :stale_scope
 
+    # Spin-source mapped certificate verification and quadratic fixed-pair substitution.
+    ws_spin_src = Workspace(fixture(labels, [3.0, 0.5, 0.5], Q; domain=:spin, offset=0.25); rules=:dominance)
+    spin_src_bmap = domain_map(ws_spin_src; domain=:bool, gauge=[-1, 1, -1])
+    cp_s1 = checkpoint(ws_spin_src)
+    assume!(ws_spin_src, :y, -1)
+    cp_s2 = checkpoint(ws_spin_src)
+    assume!(ws_spin_src, :z, 1)
+    @test conditioned_constant(ws_spin_src; map=spin_src_bmap) == QUBOPreprocessing._direct_mapped_constant(ws_spin_src, spin_src_bmap)
+    rollback!(ws_spin_src, cp_s2)
+    assume!(ws_spin_src, :z, -1)
+    @test conditioned_constant(ws_spin_src; map=spin_src_bmap) == QUBOPreprocessing._direct_mapped_constant(ws_spin_src, spin_src_bmap)
+    att_spin_src = prove_dominance(ws_spin_src, :x; map=spin_src_bmap)
+    @test att_spin_src.stop_reason === :proved
+    @test verify_certificate(ws_spin_src, att_spin_src.certificate; map=spin_src_bmap).valid
+    rollback!(ws_spin_src, cp_s1)
+
     # Invalid domain/gauge construction refusals.
+    @test_throws ArgumentError materialize(ws; map=:invalid)
     @test_throws ArgumentError domain_map(ws; domain=:ising)
     @test_throws ArgumentError domain_map(ws; gauge=[1, -1])
     @test_throws ArgumentError domain_map(ws; gauge=[1, 0, 1])
@@ -262,6 +289,8 @@ end
     @test_throws ArgumentError lift_value(smap, :x, 0)
     @test_throws ArgumentError map_state(smap, [1, 0])
     @test_throws ArgumentError lift_state(smap, [1, -1])
+    @test_throws ArgumentError map_state(smap, :invalid)
+    @test_throws ArgumentError lift_state(smap, :invalid)
 end
 
 @testset "degree tracking, field separation and cross-domain dominance equivalence" begin

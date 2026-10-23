@@ -6,11 +6,7 @@ const _Exact = Rational{BigInt}
 abstract type _ProofRecord end
 const _NeighborRecord = Tuple{Int,_Exact,_Exact,_Exact}
 
-@static if VERSION >= v"1.11.0-DEV"
-    _reserve!(a::Vector, sz::Int) = sizehint!(a, sz; shrink=false)
-else
-    _reserve!(a::Vector, sz::Int) = sizehint!(a, sz)
-end
+_reserve!(a::Vector, sz::Int) = @static VERSION >= v"1.11.0-DEV" ? sizehint!(a, sz; shrink=false) : sizehint!(a, sz)
 
 struct _UndoFix
     serial::UInt64
@@ -24,7 +20,6 @@ struct _UndoFix
     dual_constant::_Exact
     dual_fields::Vector{Pair{Int,_Exact}}
 end
-_UndoFix(s,fd,i,v,c,f,ql,p) = _UndoFix(s,fd,i,v,c,f,ql,p,_Exact(0),Pair{Int,_Exact}[])
 
 struct _UndoQueue
     serial::UInt64
