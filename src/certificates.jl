@@ -5,12 +5,16 @@
 """
     DominanceStep
 
-Compact strong-persistency witness. Bounds enclose the normalized derivative
-of the unscaled objective: normalization multiplies by the sign of scale and
+Compact unary dominance/persistency witness. Bounds enclose the normalized
+derivative (or component-marginal difference when `method === :marginal`) of
+the unscaled objective: normalization multiplies by the sign of scale and
 objective sense, never by a potentially overflowing magnitude. `predecessors`
 is the number of preceding steps in the ordered certificate prefix; every
 preceding deduction is therefore explicit without copying the chain per step.
-`constant` binds the exact conditioned offset. Indices refer to original order.
+`constant` binds the exact conditioned offset. `persistency` is `:strong`
+(all optima satisfy `variable == value`) or `:weak` (at least one optimum of
+the current conditioned residual satisfies `variable == value`). Indices refer
+to original variable order.
 """
 struct DominanceStep <: _ProofRecord
     variable::Int
@@ -21,17 +25,77 @@ struct DominanceStep <: _ProofRecord
     predecessors::Int
     method::Symbol
     scope_length::Int
+    persistency::Symbol
 end
-DominanceStep(i,v,lo,hi,c,p,m) = DominanceStep(i,v,lo,hi,c,p,m,-1)
+DominanceStep(i,v,lo,hi,c,p,m) = DominanceStep(i,v,lo,hi,c,p,m,-1,:strong)
+DominanceStep(i,v,lo,hi,c,p,m,s) = DominanceStep(i,v,lo,hi,c,p,m,s,:strong)
+
+"""
+    RelationStep
+
+Compact signed pair relation witness certifying the substitution
+``s_{\\text{eliminated}} = \\sigma_{\\text{orig}} s_{\\text{representative}}`` in
+original canonical spin coordinates (equivalently ``x_u = x_v`` for
+``\\sigma_{\\text{orig}} = +1`` and ``x_u = 1 - x_v`` for
+``\\sigma_{\\text{orig}} = -1`` in binary coordinates), and
+``t_{\\text{eliminated}} = \\sigma t_{\\text{representative}}`` (`sign`) in the
+certificate's active coordinate representation. `lower` and `upper` enclose the
+normalized single-flip spin energy difference
+``-\\sigma \\tilde{J}_{uv} \\mp (|\\tilde{h}_u| + \\sum_{w \\ne v} |\\tilde{J}_{uw}|)``.
+`persistency` is `:strong` when `lower > 0` and `:weak` when `lower == 0`.
+"""
+struct RelationStep <: _ProofRecord
+    eliminated::Int
+    representative::Int
+    sign::Int
+    orig_sign::Int
+    lower::_Exact
+    upper::_Exact
+    constant::_Exact
+    predecessors::Int
+    method::Symbol
+    scope_length::Int
+    persistency::Symbol
+end
+RelationStep(u,v,s,os,lo,hi,c,p,m) = RelationStep(u,v,s,os,lo,hi,c,p,m,-1,:strong)
+RelationStep(u,v,s,os,lo,hi,c,p,m,sc) = RelationStep(u,v,s,os,lo,hi,c,p,m,sc,:strong)
+
+"""
+    EliminationStep
+
+Compact bounded-degree (`0 <= length(neighbors) <= 3`) exact local variable
+elimination witness certifying
+``F'(y) = \\operatorname{opt}_{x_u} F(y, x_u)`` across all ``2^d \\le 8``
+boundary assignments of `neighbors` (stored in ascending original-index order).
+`table` stores the reconstructing original-domain assignment for `variable`
+indexed by `1 + sum(((z_b == 1) << (b - 1)) for b in 1:d)`. `constant_delta`,
+`linear_deltas` and `quadratic_deltas` store the exact source-domain polynomial
+update induced by eliminating `variable`. `unique_argmin` is `true` when the
+minimizing value of `variable` is strict (`L_u(z) != 0`) for every boundary
+configuration `z`.
+"""
+struct EliminationStep <: _ProofRecord
+    variable::Int
+    neighbors::Tuple{Vararg{Int}}
+    table::Tuple{Vararg{Int}}
+    constant_delta::_Exact
+    linear_deltas::Tuple{Vararg{Pair{Int,_Exact}}}
+    quadratic_deltas::Tuple{Vararg{Tuple{Int,Int,_Exact}}}
+    constant::_Exact
+    predecessors::Int
+    scope_length::Int
+    unique_argmin::Bool
+end
+EliminationStep(u,nbrs,tbl,cd,ld,qd,c,p) = EliminationStep(u,nbrs,tbl,cd,ld,qd,c,p,-1,true)
 
 """
     DominanceCertificate
 
-Owned source/generation, explicit caller scope and ordered strict-dominance
-steps. Every step retains all scoped optima. This is a proof of restrictions,
-not a certificate that a supplied solver state is optimal. Source, scope and
-step capture are explicit export work; the propagation layer can retain compact
-`DominanceStep` records without copying the source at each inference.
+Owned source/generation, explicit caller scope and ordered reduction steps
+([`DominanceStep`](@ref), [`RelationStep`](@ref), [`EliminationStep`](@ref)).
+Every step retains all scoped optima (`:strong`) or at least one scoped optimum
+of the evolving residual (`:weak` / non-unique argmin). Also aliased as
+[`ReductionCertificate`](@ref).
 """
 struct DominanceCertificate
     generation::Generation
@@ -44,6 +108,53 @@ end
 DominanceCertificate(g,cp,a,s,src) = DominanceCertificate(g,cp,a,s,src,nothing)
 generation(c::DominanceCertificate) = c.generation
 
+"""
+    ReductionCertificate
+
+Alias for [`DominanceCertificate`](@ref) representing an ordered certificate
+chain of unary dominance restrictions, signed pair relation contractions, and
+bounded-degree exact variable eliminations.
+"""
+const ReductionCertificate = DominanceCertificate
+
+"""
+    step_guarantee(step_or_map)
+
+Return the algebraic guarantee class of a preprocessing step or coordinate map:
+- `:energy_identity` for [`DomainGaugeMap`](@ref),
+- `:exact_elimination` for [`EliminationStep`](@ref),
+- `:optimum_preserving_restriction` for [`DominanceStep`](@ref) and [`RelationStep`](@ref).
+"""
+step_guarantee(::DomainGaugeMap) = :energy_identity
+step_guarantee(::EliminationStep) = :exact_elimination
+step_guarantee(::Union{DominanceStep,RelationStep}) = :optimum_preserving_restriction
+
+"""
+    persistency(step_or_certificate)
+
+Return `:strong` when a step, map, or certificate preserves all optima on its
+scope, or `:weak` when any step relies on tie-breaking / weak persistency.
+"""
+persistency(::DomainGaugeMap) = :strong
+persistency(step::Union{DominanceStep,RelationStep}) = step.persistency
+persistency(step::EliminationStep) = step.unique_argmin ? :strong : :weak
+persistency(cert::DominanceCertificate) =
+    any(s -> persistency(s) === :weak, cert.steps) ? :weak : :strong
+
+"""
+    certificate_guarantee(cert::DominanceCertificate)
+
+Return the overall guarantee class of `cert`:
+- `:energy_identity` when `cert.steps` is empty,
+- `:exact_elimination` when every step in `cert.steps` is an [`EliminationStep`](@ref),
+- `:optimum_preserving_restriction` when `cert.steps` contains any [`DominanceStep`](@ref) or [`RelationStep`](@ref).
+"""
+function certificate_guarantee(cert::DominanceCertificate)
+    isempty(cert.steps) && return :energy_identity
+    all(s -> s isa EliminationStep, cert.steps) && return :exact_elimination
+    return :optimum_preserving_restriction
+end
+
 """Proof attempt with optional `certificate`, `stop_reason`, numeric `method`,
 adjacency `edge_visits`, and explicit `exact_fallbacks`/`exact_work` counters."""
 struct DominanceAttempt
@@ -55,6 +166,27 @@ struct DominanceAttempt
     exact_work::Int
 end
 
+"""Relation proof attempt with optional `certificate`, `stop_reason`, numeric
+`method`, adjacency `edge_visits`, and explicit `exact_fallbacks`/`exact_work` counters."""
+struct RelationAttempt
+    certificate::Union{Nothing,DominanceCertificate}
+    stop_reason::Symbol
+    method::Symbol
+    edge_visits::Int
+    exact_fallbacks::Int
+    exact_work::Int
+end
+
+"""Local variable elimination proof attempt with optional `certificate`,
+`stop_reason`, numeric `method`, adjacency `edge_visits`, and `exact_work`."""
+struct EliminationAttempt
+    certificate::Union{Nothing,DominanceCertificate}
+    stop_reason::Symbol
+    method::Symbol
+    edge_visits::Int
+    exact_work::Int
+end
+
 """Read-only verification result: `valid`, `stop_reason` and charged `term_visits`.
 A budget/deadline stop is not verification success."""
 struct VerificationResult
@@ -63,7 +195,7 @@ struct VerificationResult
     term_visits::Int
 end
 
-_caller_scope(ws::Workspace) = Tuple(ws._state.trail[p].index=>ws._state.trail[p].value
+_caller_scope(ws::Workspace) = Tuple((ws._state.trail[p]::_UndoFix).index => (ws._state.trail[p]::_UndoFix).value
                                     for p in ws._state.callers)
 _direction(s::_Snapshot) = iszero(s.scale) ? 0 :
     (s.sense === QT.Min ? 1 : -1) * (signbit(s.scale) ? -1 : 1)
@@ -86,15 +218,136 @@ function _strict_value(lower, upper, domain)
     return nothing
 end
 
-# Internal numeric seam for #4 and #13: no model copy, proof export or assumption scan.
+function _weak_value(lower, upper, domain)
+    lower >= 0 && return domain === QT.BoolDomain ? 0 : -1
+    upper <= 0 && return 1
+    return nothing
+end
+
+const _MAX_MARGINAL_COMPONENT = 4
+
+function _marginal_dominance_witness(
+    ws::Workspace,
+    i::Int,
+    map::Union{Nothing,DomainGaugeMap},
+    req_mapped::Union{Nothing,Int},
+    direction::Int,
+    visits::Int,
+    exact_work::Int,
+    max_work::Int,
+    max_exact_work::Int,
+    deadline_ns,
+    predecessors::Int,
+    scope_length::Int,
+)
+    st, s = ws._state, ws._snapshot
+    comp = Int[i]
+    head = 1
+    while head <= length(comp)
+        u = comp[head]
+        head += 1
+        for (w, q) in st.adjacency[u]
+            _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, 1, exact_work)
+            visits < max_work || return (nothing, :work_limit, :exact, visits, 1, exact_work)
+            visits += 1
+            (st.fixed[w] == 2 && !iszero(q)) || continue
+            if !(w in comp)
+                length(comp) < _MAX_MARGINAL_COMPONENT ||
+                    return (nothing, :not_strict, :exact, visits, 1, exact_work)
+                push!(comp, w)
+            end
+        end
+    end
+    others = sort!(comp[2:end])
+    d_c = length(others)
+    num_states = 1 << (d_c + 1)
+    num_states <= max_exact_work - exact_work ||
+        return (nothing, :verification_limit, :exact, visits, 1, exact_work)
+    is_bool = s.domain === QT.BoolDomain
+    low_orig = is_bool ? 0 : -1
+    sub_edges = Tuple{Int,Int,_Exact}[]
+    all_nodes = vcat(i, others)
+    for a in 1:length(all_nodes)
+        u = all_nodes[a]
+        for (w, q) in st.adjacency[u]
+            st.fixed[w] == 2 && u < w && !iszero(q) || continue
+            b = findfirst(==(w), all_nodes)
+            b !== nothing && push!(sub_edges, (a, b, q))
+        end
+    end
+    best_orig = Dict{Int,_Exact}()
+    vals = Vector{Int}(undef, length(all_nodes))
+    for x_i in (low_orig, 1)
+        vals[1] = x_i
+        best_val = _Exact(0)
+        has_best = false
+        for mask in 0:((1 << d_c) - 1)
+            _expired(deadline_ns) && return (nothing, :deadline, :marginal, visits, 1, exact_work)
+            exact_work += 1
+            for b in 1:d_c
+                vals[b + 1] = ((mask >> (b - 1)) & 1) == 1 ? 1 : low_orig
+            end
+            e = _Exact(0)
+            for a in 1:length(all_nodes)
+                e += st.fields[all_nodes[a]] * vals[a]
+            end
+            for (a, b, q) in sub_edges
+                e += q * vals[a] * vals[b]
+            end
+            de = direction * e
+            if !has_best || de < best_val
+                best_val = de
+                has_best = true
+            end
+        end
+        best_orig[x_i] = best_val
+    end
+    target_dom = map === nothing ? s.domain : _qt_domain(map.target_domain)
+    low_target = target_dom === QT.BoolDomain ? 0 : -1
+    orig_at_low = map === nothing ? low_orig : _lift_index_value(map, i, low_target)
+    orig_at_high = map === nothing ? 1 : _lift_index_value(map, i, 1)
+    delta_marg = best_orig[orig_at_high] - best_orig[orig_at_low]
+    chosen_mapped = if req_mapped !== nothing
+        ok = req_mapped == low_target ? (delta_marg >= 0) : (delta_marg <= 0)
+        ok ? req_mapped : nothing
+    else
+        delta_marg >= 0 ? low_target : 1
+    end
+    chosen_mapped === nothing && return (nothing, :not_strict, :exact, visits, 1, exact_work)
+    chosen_orig = map === nothing ? chosen_mapped : _lift_index_value(map, i, chosen_mapped)
+    c_val = _mapped_constant(ws, map)
+    pers = iszero(delta_marg) ? :weak : :strong
+    step = DominanceStep(
+        i,
+        chosen_orig,
+        deepcopy(delta_marg),
+        deepcopy(delta_marg),
+        deepcopy(c_val),
+        predecessors,
+        :marginal,
+        scope_length,
+        pers,
+    )
+    return (step, :proved, :marginal, visits, 1, exact_work)
+end
+
+# Internal numeric seam for #4, #13 and #14: no model copy, proof export or assumption scan.
 # Caller supplies predecessor count and persists the returned compact step.
 function _dominance_witness(ws::Workspace, i::Int; map::Union{Nothing,DomainGaugeMap}=nothing,
+                            allow_weak::Bool=false, value=nothing,
                             max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing,
-                            predecessors=0,scope_length=-1)
+                            predecessors=0, scope_length=-1)
     _limits(max_work,deadline_ns)
     _limits(max_exact_work,deadline_ns)
     map === nothing || _validate_domain_map(ws, map)
     st, s = ws._state, ws._snapshot
+    req_mapped = if value === nothing
+        nothing
+    elseif map === nothing
+        _assignment(ws, value)
+    else
+        _check_domain_scalar(value, map.target_domain)
+    end
     st.fixed[i] == 2 || return (nothing,:already_fixed,:none,0,0,0)
     direction = _direction(s)
     direction != 0 || return (nothing,:zero_scale,:none,0,0,0)
@@ -102,6 +355,7 @@ function _dominance_witness(ws::Workspace, i::Int; map::Union{Nothing,DomainGaug
     degree <= max_work || return (nothing,:work_limit,:none,0,0,0)
     _expired(deadline_ns) && return (nothing,:deadline,:none,0,0,0)
     target_dom = map === nothing ? s.domain : _qt_domain(map.target_domain)
+    low_target = target_dom === QT.BoolDomain ? 0 : -1
     gauged_bool = map !== nothing && map.target_domain === :bool && !map._identity_gauge
     init_field = if map === nothing
         direction * st.fields[i]
@@ -140,10 +394,10 @@ function _dominance_witness(ws::Workspace, i::Int; map::Union{Nothing,DomainGaug
     end
     mapped_val = isfinite(lo) && isfinite(hi) ? _strict_value(lo,hi,target_dom) : nothing
     _expired(deadline_ns) && return (nothing,:deadline,:interval,visits,0,0)
-    if mapped_val !== nothing
-        value = map === nothing ? mapped_val : _lift_index_value(map, i, mapped_val)
-        c_val = map === nothing ? st.constant : (map.target_domain === :spin ? _spin_constant(ws) : _bool_constant(ws))
-        step = DominanceStep(i,value,_Exact(lo),_Exact(hi),deepcopy(c_val),predecessors,:interval,scope_length)
+    if mapped_val !== nothing && (req_mapped === nothing || mapped_val == req_mapped)
+        val = map === nothing ? mapped_val : _lift_index_value(map, i, mapped_val)
+        c_val = _mapped_constant(ws, map)
+        step = DominanceStep(i,val,_Exact(lo),_Exact(hi),deepcopy(c_val),predecessors,:interval,scope_length,:strong)
         return (step,:proved,:interval,visits,0,0)
     end
     # Reserve the complete fallback before doing it. Exact work counts the
@@ -179,11 +433,274 @@ function _dominance_witness(ws::Workspace, i::Int; map::Union{Nothing,DomainGaug
     end
     _expired(deadline_ns) && return (nothing,:deadline,:exact,visits,1,exact_work)
     mapped_val = _strict_value(lower,upper,target_dom)
-    mapped_val === nothing && return (nothing,:not_strict,:exact,visits,1,exact_work)
-    value = map === nothing ? mapped_val : _lift_index_value(map, i, mapped_val)
-    c_val = map === nothing ? st.constant : (map.target_domain === :spin ? _spin_constant(ws) : _bool_constant(ws))
-    step = DominanceStep(i,value,deepcopy(lower),deepcopy(upper),deepcopy(c_val),predecessors,:exact,scope_length)
-    return (step,:proved,:exact,visits,1,exact_work)
+    if mapped_val !== nothing && (req_mapped === nothing || mapped_val == req_mapped)
+        val = map === nothing ? mapped_val : _lift_index_value(map, i, mapped_val)
+        c_val = _mapped_constant(ws, map)
+        step = DominanceStep(i,val,deepcopy(lower),deepcopy(upper),deepcopy(c_val),predecessors,:exact,scope_length,:strong)
+        return (step,:proved,:exact,visits,1,exact_work)
+    end
+    allow_weak || return (nothing,:not_strict,:exact,visits,1,exact_work)
+    weak_mapped = if req_mapped !== nothing
+        ok = req_mapped == low_target ? (lower >= 0) : (upper <= 0)
+        ok ? req_mapped : nothing
+    else
+        _weak_value(lower, upper, target_dom)
+    end
+    if weak_mapped !== nothing
+        val = map === nothing ? weak_mapped : _lift_index_value(map, i, weak_mapped)
+        c_val = _mapped_constant(ws, map)
+        step = DominanceStep(i,val,deepcopy(lower),deepcopy(upper),deepcopy(c_val),predecessors,:exact,scope_length,:weak)
+        return (step,:proved,:exact,visits,1,exact_work)
+    end
+    return _marginal_dominance_witness(
+        ws, i, map, req_mapped, direction, visits, exact_work,
+        Int(max_work), Int(max_exact_work), deadline_ns, predecessors, scope_length,
+    )
+end
+
+function _relation_deltas(ws::Workspace, u::Int, v::Int, orig_σ::Int)
+    st, s = ws._state, ws._snapshot
+    f_u = st.fields[u]
+    q_uv = _Exact(0)
+    other_edges = Pair{Int,_Exact}[]
+    for (w, q) in st.adjacency[u]
+        st.fixed[w] == 2 || continue
+        if w == v
+            q_uv = q
+        else
+            push!(other_edges, w => q)
+        end
+    end
+    if s.domain === QT.SpinDomain
+        const_delta = orig_σ * q_uv
+        field_deltas = Pair{Int,_Exact}[v => orig_σ * f_u]
+        quad_deltas = Tuple{Int,Int,_Exact}[
+            (min(v, w), max(v, w), orig_σ * q) for (w, q) in other_edges
+        ]
+        return const_delta, field_deltas, quad_deltas
+    elseif orig_σ == 1
+        const_delta = _Exact(0)
+        field_deltas = Pair{Int,_Exact}[v => (f_u + q_uv)]
+        quad_deltas = Tuple{Int,Int,_Exact}[
+            (min(v, w), max(v, w), q) for (w, q) in other_edges
+        ]
+        return const_delta, field_deltas, quad_deltas
+    else
+        const_delta = f_u
+        field_deltas = Pair{Int,_Exact}[v => -f_u]
+        for (w, q) in other_edges
+            push!(field_deltas, w => q)
+        end
+        quad_deltas = Tuple{Int,Int,_Exact}[
+            (min(v, w), max(v, w), -q) for (w, q) in other_edges
+        ]
+        return const_delta, field_deltas, quad_deltas
+    end
+end
+
+function _relation_witness(ws::Workspace, u::Int, v::Int;
+                           sign::Union{Nothing,Int}=nothing,
+                           map::Union{Nothing,DomainGaugeMap}=nothing,
+                           allow_weak::Bool=false,
+                           max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing,
+                           predecessors=0, scope_length=-1)
+    _limits(max_work, deadline_ns)
+    _limits(max_exact_work, deadline_ns)
+    map === nothing || _validate_domain_map(ws, map)
+    sign === nothing || (!(sign isa Bool) && sign in (-1, 1)) ||
+        throw(ArgumentError("relation sign must be -1, +1 or nothing"))
+    u != v || throw(ArgumentError("relation requires two distinct variables"))
+    st, s = ws._state, ws._snapshot
+    (st.fixed[u] == 2 && st.fixed[v] == 2) || return (nothing, :already_fixed, :none, 0, 0, 0)
+    direction = _direction(s)
+    direction != 0 || return (nothing, :zero_scale, :none, 0, 0, 0)
+    degree = length(st.adjacency[u])
+    degree <= max_work || return (nothing, :work_limit, :none, 0, 0, 0)
+    _expired(deadline_ns) && return (nothing, :deadline, :none, 0, 0, 0)
+    g_u = map === nothing ? 1 : map.gauge[u]
+    g_v = map === nothing ? 1 : map.gauge[v]
+    h_u = direction * g_u * _spin_field(ws, u)
+    h_lo, h_hi = _enclose(h_u)
+    rad_hi = max(abs(h_lo), abs(h_hi))
+    j_uv_lo, j_uv_hi = 0.0, 0.0
+    q_uv = _Exact(0)
+    visits = 0
+    for (w, q) in st.adjacency[u]
+        _expired(deadline_ns) && return (nothing, :deadline, :interval, visits, 0, 0)
+        visits += 1
+        st.fixed[w] == 2 || continue
+        g_w = map === nothing ? 1 : map.gauge[w]
+        c_lo, c_hi = _enclose(direction * (g_u * g_w) * _spin_coupling(ws, q))
+        if w == v
+            q_uv = q
+            j_uv_lo, j_uv_hi = c_lo, c_hi
+        else
+            m = max(abs(c_lo), abs(c_hi))
+            rad_hi = nextfloat(rad_hi + m)
+        end
+    end
+    J_uv_mapped = direction * (g_u * g_v) * _spin_coupling(ws, q_uv)
+    σ = sign !== nothing ? Int(sign) : (J_uv_mapped <= 0 ? 1 : -1)
+    orig_σ = g_u * g_v * σ
+    center_lo, center_hi = σ == 1 ? (-j_uv_hi, -j_uv_lo) : (j_uv_lo, j_uv_hi)
+    lo = prevfloat(center_lo - rad_hi)
+    hi = nextfloat(center_hi + rad_hi)
+    _expired(deadline_ns) && return (nothing, :deadline, :interval, visits, 0, 0)
+    if isfinite(lo) && isfinite(hi) && lo > 0
+        c_val = _mapped_constant(ws, map)
+        step = RelationStep(u, v, σ, orig_σ, _Exact(lo), _Exact(hi), deepcopy(c_val),
+                            predecessors, :interval, scope_length, :strong)
+        return (step, :proved, :interval, visits, 0, 0)
+    end
+    degree <= max_work - visits || return (nothing, :work_limit, :interval, visits, 0, 0)
+    degree < max_exact_work || return (nothing, :verification_limit, :interval, visits, 0, 0)
+    rad_exact = abs(h_u)
+    center_exact = _Exact(0)
+    exact_work = 1
+    for (w, q) in st.adjacency[u]
+        _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, 1, exact_work)
+        visits += 1
+        st.fixed[w] == 2 || continue
+        g_w = map === nothing ? 1 : map.gauge[w]
+        J_uw = direction * (g_u * g_w) * _spin_coupling(ws, q)
+        if w == v
+            center_exact = -σ * J_uw
+        else
+            rad_exact += abs(J_uw)
+        end
+        exact_work += 1
+    end
+    _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, 1, exact_work)
+    lower = center_exact - rad_exact
+    upper = center_exact + rad_exact
+    if lower > 0 || (allow_weak && lower >= 0)
+        c_val = _mapped_constant(ws, map)
+        pers = lower > 0 ? :strong : :weak
+        step = RelationStep(u, v, σ, orig_σ, deepcopy(lower), deepcopy(upper), deepcopy(c_val),
+                            predecessors, :exact, scope_length, pers)
+        return (step, :proved, :exact, visits, 1, exact_work)
+    end
+    return (nothing, :not_strict, :exact, visits, 1, exact_work)
+end
+
+function _elimination_witness(ws::Workspace, u::Int;
+                              map::Union{Nothing,DomainGaugeMap}=nothing,
+                              tie_break::Symbol=:low,
+                              max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing,
+                              predecessors=0, scope_length=-1)
+    _limits(max_work, deadline_ns)
+    _limits(max_exact_work, deadline_ns)
+    map === nothing || _validate_domain_map(ws, map)
+    tie_break in (:low, :high) || throw(ArgumentError("tie_break must be :low or :high"))
+    st, s = ws._state, ws._snapshot
+    st.fixed[u] == 2 || return (nothing, :already_fixed, :none, 0, 0)
+    direction = _direction(s)
+    direction != 0 || return (nothing, :zero_scale, :none, 0, 0)
+    adj_len = length(st.adjacency[u])
+    adj_len <= max_work || return (nothing, :work_limit, :none, 0, 0)
+    _expired(deadline_ns) && return (nothing, :deadline, :none, 0, 0)
+    visits = 0
+    free_edges = Pair{Int,_Exact}[]
+    for (w, q) in st.adjacency[u]
+        _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, 0)
+        visits += 1
+        if st.fixed[w] == 2 && !iszero(q)
+            push!(free_edges, w => q)
+        end
+    end
+    sort!(free_edges; by=first)
+    d = length(free_edges)
+    d <= 3 || return (nothing, :degree_too_high, :exact, visits, 0)
+    num_states = 1 << d
+    num_states <= max_exact_work || return (nothing, :verification_limit, :exact, visits, 0)
+    is_bool = s.domain === QT.BoolDomain
+    low_orig = is_bool ? 0 : -1
+    tie_orig = if map === nothing
+        tie_break === :low ? low_orig : 1
+    else
+        low_t = map.target_domain === :bool ? 0 : -1
+        _lift_index_value(map, u, tie_break === :low ? low_t : 1)
+    end
+    neighbors = Tuple(p.first for p in free_edges)
+    couplings = Tuple(p.second for p in free_edges)
+    f_u = st.fields[u]
+    phi = Vector{_Exact}(undef, num_states)
+    tbl = Vector{Int}(undef, num_states)
+    unique_argmin = true
+    exact_work = 0
+    for idx in 1:num_states
+        _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, exact_work)
+        exact_work += 1
+        L_u = f_u
+        for b in 1:d
+            z_b = (((idx - 1) >> (b - 1)) & 1) == 1 ? 1 : low_orig
+            L_u += couplings[b] * z_b
+        end
+        dir_L = direction * L_u
+        if dir_L > 0
+            tbl[idx] = low_orig
+            phi[idx] = L_u * low_orig
+        elseif dir_L < 0
+            tbl[idx] = 1
+            phi[idx] = L_u
+        else
+            unique_argmin = false
+            tbl[idx] = tie_orig
+            phi[idx] = _Exact(0)
+        end
+    end
+    if d == 3
+        alpha_123 = phi[8] - phi[4] - phi[6] - phi[7] + phi[2] + phi[3] + phi[5] - phi[1]
+        iszero(alpha_123) || return (nothing, :nonquadratic_elimination, :exact, visits, exact_work)
+    end
+    alpha_0 = phi[1]
+    alpha_lin = Vector{_Exact}(undef, d)
+    for a in 1:d
+        alpha_lin[a] = phi[1 + (1 << (a - 1))] - phi[1]
+    end
+    alpha_quad = fill(_Exact(0), d, d)
+    for a in 1:d, b in (a + 1):d
+        q_ab = phi[1 + (1 << (a - 1)) + (1 << (b - 1))] - phi[1 + (1 << (a - 1))] - phi[1 + (1 << (b - 1))] + phi[1]
+        alpha_quad[a, b] = q_ab
+        alpha_quad[b, a] = q_ab
+    end
+    if is_bool
+        const_delta = alpha_0
+        lin_deltas = Pair{Int,_Exact}[
+            neighbors[a] => deepcopy(alpha_lin[a]) for a in 1:d if !iszero(alpha_lin[a])
+        ]
+        quad_deltas = Tuple{Int,Int,_Exact}[
+            (neighbors[a], neighbors[b], deepcopy(alpha_quad[a, b]))
+            for a in 1:d for b in (a + 1):d if !iszero(alpha_quad[a, b])
+        ]
+    else
+        const_delta = alpha_0 + sum(alpha_lin; init=_Exact(0)) // 2 +
+                      sum((alpha_quad[a, b] for a in 1:d for b in (a + 1):d); init=_Exact(0)) // 4
+        lin_deltas = Pair{Int,_Exact}[]
+        for a in 1:d
+            df = alpha_lin[a] // 2 + sum((alpha_quad[a, b] for b in 1:d if b != a); init=_Exact(0)) // 4
+            !iszero(df) && push!(lin_deltas, neighbors[a] => deepcopy(df))
+        end
+        quad_deltas = Tuple{Int,Int,_Exact}[
+            (neighbors[a], neighbors[b], deepcopy(alpha_quad[a, b] // 4))
+            for a in 1:d for b in (a + 1):d if !iszero(alpha_quad[a, b])
+        ]
+    end
+    _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, exact_work)
+    c_val = _mapped_constant(ws, map)
+    step = EliminationStep(
+        u,
+        neighbors,
+        Tuple(tbl),
+        deepcopy(const_delta),
+        Tuple(lin_deltas),
+        Tuple(quad_deltas),
+        deepcopy(c_val),
+        predecessors,
+        scope_length,
+        unique_argmin,
+    )
+    return (step, :proved, :exact, visits, exact_work)
 end
 
 function _convert_step_bounds(s::_Snapshot, step::DominanceStep,
@@ -203,154 +720,409 @@ function _convert_step_bounds(s::_Snapshot, step::DominanceStep,
     return deepcopy(new_lo), deepcopy(new_hi)
 end
 
-function _root_spin_polynomial(s::_Snapshot, adjacency::Vector{Vector{Pair{Int,_Exact}}})
+mutable struct _PolyState
+    n::Int
+    domain::QT.Domain
+    sense::QT.Sense
+    scale::Float64
+    active::BitVector
+    fields::Vector{_Exact}
+    adj::Vector{Vector{Pair{Int,_Exact}}}
+    constant::_Exact
+end
+
+function _init_poly_state(s::_Snapshot; deadline=nothing)
     n = length(s.labels)
-    src_fields = fill(_Exact(0), n)
+    fields = fill(_Exact(0), n)
+    adj = [Pair{Int,_Exact}[] for _ in 1:n]
     f = QT.Form{Float64}(n, _thaw(s.linear), _thaw(s.quadratic), s.scale, s.offset;
                          sense=s.sense, domain=s.domain)
     for (i, v) in QT.linear_terms(f)
-        src_fields[i] = _Exact(v)
+        _expired(deadline) && return nothing
+        fields[i] = _Exact(v)
     end
-    if s.domain === QT.SpinDomain
-        return src_fields, _Exact(s.offset)
+    for ((i, j), v) in QT.quadratic_terms(f)
+        _expired(deadline) && return nothing
+        iszero(v) && continue
+        q = _Exact(v)
+        push!(adj[i], j => q)
+        push!(adj[j], i => q)
     end
-    spin_fields = Vector{_Exact}(undef, n)
-    quad_sum = _Exact(0)
-    for i in 1:n
-        csum = _Exact(0)
-        for (j, q) in adjacency[i]
-            csum += q
-            i < j && (quad_sum += q)
-        end
-        spin_fields[i] = src_fields[i] // 2 + csum // 4
-    end
-    spin_const = _Exact(s.offset) + sum(src_fields; init=_Exact(0)) // 2 + quad_sum // 4
-    return spin_fields, spin_const
+    return _PolyState(n, s.domain, s.sense, s.scale, trues(n), fields, adj, _Exact(s.offset))
 end
 
-function _root_target_polynomial(ws::Workspace, to_map::Union{Nothing,DomainGaugeMap})
-    s, st = ws._snapshot, ws._state
-    n = length(s.labels)
-    spin_fields, spin_const = _root_spin_polynomial(s, st.adjacency)
-    target_dom = to_map === nothing ? _domain_symbol(s.domain) : to_map.target_domain
-    if target_dom === :spin
-        if to_map === nothing || to_map._identity_gauge
-            return spin_fields, spin_const
+_direction_poly(p::_PolyState) = iszero(p.scale) ? 0 :
+    (p.sense === QT.Min ? 1 : -1) * (signbit(p.scale) ? -1 : 1)
+
+function _poly_fix!(p::_PolyState, i::Int, v::Int)
+    p.constant += p.fields[i] * v
+    for (j, q) in p.adj[i]
+        p.active[j] || continue
+        p.fields[j] += q * v
+    end
+    p.active[i] = false
+    return nothing
+end
+
+function _poly_apply_deltas!(p::_PolyState, u::Int, const_delta::_Exact, field_deltas, quad_deltas)
+    p.constant += const_delta
+    for (w, df) in field_deltas
+        iszero(df) && continue
+        p.fields[w] += df
+    end
+    merged_q = Dict{Tuple{Int,Int},_Exact}()
+    for (a, b, dq) in quad_deltas
+        iszero(dq) && continue
+        j, k = min(a, b), max(a, b)
+        merged_q[(j, k)] = get(merged_q, (j, k), _Exact(0)) + dq
+    end
+    for ((j, k), dq) in merged_q
+        iszero(dq) && continue
+        for (a, b) in ((j, k), (k, j))
+            pos = findfirst(pair -> pair.first == b, p.adj[a])
+            if pos === nothing
+                push!(p.adj[a], b => dq)
+            else
+                q_new = p.adj[a][pos].second + dq
+                if iszero(q_new)
+                    deleteat!(p.adj[a], pos)
+                else
+                    p.adj[a][pos] = b => q_new
+                end
+            end
         end
-        g = to_map.gauge
-        target_fields = Vector{_Exact}(undef, n)
+    end
+    p.active[u] = false
+    return nothing
+end
+
+function _poly_relation_deltas(p::_PolyState, u::Int, v::Int, orig_σ::Int)
+    f_u = p.fields[u]
+    q_uv = _Exact(0)
+    other_edges = Pair{Int,_Exact}[]
+    for (w, q) in p.adj[u]
+        p.active[w] || continue
+        if w == v
+            q_uv = q
+        else
+            push!(other_edges, w => q)
+        end
+    end
+    if p.domain === QT.SpinDomain
+        const_delta = orig_σ * q_uv
+        field_deltas = Pair{Int,_Exact}[v => orig_σ * f_u]
+        quad_deltas = Tuple{Int,Int,_Exact}[
+            (min(v, w), max(v, w), orig_σ * q) for (w, q) in other_edges
+        ]
+        return const_delta, field_deltas, quad_deltas
+    elseif orig_σ == 1
+        const_delta = _Exact(0)
+        field_deltas = Pair{Int,_Exact}[v => (f_u + q_uv)]
+        quad_deltas = Tuple{Int,Int,_Exact}[
+            (min(v, w), max(v, w), q) for (w, q) in other_edges
+        ]
+        return const_delta, field_deltas, quad_deltas
+    else
+        const_delta = f_u
+        field_deltas = Pair{Int,_Exact}[v => -f_u]
+        for (w, q) in other_edges
+            push!(field_deltas, w => q)
+        end
+        quad_deltas = Tuple{Int,Int,_Exact}[
+            (min(v, w), max(v, w), -q) for (w, q) in other_edges
+        ]
+        return const_delta, field_deltas, quad_deltas
+    end
+end
+
+function _poly_gauged_spin(p::_PolyState, g::Tuple{Vararg{Int}})
+    n = p.n
+    h_spin = fill(_Exact(0), n)
+    c_spin = p.constant
+    free_couplings = Tuple{Int,Int,_Exact}[]
+    for i in 1:n
+        p.active[i] || continue
+        for (j, q) in p.adj[i]
+            (p.active[j] && i < j && !iszero(q)) || continue
+            push!(free_couplings, (i, j, q))
+        end
+    end
+    if p.domain === QT.BoolDomain
         for i in 1:n
-            target_fields[i] = g[i] * spin_fields[i]
+            p.active[i] || continue
+            h_spin[i] = p.fields[i] // 2
+            c_spin += p.fields[i] // 2
         end
-        return target_fields, spin_const
-    end
-    target_fields = Vector{_Exact}(undef, n)
-    target_const = spin_const
-    for i in 1:n
-        g_i = to_map === nothing ? 1 : to_map.gauge[i]
-        h_g = g_i * spin_fields[i]
-        target_fields[i] = 2 * h_g
-        target_const -= h_g
-    end
-    for i in 1:n
-        g_i = to_map === nothing ? 1 : to_map.gauge[i]
-        for (j, q) in st.adjacency[i]
-            i < j || continue
-            g_j = to_map === nothing ? 1 : to_map.gauge[j]
-            J_g = (g_i * g_j) * _spin_coupling(ws, q)
-            target_fields[i] -= 2 * J_g
-            target_fields[j] -= 2 * J_g
-            target_const += J_g
+        for (i, j, b_ij) in free_couplings
+            J_ij = b_ij // 4
+            h_spin[i] += J_ij
+            h_spin[j] += J_ij
+            c_spin += J_ij
+        end
+    else
+        for i in 1:n
+            p.active[i] || continue
+            h_spin[i] = p.fields[i]
         end
     end
-    return target_fields, target_const
+    h_gauged = fill(_Exact(0), n)
+    for i in 1:n
+        p.active[i] || continue
+        h_gauged[i] = g[i] * h_spin[i]
+    end
+    J_gauged = Tuple{Int,Int,_Exact}[
+        (i, j, g[i] * g[j] * (p.domain === QT.BoolDomain ? (q // 4) : q))
+        for (i, j, q) in free_couplings
+    ]
+    return h_gauged, J_gauged, c_spin
+end
+
+function _poly_mapped_constant(p::_PolyState, active_map::Union{Nothing,DomainGaugeMap})
+    active_map === nothing && return p.constant
+    h_gauged, J_gauged, c_spin = _poly_gauged_spin(p, active_map.gauge)
+    active_map.target_domain === :spin && return c_spin
+    constant = c_spin
+    for i in 1:p.n
+        p.active[i] || continue
+        constant -= h_gauged[i]
+    end
+    for (_, _, J_ij) in J_gauged
+        constant += J_ij
+    end
+    return constant
+end
+
+function _poly_marginal_diff(p::_PolyState, i::Int, active_map::Union{Nothing,DomainGaugeMap}, deadline=nothing)
+    comp = Int[i]
+    head = 1
+    while head <= length(comp)
+        u = comp[head]
+        head += 1
+        for (w, q) in p.adj[u]
+            _expired(deadline) && return (false, :deadline, Int[], _Exact(0))
+            (p.active[w] && !iszero(q)) || continue
+            if !(w in comp)
+                length(comp) < _MAX_MARGINAL_COMPONENT || return (false, :invalid_bound, comp, _Exact(0))
+                push!(comp, w)
+            end
+        end
+    end
+    others = sort!(comp[2:end])
+    d_c = length(others)
+    all_nodes = vcat(i, others)
+    sub_edges = Tuple{Int,Int,_Exact}[]
+    for a in 1:length(all_nodes)
+        u = all_nodes[a]
+        for (w, q) in p.adj[u]
+            (p.active[w] && u < w && !iszero(q)) || continue
+            b = findfirst(==(w), all_nodes)
+            b !== nothing && push!(sub_edges, (a, b, q))
+        end
+    end
+    direction = _direction_poly(p)
+    low_orig = p.domain === QT.BoolDomain ? 0 : -1
+    best_orig = Dict{Int,_Exact}()
+    vals = Vector{Int}(undef, length(all_nodes))
+    for x_i in (low_orig, 1)
+        vals[1] = x_i
+        best_val = _Exact(0)
+        has_best = false
+        for mask in 0:((1 << d_c) - 1)
+            _expired(deadline) && return (false, :deadline, comp, _Exact(0))
+            for b in 1:d_c
+                vals[b + 1] = ((mask >> (b - 1)) & 1) == 1 ? 1 : low_orig
+            end
+            e = _Exact(0)
+            for a in 1:length(all_nodes)
+                e += p.fields[all_nodes[a]] * vals[a]
+            end
+            for (a, b, q) in sub_edges
+                e += q * vals[a] * vals[b]
+            end
+            de = direction * e
+            if !has_best || de < best_val
+                best_val = de
+                has_best = true
+            end
+        end
+        best_orig[x_i] = best_val
+    end
+    target_dom = active_map === nothing ? p.domain : _qt_domain(active_map.target_domain)
+    low_target = target_dom === QT.BoolDomain ? 0 : -1
+    orig_at_low = active_map === nothing ? low_orig : _lift_index_value(active_map, i, low_target)
+    orig_at_high = active_map === nothing ? 1 : _lift_index_value(active_map, i, 1)
+    return (true, :verified, comp, best_orig[orig_at_high] - best_orig[orig_at_low])
+end
+
+function _transport_one_step(
+    s::_Snapshot,
+    p::_PolyState,
+    step::_ProofRecord,
+    from_map::Union{Nothing,DomainGaugeMap},
+    to_map::Union{Nothing,DomainGaugeMap};
+    already_in_target::Bool=false,
+)
+    c_to = _poly_mapped_constant(p, to_map)
+    if step isa DominanceStep
+        if already_in_target
+            new_lo, new_hi = step.lower, step.upper
+        elseif step.method === :marginal
+            _, _, _, delta_marg = _poly_marginal_diff(p, step.variable, to_map)
+            new_lo, new_hi = deepcopy(delta_marg), deepcopy(delta_marg)
+        else
+            new_lo, new_hi = _convert_step_bounds(s, step, from_map, to_map)
+        end
+        out = DominanceStep(
+            step.variable, step.value, new_lo, new_hi, deepcopy(c_to),
+            step.predecessors, step.method, step.scope_length, step.persistency,
+        )
+        _poly_fix!(p, step.variable, step.value)
+        return out
+    elseif step isa RelationStep
+        new_sign = already_in_target ? step.sign : (to_map === nothing ? step.orig_sign :
+            (to_map.gauge[step.eliminated] * to_map.gauge[step.representative] * step.orig_sign))
+        out = RelationStep(
+            step.eliminated, step.representative, new_sign, step.orig_sign,
+            deepcopy(step.lower), deepcopy(step.upper), deepcopy(c_to),
+            step.predecessors, step.method, step.scope_length, step.persistency,
+        )
+        cd, fd, qd = _poly_relation_deltas(p, step.eliminated, step.representative, step.orig_sign)
+        _poly_apply_deltas!(p, step.eliminated, cd, fd, qd)
+        return out
+    else
+        estep = step::EliminationStep
+        out = EliminationStep(
+            estep.variable, estep.neighbors, estep.table,
+            deepcopy(estep.constant_delta), deepcopy(estep.linear_deltas), deepcopy(estep.quadratic_deltas),
+            deepcopy(c_to), estep.predecessors, estep.scope_length, estep.unique_argmin,
+        )
+        _poly_apply_deltas!(p, estep.variable, estep.constant_delta, estep.linear_deltas, estep.quadratic_deltas)
+        return out
+    end
 end
 
 function _transport_steps(ws::Workspace, assumptions::Tuple, steps::Tuple,
                           from_map::Union{Nothing,DomainGaugeMap},
                           to_map::Union{Nothing,DomainGaugeMap};
-                          tail_step::Union{Nothing,DominanceStep}=nothing)
+                          tail_step::Union{Nothing,_ProofRecord}=nothing)
     (isempty(steps) && tail_step === nothing) && return ()
-    s, st = ws._snapshot, ws._state
-    target_fields, target_const = _root_target_polynomial(ws, to_map)
-    fixed = falses(length(s.labels))
-    function apply_fix!(idx::Int, val::Int)
-        u_val = to_map === nothing ? val : _map_index_value(to_map, idx, val)
-        if u_val != 0
-            target_const += target_fields[idx] * u_val
-            for (nbr, q) in st.adjacency[idx]
-                fixed[nbr] && continue
-                target_fields[nbr] += _mapped_coupling(ws, idx, nbr, q, to_map) * u_val
-            end
-        end
-        fixed[idx] = true
-    end
+    s = ws._snapshot
+    p = _init_poly_state(s)
     introduced = 0
     total_len = length(steps) + (tail_step === nothing ? 0 : 1)
-    out = Vector{DominanceStep}(undef, total_len)
+    out = Vector{_ProofRecord}(undef, total_len)
     for (k, step) in enumerate(steps)
         count = step.scope_length == -1 ? length(assumptions) : step.scope_length
-        for p in introduced+1:count
-            idx, val = assumptions[p]
-            apply_fix!(idx, val)
+        for pos in (introduced + 1):count
+            idx, val = assumptions[pos]
+            _poly_fix!(p, idx, val)
         end
         introduced = count
-        new_lo, new_hi = _convert_step_bounds(s, step, from_map, to_map)
-        out[k] = DominanceStep(step.variable, step.value, new_lo, new_hi, deepcopy(target_const),
-                               step.predecessors, step.method, step.scope_length)
-        apply_fix!(step.variable, step.value)
+        out[k] = _transport_one_step(s, p, step, from_map, to_map; already_in_target=false)
     end
     if tail_step !== nothing
         count = tail_step.scope_length == -1 ? length(assumptions) : tail_step.scope_length
-        for p in introduced+1:count
-            idx, val = assumptions[p]
-            apply_fix!(idx, val)
+        for pos in (introduced + 1):count
+            idx, val = assumptions[pos]
+            _poly_fix!(p, idx, val)
         end
-        out[total_len] = DominanceStep(tail_step.variable, tail_step.value,
-                                       tail_step.lower, tail_step.upper, deepcopy(target_const),
-                                       tail_step.predecessors, tail_step.method, tail_step.scope_length)
+        out[total_len] = _transport_one_step(s, p, tail_step, to_map, to_map; already_in_target=true)
     end
     return Tuple(out)
 end
 
+function _build_proof_certificate(ws::Workspace, step::_ProofRecord,
+                                  map::Union{Nothing,DomainGaugeMap}, deadline_ns)
+    source = deepcopy(ws._snapshot)
+    _validate_label_copy(ws._snapshot.labels, source.labels)
+    owned_map = map === nothing ? nothing : deepcopy(map)
+    raw_prefix = Tuple(deepcopy(ws._state.trail[p].proof) for p in ws._state.fixes
+                       if ws._state.trail[p].proof !== nothing)
+    steps = owned_map === nothing ? (raw_prefix..., step) :
+        _transport_steps(ws, _caller_scope(ws), raw_prefix, nothing, owned_map; tail_step=step)
+    _expired(deadline_ns) && return nothing
+    return DominanceCertificate(generation(ws), checkpoint(ws), _caller_scope(ws), steps, source, owned_map)
+end
+
 """
-    prove_dominance(ws, label; map=nothing, max_work=typemax(Int),
-                    max_exact_work=typemax(Int), deadline_ns=nothing)
+    prove_dominance(ws, label; map=nothing, allow_weak=false, value=nothing,
+                    max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing)
 
-Prove one strong strict-dominance restriction without changing the workspace,
-optionally operating in the coordinate system of `map::DomainGaugeMap`.
-Use signed derivative bounds under the current explicit caller assumptions,
-with conservative floating enclosures and budgeted exact fallback. Ties, zero
-scale, work/deadline exhaustion and unresolved signs yield no certificate.
-`edge_visits` includes both passes; fallback work/allocations remain explicit.
-
-The numeric check touches incident adjacency. Successful public proof export
-additionally copies O(n+m) source data and O(k) assumptions; it is an explicit
-verification/export boundary, not an inner-loop propagation API. No deduction
-is installed here. Select `rules=:dominance` and call `propagate!` to commit
-a bounded cascade using the workspace's exact caches.
+Prove one unary dominance restriction without changing the workspace, optionally
+operating in the coordinate system of `map::DomainGaugeMap` or allowing a weak
+optimum-preserving restriction (`allow_weak=true`). By default (`allow_weak=false`),
+only strong strict-dominance steps are proved.
 """
 function prove_dominance(ws::Workspace, label; map::Union{Nothing,DomainGaugeMap}=nothing,
+                         allow_weak::Bool=false, value=nothing,
                          max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing)
     map === nothing || _validate_domain_map(ws, map; full=true)
     i = _variable(ws,label)
     step, reason, method, visits, fallbacks, exact_work = _dominance_witness(ws,i;
-        map,max_work,max_exact_work,deadline_ns,predecessors=ws._state.proof_count,
+        map,allow_weak,value,max_work,max_exact_work,deadline_ns,predecessors=ws._state.proof_count,
         scope_length=length(ws._state.callers))
-    certificate = if step === nothing
-        nothing
-    else
-        source = deepcopy(ws._snapshot)
-        _validate_label_copy(ws._snapshot.labels,source.labels)
-        owned_map = map === nothing ? nothing : deepcopy(map)
-        raw_prefix = Tuple(deepcopy(ws._state.trail[p].proof) for p in ws._state.fixes
-                           if ws._state.trail[p].proof !== nothing)
-        steps = owned_map === nothing ? (raw_prefix..., step) :
-            _transport_steps(ws, _caller_scope(ws), raw_prefix, nothing, owned_map; tail_step=step)
-        _expired(deadline_ns) && return DominanceAttempt(nothing,:deadline,method,visits,fallbacks,exact_work)
-        DominanceCertificate(generation(ws),checkpoint(ws),_caller_scope(ws),steps,source,owned_map)
+    if step === nothing
+        return DominanceAttempt(nothing,reason,method,visits,fallbacks,exact_work)
     end
+    certificate = _build_proof_certificate(ws, step, map, deadline_ns)
+    certificate === nothing && return DominanceAttempt(nothing,:deadline,method,visits,fallbacks,exact_work)
     return DominanceAttempt(certificate,reason,method,visits,fallbacks,exact_work)
+end
+
+"""
+    prove_relation(ws, eliminated, representative; sign=nothing, map=nothing,
+                   allow_weak=false, max_work=typemax(Int), max_exact_work=typemax(Int),
+                   deadline_ns=nothing)
+
+Prove a signed pair relation ``t_{\\text{eliminated}} = \\sigma t_{\\text{representative}}``
+without mutating `ws`. When `sign` is omitted, the candidate sign opposing the
+effective coupling between `eliminated` and `representative` is tested.
+"""
+function prove_relation(ws::Workspace, eliminated, representative;
+                        sign::Union{Nothing,Int}=nothing,
+                        map::Union{Nothing,DomainGaugeMap}=nothing,
+                        allow_weak::Bool=false,
+                        max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing)
+    map === nothing || _validate_domain_map(ws, map; full=true)
+    u = _variable(ws, eliminated)
+    v = _variable(ws, representative)
+    step, reason, method, visits, fallbacks, exact_work = _relation_witness(
+        ws, u, v; sign, map, allow_weak, max_work, max_exact_work, deadline_ns,
+        predecessors=ws._state.proof_count, scope_length=length(ws._state.callers),
+    )
+    if step === nothing
+        return RelationAttempt(nothing, reason, method, visits, fallbacks, exact_work)
+    end
+    certificate = _build_proof_certificate(ws, step, map, deadline_ns)
+    certificate === nothing && return RelationAttempt(nothing, :deadline, method, visits, fallbacks, exact_work)
+    return RelationAttempt(certificate, reason, method, visits, fallbacks, exact_work)
+end
+
+"""
+    prove_elimination(ws, label; map=nothing, tie_break=:low,
+                      max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing)
+
+Prove an exact bounded-degree (`0 <= degree(ws, label) <= 3`) local variable
+elimination without mutating `ws`. Refuses variables with active degree `> 3`
+(`:degree_too_high`) or degree-3 variables whose exact marginal has a nonzero
+cubic interaction (`:nonquadratic_elimination`).
+"""
+function prove_elimination(ws::Workspace, label;
+                           map::Union{Nothing,DomainGaugeMap}=nothing,
+                           tie_break::Symbol=:low,
+                           max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing)
+    map === nothing || _validate_domain_map(ws, map; full=true)
+    u = _variable(ws, label)
+    step, reason, method, visits, exact_work = _elimination_witness(
+        ws, u; map, tie_break, max_work, max_exact_work, deadline_ns,
+        predecessors=ws._state.proof_count, scope_length=length(ws._state.callers),
+    )
+    if step === nothing
+        return EliminationAttempt(nothing, reason, method, visits, exact_work)
+    end
+    certificate = _build_proof_certificate(ws, step, map, deadline_ns)
+    certificate === nothing && return EliminationAttempt(nothing, :deadline, method, visits, exact_work)
+    return EliminationAttempt(certificate, reason, method, visits, exact_work)
 end
 
 """
@@ -358,9 +1130,9 @@ end
 
 Transport a valid [`DominanceCertificate`](@ref) for `ws` into the coordinate
 representation of `map` while preserving its `generation`, branch checkpoint,
-explicit caller `assumptions` and lifted original-domain deductions. Rejects
-stale generations, mismatched source/variable ordering, invalid gauges or
-stale branch scopes with `ArgumentError`.
+explicit caller `assumptions` and lifted original-domain deductions/reductions.
+Rejects stale generations, mismatched source/variable ordering, invalid gauges
+or stale branch scopes with `ArgumentError`.
 """
 function transport_certificate(ws::Workspace, cert::DominanceCertificate, map::DomainGaugeMap)
     _validate_domain_map(ws, map; full=true)
@@ -378,185 +1150,229 @@ function transport_certificate(ws::Workspace, cert::DominanceCertificate, map::D
     return DominanceCertificate(generation(ws), checkpoint(ws), cert.assumptions, steps, source, owned_map)
 end
 
-# Independent verifier: re-read the original represented polynomial on each
-# step and substitute a dictionary of explicit assumptions/validated prefix
-# deductions. Do not read cached boundary fields, adjacency, constant or queue,
-# and do not call the producer's bound or conditioning helper.
-function _verify_polynomial(s::_Snapshot, fixed, step::DominanceStep,
-                            active_map::Union{Nothing,DomainGaugeMap}, remaining, deadline)
-    n = length(s.labels)
-    1 <= step.variable <= n && !haskey(fixed,step.variable) || return (false,:invalid_step,0)
-    low = s.domain === QT.BoolDomain ? 0 : -1
-    step.value in (low,1) || return (false,:invalid_value,0)
-    step.method in (:interval,:exact) || return (false,:invalid_method,0)
-    direction = _direction(s)
-    direction != 0 || return (false,:zero_scale,0)
-    # Storage reconstruction and iteration are charged before allocating it.
-    cost = length(s.linear.values) + length(s.quadratic.values)
-    cost <= remaining || return (false,:work_limit,0)
-    _expired(deadline) && return (false,:deadline,0)
-    f = QT.Form{Float64}(n,_thaw(s.linear),_thaw(s.quadratic),s.scale,s.offset;
-                         sense=s.sense,domain=s.domain)
-    if active_map === nothing
-        lower,upper,constant = _Exact(0),_Exact(0),_Exact(s.offset)
-        visits = 0
-        for (i,v) in QT.linear_terms(f)
-            _expired(deadline) && return (false,:deadline,cost)
-            visits += 1
-            haskey(fixed,i) && (constant += _Exact(v)*fixed[i])
-            if i == step.variable
-                lower += direction*_Exact(v)
-                upper += direction*_Exact(v)
-            end
-        end
-        for ((i,j),v) in QT.quadratic_terms(f)
-            _expired(deadline) && return (false,:deadline,cost)
-            visits += 1
-            if haskey(fixed,i) && haskey(fixed,j)
-                constant += _Exact(v)*fixed[i]*fixed[j]
-            end
-            (i == step.variable || j == step.variable) || continue
-            other = i == step.variable ? j : i
-            coefficient = direction*_Exact(v)
-            if haskey(fixed,other)
-                lower += coefficient*fixed[other]
-                upper += coefficient*fixed[other]
-            elseif s.domain === QT.BoolDomain
-                lower += min(0,coefficient)
-                upper += max(0,coefficient)
-            else
-                lower -= abs(coefficient)
-                upper += abs(coefficient)
-            end
-        end
-        _expired(deadline) && return (false,:deadline,cost)
-        constant == step.constant || return (false,:invalid_constant,cost)
-        enclosure = step.method === :exact ? step.lower == lower && step.upper == upper :
-                                             step.lower <= lower <= upper <= step.upper
-        enclosure && _strict_value(step.lower,step.upper,s.domain) == step.value ||
-            return (false,:invalid_bound,cost)
-        return (true,:verified,cost)
-    end
-    # Independent domain/gauge polynomial verification from raw source storage:
-    # 1. Substitute fixed variables in original coordinates.
-    src_fields = fill(_Exact(0), n)
-    src_constant = _Exact(s.offset)
-    free_couplings = Tuple{Int,Int,_Exact}[]
-    for (i,v) in QT.linear_terms(f)
-        _expired(deadline) && return (false,:deadline,cost)
-        ev = _Exact(v)
-        if haskey(fixed,i)
-            src_constant += ev * fixed[i]
-        else
-            src_fields[i] += ev
-        end
-    end
-    for ((i,j),v) in QT.quadratic_terms(f)
-        _expired(deadline) && return (false,:deadline,cost)
-        ev = _Exact(v)
-        if haskey(fixed,i) && haskey(fixed,j)
-            src_constant += ev * fixed[i] * fixed[j]
-        elseif haskey(fixed,i)
-            src_fields[j] += ev * fixed[i]
-        elseif haskey(fixed,j)
-            src_fields[i] += ev * fixed[j]
-        elseif !iszero(ev)
-            push!(free_couplings, (min(i,j), max(i,j), ev))
-        end
-    end
-    # 2. Convert free polynomial to canonical spin: J_ij = b_ij/4, h_i = a_i/2 + sum_j b_ij/4,
-    #    c_spin = c_bool + sum_i a_i/2 + sum_{i<j} b_ij/4.
-    h_spin = fill(_Exact(0), n)
-    c_spin = src_constant
-    if s.domain === QT.BoolDomain
-        for i in 1:n
-            haskey(fixed,i) && continue
-            h_spin[i] = src_fields[i] // 2
-            c_spin += src_fields[i] // 2
-        end
-        for (i,j,b_ij) in free_couplings
-            J_ij = b_ij // 4
-            h_spin[i] += J_ij
-            h_spin[j] += J_ij
-            c_spin += J_ij
-        end
-    else
-        for i in 1:n
-            haskey(fixed,i) && continue
-            h_spin[i] = src_fields[i]
-        end
-    end
-    # 3. Apply spin gauge s_i = g_i * t_i: h'_i = g_i * h_i, J'_{ij} = g_i * g_j * J_ij.
-    g = active_map.gauge
-    h_gauged = fill(_Exact(0), n)
-    for i in 1:n
-        haskey(fixed,i) && continue
-        h_gauged[i] = g[i] * h_spin[i]
-    end
-    J_gauged = Tuple{Int,Int,_Exact}[
-        (i, j, g[i] * g[j] * (s.domain === QT.BoolDomain ? (q // 4) : q))
-        for (i, j, q) in free_couplings
-    ]
+function _verify_dominance_step(
+    p::_PolyState,
+    step::DominanceStep,
+    active_map::Union{Nothing,DomainGaugeMap},
+    later_assumptions,
+    cost::Int,
+    deadline,
+)
     u = step.variable
-    if active_map.target_domain === :spin
-        constant = c_spin
-        lower = direction * h_gauged[u]
+    1 <= u <= p.n && p.active[u] || return (false, :invalid_step, 0)
+    low_orig = p.domain === QT.BoolDomain ? 0 : -1
+    step.value in (low_orig, 1) || return (false, :invalid_value, 0)
+    step.method in (:interval, :exact, :marginal) && step.persistency in (:strong, :weak) ||
+        return (false, :invalid_method, 0)
+    direction = _direction_poly(p)
+    direction != 0 || return (false, :zero_scale, 0)
+    c_expected = _poly_mapped_constant(p, active_map)
+    _expired(deadline) && return (false, :deadline, cost)
+    c_expected == step.constant || return (false, :invalid_constant, cost)
+    target_dom = active_map === nothing ? p.domain : _qt_domain(active_map.target_domain)
+    low_target = target_dom === QT.BoolDomain ? 0 : -1
+    mapped_val = active_map === nothing ? step.value : _map_index_value(active_map, u, step.value)
+    if step.method === :marginal
+        ok, m_reason, comp, delta_marg = _poly_marginal_diff(p, u, active_map, deadline)
+        ok || return (false, m_reason, cost)
+        all(a -> !(a.first in comp), later_assumptions) || return (false, :invalid_scope, cost)
+        step.lower == delta_marg && step.upper == delta_marg || return (false, :invalid_bound, cost)
+        val_ok = if step.persistency === :strong
+            mapped_val == low_target ? (delta_marg > 0) : (delta_marg < 0)
+        else
+            mapped_val == low_target ? (delta_marg >= 0) : (delta_marg <= 0)
+        end
+        val_ok || return (false, :invalid_bound, cost)
+        _poly_fix!(p, u, step.value)
+        return (true, :verified, cost)
+    end
+    if active_map === nothing
+        lower = direction * p.fields[u]
         upper = lower
-        for (i, j, J_ij) in J_gauged
-            (i == u || j == u) || continue
-            c = abs(direction * J_ij)
-            lower -= c
-            upper += c
+        for (nbr, q) in p.adj[u]
+            _expired(deadline) && return (false, :deadline, cost)
+            p.active[nbr] || continue
+            coeff = direction * q
+            if p.domain === QT.BoolDomain
+                lower += min(0, coeff)
+                upper += max(0, coeff)
+            else
+                lower -= abs(coeff)
+                upper += abs(coeff)
+            end
         end
     else
-        # 4. Inverse spin -> bool on gauged spins t_i = 2*u_i - 1:
-        #    b'_{ij} = 4*J'_{ij}, a'_i = 2*h'_i - 2*sum_j J'_{ij},
-        #    c_bool = c_spin - sum_i h'_i + sum_{i<j} J'_{ij}.
-        a_bool = fill(_Exact(0), n)
-        constant = c_spin
-        for i in 1:n
-            haskey(fixed,i) && continue
-            a_bool[i] = 2 * h_gauged[i]
-            constant -= h_gauged[i]
-        end
-        for (i, j, J_ij) in J_gauged
-            a_bool[i] -= 2 * J_ij
-            a_bool[j] -= 2 * J_ij
-            constant += J_ij
-        end
-        lower = direction * a_bool[u]
-        upper = lower
-        for (i, j, J_ij) in J_gauged
-            (i == u || j == u) || continue
-            b_ij = direction * (4 * J_ij)
-            lower += min(0, b_ij)
-            upper += max(0, b_ij)
+        h_gauged, J_gauged, _ = _poly_gauged_spin(p, active_map.gauge)
+        if active_map.target_domain === :spin
+            lower = direction * h_gauged[u]
+            upper = lower
+            for (i, j, J_ij) in J_gauged
+                (i == u || j == u) || continue
+                c = abs(direction * J_ij)
+                lower -= c
+                upper += c
+            end
+        else
+            a_bool = 2 * h_gauged[u]
+            for (i, j, J_ij) in J_gauged
+                (i == u || j == u) && (a_bool -= 2 * J_ij)
+            end
+            lower = direction * a_bool
+            upper = lower
+            for (i, j, J_ij) in J_gauged
+                (i == u || j == u) || continue
+                b_ij = direction * (4 * J_ij)
+                lower += min(0, b_ij)
+                upper += max(0, b_ij)
+            end
         end
     end
-    _expired(deadline) && return (false,:deadline,cost)
-    constant == step.constant || return (false,:invalid_constant,cost)
-    enclosure = step.method === :exact ? step.lower == lower && step.upper == upper :
-                                         step.lower <= lower <= upper <= step.upper
-    target_dom = _qt_domain(active_map.target_domain)
-    mapped_val = _strict_value(step.lower, step.upper, target_dom)
-    enclosure && mapped_val !== nothing && _lift_index_value(active_map, u, mapped_val) == step.value ||
-        return (false,:invalid_bound,cost)
-    return (true,:verified,cost)
+    _expired(deadline) && return (false, :deadline, cost)
+    enclosure = step.method === :exact ? (step.lower == lower && step.upper == upper) :
+                                         (step.lower <= lower <= upper <= step.upper)
+    if step.persistency === :strong
+        s_val = _strict_value(step.lower, step.upper, target_dom)
+        lifted = s_val === nothing ? nothing : (active_map === nothing ? s_val : _lift_index_value(active_map, u, s_val))
+        enclosure && lifted == step.value || return (false, :invalid_bound, cost)
+    else
+        weak_ok = mapped_val == low_target ? (step.lower >= 0) : (step.upper <= 0)
+        enclosure && weak_ok || return (false, :invalid_bound, cost)
+    end
+    _poly_fix!(p, u, step.value)
+    return (true, :verified, cost)
+end
+
+function _verify_relation_step(
+    p::_PolyState,
+    step::RelationStep,
+    active_map::Union{Nothing,DomainGaugeMap},
+    cost::Int,
+    deadline,
+)
+    u, v = step.eliminated, step.representative
+    1 <= u <= p.n && 1 <= v <= p.n && u != v && p.active[u] && p.active[v] ||
+        return (false, :invalid_step, 0)
+    step.sign in (-1, 1) && step.orig_sign in (-1, 1) || return (false, :invalid_value, 0)
+    expected_sign = active_map === nothing ? step.orig_sign :
+        (active_map.gauge[u] * active_map.gauge[v] * step.orig_sign)
+    step.sign == expected_sign || return (false, :invalid_value, 0)
+    step.method in (:interval, :exact) && step.persistency in (:strong, :weak) ||
+        return (false, :invalid_method, 0)
+    direction = _direction_poly(p)
+    direction != 0 || return (false, :zero_scale, 0)
+    c_expected = _poly_mapped_constant(p, active_map)
+    _expired(deadline) && return (false, :deadline, cost)
+    c_expected == step.constant || return (false, :invalid_constant, cost)
+    g = active_map === nothing ? ntuple(_ -> 1, p.n) : active_map.gauge
+    h_gauged, J_gauged, _ = _poly_gauged_spin(p, g)
+    rad = abs(direction * h_gauged[u])
+    center = _Exact(0)
+    for (i, j, J_ij) in J_gauged
+        (i == u || j == u) || continue
+        other = i == u ? j : i
+        if other == v
+            center = -step.sign * (direction * J_ij)
+        else
+            rad += abs(direction * J_ij)
+        end
+    end
+    lower = center - rad
+    upper = center + rad
+    _expired(deadline) && return (false, :deadline, cost)
+    enclosure = step.method === :exact ? (step.lower == lower && step.upper == upper) :
+                                         (step.lower <= lower <= upper <= step.upper)
+    bound_ok = step.persistency === :strong ? (step.lower > 0) : (step.lower >= 0)
+    enclosure && bound_ok || return (false, :invalid_bound, cost)
+    cd, fd, qd = _poly_relation_deltas(p, u, v, step.orig_sign)
+    _poly_apply_deltas!(p, u, cd, fd, qd)
+    return (true, :verified, cost)
+end
+
+function _verify_elimination_step(
+    p::_PolyState,
+    step::EliminationStep,
+    active_map::Union{Nothing,DomainGaugeMap},
+    cost::Int,
+    deadline,
+)
+    u = step.variable
+    1 <= u <= p.n && p.active[u] || return (false, :invalid_step, 0)
+    d = length(step.neighbors)
+    0 <= d <= 3 || return (false, :invalid_step, 0)
+    for idx in 1:d
+        nbr = step.neighbors[idx]
+        1 <= nbr <= p.n && nbr != u && p.active[nbr] || return (false, :invalid_step, 0)
+        idx > 1 && step.neighbors[idx - 1] >= nbr && return (false, :invalid_step, 0)
+    end
+    for (w, q) in p.adj[u]
+        (p.active[w] && !iszero(q)) || continue
+        w in step.neighbors || return (false, :invalid_step, 0)
+    end
+    num_states = 1 << d
+    low_orig = p.domain === QT.BoolDomain ? 0 : -1
+    length(step.table) == num_states && all(v -> v in (low_orig, 1), step.table) ||
+        return (false, :invalid_value, 0)
+    seen_lin = Set{Int}()
+    for (w, _) in step.linear_deltas
+        (w in step.neighbors && !(w in seen_lin)) || return (false, :invalid_step, 0)
+        push!(seen_lin, w)
+    end
+    seen_quad = Set{Tuple{Int,Int}}()
+    for (a, b, _) in step.quadratic_deltas
+        (a < b && (a in step.neighbors) && (b in step.neighbors) && !((a, b) in seen_quad)) ||
+            return (false, :invalid_step, 0)
+        push!(seen_quad, (a, b))
+    end
+    direction = _direction_poly(p)
+    direction != 0 || return (false, :zero_scale, 0)
+    c_expected = _poly_mapped_constant(p, active_map)
+    _expired(deadline) && return (false, :deadline, cost)
+    c_expected == step.constant || return (false, :invalid_constant, cost)
+    couplings = Vector{_Exact}(undef, d)
+    for b in 1:d
+        nbr = step.neighbors[b]
+        pos = findfirst(pair -> pair.first == nbr, p.adj[u])
+        couplings[b] = pos === nothing ? _Exact(0) : p.adj[u][pos].second
+    end
+    f_u = p.fields[u]
+    all_strict = true
+    z_map = Dict{Int,Int}()
+    for idx in 1:num_states
+        _expired(deadline) && return (false, :deadline, cost)
+        L_u = f_u
+        for b in 1:d
+            z_b = (((idx - 1) >> (b - 1)) & 1) == 1 ? 1 : low_orig
+            z_map[step.neighbors[b]] = z_b
+            L_u += couplings[b] * z_b
+        end
+        iszero(L_u) && (all_strict = false)
+        chosen = step.table[idx]
+        phi_chosen = L_u * chosen
+        (direction * phi_chosen <= direction * (L_u * low_orig) &&
+         direction * phi_chosen <= direction * L_u) ||
+            return (false, :invalid_bound, cost)
+        delta_val = step.constant_delta
+        for (w, df) in step.linear_deltas
+            delta_val += df * z_map[w]
+        end
+        for (a, b, dq) in step.quadratic_deltas
+            delta_val += dq * z_map[a] * z_map[b]
+        end
+        delta_val == phi_chosen || return (false, :invalid_bound, cost)
+    end
+    step.unique_argmin == all_strict || return (false, :invalid_bound, cost)
+    _poly_apply_deltas!(p, u, step.constant_delta, step.linear_deltas, step.quadratic_deltas)
+    return (true, :verified, cost)
 end
 
 """
     verify_certificate(ws, certificate; map=nothing, max_work=typemax(Int), deadline_ns=nothing)
 
 Independently recheck source identity, current caller scope, optional
-[`DomainGaugeMap`](@ref) provenance and the complete ordered strong-dominance
-chain using exact original-coefficient substitution and domain/gauge conversion.
+[`DomainGaugeMap`](@ref) provenance and the complete ordered reduction chain
+([`DominanceStep`](@ref), [`RelationStep`](@ref), [`EliminationStep`](@ref))
+using exact original-coefficient evolution and domain/gauge conversion.
 Never trust cached workspace fields or an authenticated identifier alone.
-Undoing/changing assumptions, changing gauge/domain or resetting the model
-invalidates applicability. Source/label validation costs O(n+m); each step scans
-source storage, so this explicit verifier can cost O(steps*(n+m)). Dense storage
-costs O(n²) per scan. Work is reserved before scans; exhausted work/deadline
-yields `valid=false`. This does not validate a solver optimum or certify a
-rounded residual export.
 """
 function verify_certificate(ws::Workspace, cert::DominanceCertificate;
                             map::Union{Nothing,DomainGaugeMap}=nothing,
@@ -589,9 +1405,6 @@ function verify_certificate(ws::Workspace, cert::DominanceCertificate;
     end
     active_map = cert._map !== nothing ? cert._map : map
     cert.assumptions == _caller_scope(ws) || return VerificationResult(false,:stale_scope,cost)
-    # A valid ancestor alone cannot bind the complete current scope. Requiring
-    # the tip depth lets lineage validation below check its generation, epoch
-    # and exact serial, including after an identical branch is reapplied.
     cert._scope_checkpoint._depth == length(ws._state.trail) ||
         return VerificationResult(false,:stale_scope,cost)
     try
@@ -602,7 +1415,6 @@ function verify_certificate(ws::Workspace, cert::DominanceCertificate;
     end
     _expired(deadline_ns) && return VerificationResult(false,:deadline,cost)
     isempty(cert.steps) && return VerificationResult(false,:empty_proof,cost)
-    fixed = Dict{Int,Int}()
     seen = Set{Int}()
     low = s.domain === QT.BoolDomain ? 0 : -1
     for assumption in cert.assumptions
@@ -612,31 +1424,40 @@ function verify_certificate(ws::Workspace, cert::DominanceCertificate;
             return VerificationResult(false,:invalid_scope,cost)
         push!(seen,i)
     end
+    p = _init_poly_state(s; deadline=deadline_ns)
+    p === nothing && return VerificationResult(false,:deadline,cost)
+    base_step_cost = length(s.linear.values) + length(s.quadratic.values)
     introduced = 0
     for (k,step) in enumerate(cert.steps)
-        step isa DominanceStep && step.predecessors == k-1 ||
+        step isa Union{DominanceStep,RelationStep,EliminationStep} && step.predecessors == k-1 ||
             return VerificationResult(false,:invalid_predecessors,cost)
-        # Scope prefixes preserve the actual interleaving of caller assumptions
-        # and strong deductions. Later assumptions constrain only variables
-        # that were free when earlier uniform derivative bounds were proved.
         count = step.scope_length == -1 ? length(cert.assumptions) : step.scope_length
         introduced <= count <= length(cert.assumptions) ||
             return VerificationResult(false,:invalid_scope,cost)
-        for p in introduced+1:count
-            i,v = cert.assumptions[p]
-            haskey(fixed,i) && return VerificationResult(false,:invalid_scope,cost)
-            fixed[i] = v
+        for pos in introduced+1:count
+            i,v = cert.assumptions[pos]
+            p.active[i] || return VerificationResult(false,:invalid_scope,cost)
+            _poly_fix!(p, i, v)
         end
         introduced = count
-        valid, reason, visits = _verify_polynomial(s,fixed,step,active_map,max_work-cost,deadline_ns)
+        step_cost = base_step_cost
+        step_cost <= max_work - cost || return VerificationResult(false,:work_limit,cost)
+        _expired(deadline_ns) && return VerificationResult(false,:deadline,cost)
+        valid, reason, visits = if step isa DominanceStep
+            later = cert.assumptions[(count + 1):end]
+            _verify_dominance_step(p, step, active_map, later, step_cost, deadline_ns)
+        elseif step isa RelationStep
+            _verify_relation_step(p, step, active_map, step_cost, deadline_ns)
+        else
+            _verify_elimination_step(p, step::EliminationStep, active_map, step_cost, deadline_ns)
+        end
         cost += visits
         valid || return VerificationResult(false,reason,cost)
-        fixed[step.variable] = step.value
     end
-    for p in introduced+1:length(cert.assumptions)
-        i,v = cert.assumptions[p]
-        haskey(fixed,i) && return VerificationResult(false,:invalid_scope,cost)
-        fixed[i] = v
+    for pos in introduced+1:length(cert.assumptions)
+        i,v = cert.assumptions[pos]
+        p.active[i] || return VerificationResult(false,:invalid_scope,cost)
+        _poly_fix!(p, i, v)
     end
     return _expired(deadline_ns) ? VerificationResult(false,:deadline,cost) :
                                    VerificationResult(true,:verified,cost)

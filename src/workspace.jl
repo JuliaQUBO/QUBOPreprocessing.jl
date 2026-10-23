@@ -122,28 +122,81 @@ function _assignment(ws::Workspace, v)
 end
 
 """
-    assume!(ws, label, value; max_work=typemax(Int), deadline_ns=nothing)
+    assume!(ws, label, value; map=nothing, max_work=typemax(Int), deadline_ns=nothing)
 
 Condition on one explicit original-label assignment, never a certified deduction.
-Repeat assignments are no-ops, including a matching certified deduction; they
-do not promote deductions into independent caller assumptions. Roll back before
-imposing such an independent assumption. Conflicts/invalid values throw before mutation.
-Reserve the variable's complete adjacency work before starting. A work/deadline
-stop leaves state unchanged. Preparation checks the deadline per incident edge;
-commit is one atomic algorithmic boundary (not asynchronous interrupt safety).
-An applied update costs O(degree), stores touched free fields and queues affected
-free neighbors once. Arithmetic uses exact rationals of the stored Float64 data;
-integer bit complexity and allocations are additional to edge counts.
+When `map::DomainGaugeMap` is supplied, `value` is given in `map.target_domain`
+and translated bijectively to the original domain. Repeat assignments are no-ops,
+including a matching certified unary deduction; they do not promote deductions
+into independent caller assumptions. Conflicts/invalid values throw before
+mutation. If `label` was removed by a structural reduction (`RelationStep` or
+`EliminationStep`) or a non-pointwise marginal weak step is active on the trail,
+`assume!` never treats the removed variable as freely assignable on the reduced
+residual; instead it rolls back the reduction suffix and replays retained caller
+assumptions before imposing the new assumption.
 """
-function assume!(ws::Workspace, label, value; max_work=typemax(Int), deadline_ns=nothing)
+function assume!(ws::Workspace, label, value; map::Union{Nothing,DomainGaugeMap}=nothing,
+                 max_work=typemax(Int), deadline_ns=nothing)
     _limits(max_work, deadline_ns)
-    i, v = _variable(ws, label), _assignment(ws, value)
+    map === nothing || _validate_domain_map(ws, map)
+    i = _variable(ws, label)
+    v = if map === nothing
+        _assignment(ws, value)
+    else
+        u_val = _check_domain_scalar(value, map.target_domain)
+        _lift_index_value(map, i, u_val)
+    end
     st = ws._state
-    if st.fixed[i] != 2
+    for p in st.callers
+        e = st.trail[p]::_UndoFix
+        if e.index == i
+            e.value == v || throw(ArgumentError("conflicting caller assumption"))
+            return UpdateReport(:unchanged, 0, 0)
+        end
+    end
+    if st.fixed[i] in (-1, 0, 1)
         st.fixed[i] == v || throw(ArgumentError("conflicting caller assumption"))
         return UpdateReport(:unchanged, 0, 0)
     end
-    return _fix!(ws,i,v;max_work,deadline_ns)
+    has_marginal = any(k -> begin
+        entry = st.trail[st.fixes[k]]
+        entry.proof !== nothing && hasproperty(entry.proof, :method) && entry.proof.method === :marginal
+    end, eachindex(st.fixes))
+    if st.fixed[i] != 2 || has_marginal
+        first_ded_idx = findfirst(k -> st.trail[st.fixes[k]].proof !== nothing, eachindex(st.fixes))
+        first_ded_idx !== nothing || throw(ArgumentError("inconsistent variable status"))
+        pos = st.fixes[first_ded_idx]
+        replay_list = Pair{Int,Int}[(st.trail[p]::_UndoFix).index => (st.trail[p]::_UndoFix).value
+                                    for p in st.callers if p > pos]
+        push!(replay_list, i => v)
+        cancelled_deg = Dict{Int,Int}()
+        for k in first_ded_idx:length(st.fixes)
+            entry = st.trail[st.fixes[k]]
+            if entry isa _UndoReduction
+                for (op, a, _, _) in entry.adj_edits
+                    op === :insert && (cancelled_deg[a] = get(cancelled_deg, a, 0) + 1)
+                end
+            end
+        end
+        planned_visits = 0
+        for (idx, _) in replay_list
+            deg = length(st.adjacency[idx]) + get(cancelled_deg, idx, 0)
+            deg <= max_work - planned_visits || return UpdateReport(:work_limit, 0, 0)
+            for _ in 1:deg
+                _expired(deadline_ns) && return UpdateReport(:deadline, planned_visits, 0)
+                planned_visits += 1
+            end
+        end
+        _expired(deadline_ns) && return UpdateReport(:deadline, planned_visits, 0)
+        rollback!(ws, _checkpoint_at(ws, pos - 1))
+        total_visits = 0
+        for (idx, val) in replay_list
+            rep = _fix!(ws, idx, val; max_work=typemax(Int), deadline_ns=nothing)
+            total_visits += rep.edge_visits
+        end
+        return UpdateReport(:applied, total_visits, 1)
+    end
+    return _fix!(ws, i, v; max_work, deadline_ns)
 end
 
 function _fix!(ws::Workspace,i::Int,v::Int;proof=nothing,max_work=typemax(Int),deadline_ns=nothing)
@@ -213,6 +266,195 @@ function _fix!(ws::Workspace,i::Int,v::Int;proof=nothing,max_work=typemax(Int),d
     return UpdateReport(:applied, visits, 1)
 end
 
+function _apply_reduction!(
+    ws::Workspace,
+    u::Int,
+    status::Int8,
+    proof::_ProofRecord,
+    const_delta::_Exact,
+    field_deltas::Vector{Pair{Int,_Exact}},
+    quad_deltas::Vector{Tuple{Int,Int,_Exact}};
+    max_work=typemax(Int),
+    deadline_ns=nothing,
+    precharged_visits::Int=0,
+)
+    st = ws._state
+    st.fixed[u] == 2 || throw(ArgumentError("reduction requires a free variable"))
+    is_bool = ws._snapshot.domain === QT.BoolDomain
+    visits = precharged_visits
+    u_free_edges = Pair{Int,_Exact}[]
+    touched_set = Set{Int}()
+    for (w, q) in st.adjacency[u]
+        _expired(deadline_ns) && return UpdateReport(:deadline, visits, 0)
+        visits < max_work || return UpdateReport(:work_limit, visits, 0)
+        visits += 1
+        if st.fixed[w] == 2
+            push!(u_free_edges, w => q)
+            push!(touched_set, w)
+        end
+    end
+    for (w, df) in field_deltas
+        iszero(df) && continue
+        w != u && st.fixed[w] == 2 || throw(ArgumentError("field delta targets a non-free variable"))
+        push!(touched_set, w)
+    end
+    merged_q = Dict{Tuple{Int,Int},_Exact}()
+    for (a, b, dq) in quad_deltas
+        iszero(dq) && continue
+        a != b && a != u && b != u && st.fixed[a] == 2 && st.fixed[b] == 2 ||
+            throw(ArgumentError("quadratic delta targets non-free or identical variables"))
+        j, k = min(a, b), max(a, b)
+        merged_q[(j, k)] = get(merged_q, (j, k), _Exact(0)) + dq
+        push!(touched_set, j)
+        push!(touched_set, k)
+    end
+    merged_quad_deltas = Tuple{Int,Int,_Exact}[
+        (j, k, dq) for ((j, k), dq) in sort!(collect(merged_q); by=first) if !iszero(dq)
+    ]
+    for (j, k, _) in merged_quad_deltas
+        edge_work = length(st.adjacency[j]) + length(st.adjacency[k])
+        edge_work <= max_work - visits || return UpdateReport(:work_limit, visits, 0)
+        for _ in 1:edge_work
+            _expired(deadline_ns) && return UpdateReport(:deadline, visits, 0)
+            visits += 1
+        end
+    end
+    touched = sort!(collect(touched_set))
+    old_fields = Vector{_NeighborRecord}(undef, length(touched))
+    old_dual = Vector{_DualDegreeRecord}(undef, length(touched) + 1)
+    old_dual[1] = (u, st.dual_fields[u], st.degrees[u])
+    for (idx, w) in enumerate(touched)
+        lo_w = st.lower === nothing ? st.fields[w] : st.lower[w]
+        hi_w = st.upper === nothing ? st.fields[w] : st.upper[w]
+        old_fields[idx] = (w, st.fields[w], lo_w, hi_w)
+        old_dual[idx + 1] = (w, st.dual_fields[w], st.degrees[w])
+    end
+    f_map = Dict{Int,_Exact}(w => _Exact(0) for w in touched)
+    lo_map = Dict{Int,_Exact}(w => _Exact(0) for w in touched)
+    hi_map = Dict{Int,_Exact}(w => _Exact(0) for w in touched)
+    qsum_map = Dict{Int,_Exact}(w => _Exact(0) for w in touched)
+    deg_map = Dict{Int,Int}(w => 0 for w in touched)
+    for (w, q_uw) in u_free_edges
+        deg_map[w] -= 1
+        qsum_map[w] -= q_uw
+        lo_map[w] -= is_bool ? min(0, q_uw) : -abs(q_uw)
+        hi_map[w] -= is_bool ? max(0, q_uw) : abs(q_uw)
+    end
+    for (w, df) in field_deltas
+        iszero(df) && continue
+        f_map[w] += df
+        lo_map[w] += df
+        hi_map[w] += df
+    end
+    for (j, k, dq) in merged_quad_deltas
+        pos_j = findfirst(p -> p.first == k, st.adjacency[j])
+        q_old = pos_j === nothing ? _Exact(0) : st.adjacency[j][pos_j].second
+        q_new = q_old + dq
+        if pos_j === nothing
+            deg_map[j] += 1
+            deg_map[k] += 1
+        elseif iszero(q_new)
+            deg_map[j] -= 1
+            deg_map[k] -= 1
+        end
+        qsum_map[j] += dq
+        qsum_map[k] += dq
+        d_lo = (is_bool ? min(0, q_new) : -abs(q_new)) - (is_bool ? min(0, q_old) : -abs(q_old))
+        d_hi = (is_bool ? max(0, q_new) : abs(q_new)) - (is_bool ? max(0, q_old) : abs(q_old))
+        lo_map[j] += d_lo
+        lo_map[k] += d_lo
+        hi_map[j] += d_hi
+        hi_map[k] += d_hi
+    end
+    old_f_u = st.fields[u]
+    old_h_u = _spin_field(ws, u)
+    total_f_delta = -old_f_u + sum(values(f_map); init=_Exact(0))
+    total_q_delta = -sum((q for (_, q) in u_free_edges); init=_Exact(0)) +
+                    sum((dq for (_, _, dq) in merged_quad_deltas); init=_Exact(0))
+    new_constant = st.constant + const_delta
+    new_dual_constant = is_bool ?
+        (st.dual_constant + const_delta + total_f_delta // 2 + total_q_delta // 4) :
+        (st.dual_constant + const_delta - total_f_delta + total_q_delta)
+    spin_const_delta = is_bool ? (new_dual_constant - st.dual_constant) : const_delta
+    spin_field_deltas = Pair{Int,_Exact}[u => -old_h_u]
+    for w in touched
+        dh_w = is_bool ? (f_map[w] // 2 + qsum_map[w] // 4) : f_map[w]
+        !iszero(dh_w) && push!(spin_field_deltas, w => dh_w)
+    end
+    spin_coupling_deltas = Tuple{Int,Int,_Exact}[]
+    for (w, q_uw) in u_free_edges
+        push!(spin_coupling_deltas, (min(u, w), max(u, w), -_spin_coupling(ws, q_uw)))
+    end
+    for (j, k, dq) in merged_quad_deltas
+        push!(spin_coupling_deltas, (j, k, _spin_coupling(ws, dq)))
+    end
+    _expired(deadline_ns) && return UpdateReport(:deadline, visits, 0)
+    st.serial == typemax(UInt64) && throw(ArgumentError("trail serial exhausted; reset workspace"))
+    _reserve!(st.queue, length(st.queue) + length(touched))
+    _reserve!(st.trail, length(st.trail) + 1)
+    _reserve!(st.fixes, length(st.fixes) + 1)
+    adj_edits = _AdjacencyEdit[]
+    for (j, k, dq) in merged_quad_deltas
+        for (a, b) in ((j, k), (k, j))
+            pos = findfirst(p -> p.first == b, st.adjacency[a])
+            if pos === nothing
+                push!(st.adjacency[a], b => dq)
+                push!(adj_edits, (:pop, a, 0, b => _Exact(0)))
+            else
+                old_pair = st.adjacency[a][pos]
+                q_new = old_pair.second + dq
+                if iszero(q_new)
+                    deleteat!(st.adjacency[a], pos)
+                    push!(adj_edits, (:insert, a, pos, old_pair))
+                else
+                    st.adjacency[a][pos] = b => q_new
+                    push!(adj_edits, (:update, a, pos, old_pair))
+                end
+            end
+        end
+    end
+    entry = _UndoReduction(
+        st.serial + 1,
+        length(st.fixes) + 1,
+        u,
+        status,
+        st.constant,
+        st.dual_constant,
+        old_fields,
+        old_dual,
+        adj_edits,
+        length(st.queue),
+        proof,
+        spin_const_delta,
+        spin_field_deltas,
+        spin_coupling_deltas,
+    )
+    push!(st.trail, entry)
+    push!(st.fixes, length(st.trail))
+    st.proof_count += 1
+    st.entries[u] = length(st.trail)
+    st.serial += 1
+    st.constant = new_constant
+    st.dual_constant = new_dual_constant
+    st.fixed[u] = status
+    st.degrees[u] = 0
+    for w in touched
+        st.fields[w] += f_map[w]
+        st.dual_fields[w] += is_bool ? (f_map[w] // 2 + qsum_map[w] // 4) :
+                                       (2 * f_map[w] - 2 * qsum_map[w])
+        st.degrees[w] += deg_map[w]
+        if st.lower !== nothing
+            st.lower[w] += lo_map[w]
+            st.upper[w] += hi_map[w]
+        end
+        if !st.queued[w]
+            push!(st.queue, w)
+            st.queued[w] = true
+        end
+    end
+    return UpdateReport(:applied, visits, 1)
+end
+
 """
     RollbackReport
 
@@ -251,7 +493,9 @@ function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
         callers,deductions = Pair{Int,Int}[],Pair{Int,Int}[]
         for k in length(st.fixes):-1:cp._fix_depth+1
             e = st.trail[st.fixes[k]]
-            push!(e.proof === nothing ? callers : deductions,e.index=>e.value)
+            if e isa _UndoFix
+                push!(e.proof === nothing ? callers : deductions,e.index=>e.value)
+            end
         end
         RollbackReport(generation(ws),cp,callers,deductions)
     else
@@ -262,6 +506,36 @@ function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
         if undo isa _UndoQueue
             st.head = undo.head
             st.queued[undo.index] = undo.queued
+        elseif undo isa _UndoReduction
+            for r in length(undo.adj_edits):-1:1
+                op, a, pos, old_pair = undo.adj_edits[r]
+                if op === :pop
+                    pop!(st.adjacency[a])
+                elseif op === :insert
+                    insert!(st.adjacency[a], pos, old_pair)
+                else
+                    st.adjacency[a][pos] = old_pair
+                end
+            end
+            for (j, field, lower, upper) in undo.fields
+                st.fields[j] = field
+                if st.lower !== nothing
+                    st.lower[j], st.upper[j] = lower, upper
+                end
+            end
+            for (j, df, deg) in undo.dual_fields
+                st.dual_fields[j] = df
+                st.degrees[j] = deg
+            end
+            while length(st.queue) > undo.queue_length
+                st.queued[pop!(st.queue)] = false
+            end
+            st.fixed[undo.index] = 2
+            st.entries[undo.index] = 0
+            pop!(st.fixes)
+            st.proof_count -= 1
+            st.constant = undo.constant
+            st.dual_constant = undo.dual_constant
         else
             for (j,field,lower,upper) in undo.fields
                 st.fields[j] = field
@@ -459,6 +733,8 @@ end
 function _lift_state(r::ConditionedExport, y::AbstractVector)
     Base.require_one_based_indexing(y)
     length(y) == length(r._free) || throw(ArgumentError("state must cover every free variable"))
+    is_bool = r._snapshot.domain === QT.BoolDomain
+    low_orig = is_bool ? 0 : -1
     target_dom = r._map === nothing ? _domain_symbol(r._snapshot.domain) : r._map.target_domain
     low = target_dom === :bool ? 0 : -1
     state = Int[r._fixed...]
@@ -469,6 +745,33 @@ function _lift_state(r::ConditionedExport, y::AbstractVector)
         iv = Int(v)
         state[i] = r._map === nothing ? iv : _lift_index_value(r._map, i, iv)
     end
+    steps = r.certificate.reduction_chain
+    for k in length(steps):-1:1
+        step = steps[k]
+        if step isa DominanceStep
+            state[step.variable] = step.value
+        elseif step isa RelationStep
+            rep_val = state[step.representative]
+            (rep_val == low_orig || rep_val == 1) ||
+                throw(ArgumentError("representative variable $(step.representative) not reconstructed before relation step"))
+            s_rep = is_bool ? (2 * rep_val - 1) : rep_val
+            s_elim = step.orig_sign * s_rep
+            state[step.eliminated] = is_bool ? ((s_elim + 1) ÷ 2) : s_elim
+        elseif step isa EliminationStep
+            idx = 1
+            for (bit_pos, nbr) in enumerate(step.neighbors)
+                nbr_val = state[nbr]
+                (nbr_val == low_orig || nbr_val == 1) ||
+                    throw(ArgumentError("boundary neighbor $nbr not reconstructed before elimination step"))
+                if nbr_val == 1
+                    idx += 1 << (bit_pos - 1)
+                end
+            end
+            state[step.variable] = step.table[idx]
+        end
+    end
+    all(v -> v == low_orig || v == 1, state) ||
+        throw(ArgumentError("incomplete reconstruction chain for removed variables"))
     return state
 end
 function reconstruct(r::ConditionedExport,y::AbstractVector)

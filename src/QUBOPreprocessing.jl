@@ -15,13 +15,18 @@ export Workspace, Generation, generation, reset!, materialize, ExportResult,
 export Checkpoint, checkpoint, assume!, rollback!, unfix!, changes, assumptions,
        UpdateReport, RollbackReport, ConditionedExport
 
-export DominanceStep, DominanceCertificate, DominanceAttempt, VerificationResult,
-       prove_dominance, verify_certificate, transport_certificate
+export DominanceStep, RelationStep, EliminationStep,
+       DominanceCertificate, ReductionCertificate,
+       DominanceAttempt, RelationAttempt, EliminationAttempt, VerificationResult,
+       prove_dominance, prove_relation, prove_elimination,
+       verify_certificate, transport_certificate,
+       step_guarantee, certificate_guarantee, persistency
 
 export DomainGaugeMap, domain_map, map_value, lift_value, map_state, lift_state,
        degree, effective_field, incident_couplings, conditioned_constant
 
-export propagate!, PropagationReport, deductions, export_certificate
+export propagate!, PropagationReport, deductions, reductions, export_certificate,
+       apply_dominance!, contract_relation!, eliminate_variable!, apply_weak_batch!
 export sample_preprocessed, SolverResult
 
 include("trail.jl")

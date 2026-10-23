@@ -147,7 +147,7 @@ function QP.sample_preprocessed(input,child_factory;rules=nothing,max_work=typem
         verified = QP.verify_certificate(ws,proof;max_work=budget.remaining,deadline_ns)
         budget.remaining -= verified.term_visits
         budget.used += verified.term_visits
-        verified.valid || return finish(verified.reason === :deadline ? :deadline : :verification_limit)
+        verified.valid || return finish(verified.stop_reason === :deadline ? :deadline : :verification_limit)
     end
     timings[:verification] = Float64(time_ns()-t)/1e9
     child_variables = QT.dimension(model)

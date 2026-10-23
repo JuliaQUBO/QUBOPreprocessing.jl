@@ -5,6 +5,8 @@
 const _Exact = Rational{BigInt}
 abstract type _ProofRecord end
 const _NeighborRecord = Tuple{Int,_Exact,_Exact,_Exact}
+const _DualDegreeRecord = Tuple{Int,_Exact,Int}
+const _AdjacencyEdit = Tuple{Symbol,Int,Int,Pair{Int,_Exact}}
 
 _reserve!(a::Vector, sz::Int) = @static VERSION >= v"1.11.0-DEV" ? sizehint!(a, sz; shrink=false) : sizehint!(a, sz)
 
@@ -21,6 +23,23 @@ struct _UndoFix
     dual_fields::Vector{Pair{Int,_Exact}}
 end
 
+struct _UndoReduction
+    serial::UInt64
+    fix_depth::Int
+    index::Int
+    status::Int8
+    constant::_Exact
+    dual_constant::_Exact
+    fields::Vector{_NeighborRecord}
+    dual_fields::Vector{_DualDegreeRecord}
+    adj_edits::Vector{_AdjacencyEdit}
+    queue_length::Int
+    proof::_ProofRecord
+    spin_const_delta::_Exact
+    spin_field_deltas::Vector{Pair{Int,_Exact}}
+    spin_coupling_deltas::Vector{Tuple{Int,Int,_Exact}}
+end
+
 struct _UndoQueue
     serial::UInt64
     fix_depth::Int
@@ -28,11 +47,12 @@ struct _UndoQueue
     head::Int
     queued::Bool
 end
-const _UndoEntry = Union{_UndoFix,_UndoQueue}
+const _UndoEntry = Union{_UndoFix,_UndoReduction,_UndoQueue}
 
-# Adjacency is fixed for this conditioning-only slice. Future topology-changing
-# reductions must introduce their own trailed edge/reconstruction records here;
-# mutating adjacency without such records is unsupported.
+# Topology-changing reductions (relation contractions and bounded local
+# eliminations) trail their exact field, degree and adjacency edits in
+# `_UndoReduction`. In `fixed`, `2` denotes free, `-1/0/1` constant-fixed,
+# `3` relation-contracted and `4` locally eliminated.
 mutable struct _Incremental
     labels::Dict{Any,Int}
     adjacency::Vector{Vector{Pair{Int,_Exact}}}

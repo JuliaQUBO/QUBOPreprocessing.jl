@@ -53,6 +53,7 @@ jobs:
           julia --project=. --startup-file=no examples/certificates.jl
           julia --project=. --startup-file=no examples/dominance.jl
           julia --project=. --startup-file=no examples/domain.jl
+          julia --project=. --startup-file=no examples/composition.jl
           julia --project=. --startup-file=no examples/branch_search.jl
       - name: Process core source coverage
         if: matrix.julia == '1.10' && matrix.os == 'ubuntu-latest' && matrix.dependencies == 'compatible'
