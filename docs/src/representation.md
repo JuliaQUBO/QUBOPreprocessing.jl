@@ -78,6 +78,48 @@ with unchanged dimension or identical source data. Historical exports and their
 reconstructed states retain their original generation. Consumers must compare
 identities explicitly before treating them as evidence for a current workspace.
 
+## Certified domain and gauge maps
+
+Binary QUBO (`xᵢ ∈ {0,1}`) and Ising spin (`sᵢ ∈ {-1,+1}`) models are bijectively
+related by `xᵢ = (sᵢ + 1)/2` (`sᵢ = 2xᵢ - 1`). For an unscaled polynomial
+``F(x)=c+\sum_i a_i x_i+\sum_{i<j}b_{ij}x_i x_j``, exact substitution gives
+``J_{ij}=b_{ij}/4``, ``h_i=a_i/2+\sum_{j\ne i}b_{ij}/4`` and
+``c_{\text{spin}}=c+\frac{1}{2}\sum_i a_i+\frac{1}{4}\sum_{i<j}b_{ij}``. A spin
+gauge ``s_i=g_i t_i`` with ``g_i\in\{-1,+1\}`` transports fields as
+``h'_i=g_i h_i`` and couplings as ``J'_{ij}=g_i g_j J_{ij}`` while leaving the
+spin constant unchanged.
+
+Distinguish four different operations:
+
+- **Bijective conversion (`DomainGaugeMap`):** a one-to-one change of coordinates
+  (`xᵢ = (sᵢ + 1)/2`, `sᵢ = gᵢ tᵢ`) that preserves every state and its exact
+  energy. Optional gauge selection transforms fields as well as couplings; it
+  **never** means assuming every model is zero-field or dropping nonzero fields.
+- **Constant fixing (strong persistency):** proves a variable takes a constant
+  value in every scoped optimum. Unary strict dominance is algebraically
+  equivalent in binary, spin and gauged coordinates; rerunning the same unary
+  test in another coordinate system does not create extra deductions. Coordinate
+  maps instead expose additional rule families without repeated whole-model casts.
+- **Exact elimination:** minimizes a variable out as a function of surviving
+  neighbors and restores it via a conditional reconstruction rule.
+- **Symmetry or compatible-optimum selection:** chooses one representative among
+  tied or symmetric optima (such as global spin-flip symmetry when all fields
+  vanish); this does not hold in every optimum and must not be conflated with
+  strong persistency.
+
+```@example identity
+smap = domain_map(ws; domain=:spin, gauge=Dict(:x => -1, :y => 1, :isolate => 1))
+mapped_state = map_state(smap, state)
+@assert lift_state(smap, mapped_state) == state
+@assert [degree(ws, v) for v in (:x, :y, :isolate)] == [1, 1, 0]
+(effective_field(ws, :x; map=smap), conditioned_constant(ws; map=smap))
+```
+
+Ordinary floating-point casting is not itself a certificate: `materialize(ws, map)`
+requires every converted coefficient and constant to be exactly representable in
+`Float64`, or it abstains with `ArgumentError`; pass
+`coefficient_type=Rational{BigInt}` for verified exact transport.
+
 ## Reconstruction and numerical evaluation
 
 `reconstruct(result, y)` accepts a complete one-based vector in residual/original

@@ -183,18 +183,21 @@ end
 generation(result::ExportResult) = result.generation
 
 """
-    materialize(ws; coefficient_type=Float64)
+    materialize(ws; coefficient_type=Float64, map=nothing)
+    materialize(ws, map::DomainGaugeMap; coefficient_type=Float64)
 
-Explicitly capture an owned export. Without fixings this is the unchanged
-Float64 identity export. With caller assumptions or certified deductions, return
-a [`ConditionedExport`](@ref) with the complete proof chain when present:
-Float64 transport must represent every conditioned coefficient exactly, or the
-call raises `ArgumentError`; use `coefficient_type=Rational{BigInt}` for exact
-transport. Materialization scans/copies the graph; it is never implicit in updates.
+Explicitly capture an owned export. Without fixings or a coordinate `map`, this
+is the unchanged Float64 identity export. With caller assumptions, certified
+deductions or a [`DomainGaugeMap`](@ref), return a [`ConditionedExport`](@ref)
+with the complete proof chain when present: Float64 transport must represent
+every conditioned/converted coefficient and constant exactly, or the call raises
+`ArgumentError`; use `coefficient_type=Rational{BigInt}` for exact transport.
+Materialization scans/copies the graph; it is never implicit in updates.
 """
-function materialize(ws::Workspace; coefficient_type=Float64)
-    if !isempty(ws._state.fixes)
-        return _conditioned_export(ws, coefficient_type)
+function materialize(ws::Workspace; coefficient_type=Float64, map=nothing)
+    map === nothing || _validate_domain_map(ws, map)
+    if !isempty(ws._state.fixes) || map !== nothing
+        return _conditioned_export(ws, coefficient_type; map)
     end
     coefficient_type === Float64 || throw(ArgumentError("only Float64 identity transport is supported"))
     snapshot = deepcopy(ws._snapshot)

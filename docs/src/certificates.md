@@ -119,6 +119,11 @@ A valid fixing proof does not authorize rounding the residual. Workspace
 Float64 export still rejects coefficients/constants that cannot be represented
 exactly; exact `Rational{BigInt}` transport is an explicit supported alternative.
 Re-evaluating a lifted state's Float64 energy cannot repair an unsound transport.
-Certified QUBO–Ising/gauge conversion remains with #13. Run
-`examples/certificates.jl` and `scripts/certificate_costs.jl` for executable
-examples and separate numeric-path, proof-export and verification measurements.
+Domain- and gauge-transported proofs (`prove_dominance(ws, label; map=...)`,
+`export_certificate(ws; map=...)` and `transport_certificate(ws, cert, map)`)
+bind the same source generation and caller assumptions; `verify_certificate`
+independently recomputes the converted and gauged polynomial from raw source
+storage and rejects wrong gauges, mismatched domains, stale maps or altered
+variable ordering. Run `examples/certificates.jl`, `examples/domain.jl` and
+`scripts/certificate_costs.jl` for executable examples and separate numeric-path,
+proof-export and verification measurements.

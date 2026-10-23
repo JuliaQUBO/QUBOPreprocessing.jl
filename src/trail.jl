@@ -15,7 +15,10 @@ struct _UndoFix
     fields::Vector{_NeighborRecord}
     queue_length::Int
     proof::Union{Nothing,_ProofRecord}
+    dual_constant::_Exact
+    dual_fields::Vector{Pair{Int,_Exact}}
 end
+_UndoFix(s,fd,i,v,c,f,ql,p) = _UndoFix(s,fd,i,v,c,f,ql,p,_Exact(0),Pair{Int,_Exact}[])
 
 struct _UndoQueue
     serial::UInt64
@@ -51,4 +54,7 @@ mutable struct _Incremental
     total_candidates::Int
     total_edges::Int
     total_exact::Int
+    dual_fields::Vector{_Exact}
+    dual_constant::_Exact
+    degrees::Vector{Int}
 end
