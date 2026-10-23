@@ -39,7 +39,7 @@ function _pop_queue!(ws::Workspace)
     st.serial == typemax(UInt64) && throw(ArgumentError("trail serial exhausted; reset workspace"))
     i = st.queue[st.head]
     entry = _UndoQueue(st.serial+1,length(st.fixes),i,st.head,st.queued[i])
-    sizehint!(st.trail,length(st.trail)+1)
+    _reserve!(st.trail,length(st.trail)+1)
     push!(st.trail,entry)
     st.serial += 1
     st.queued[i] = false
@@ -58,14 +58,17 @@ function _cached_step(ws::Workspace,i::Int,direction::Int)
 end
 
 """
-    propagate!(ws; max_work=typemax(Int), max_deductions=typemax(Int),
+    propagate!(ws; map=nothing, max_work=typemax(Int), max_deductions=typemax(Int),
                max_exact_work=typemax(Int), deadline_ns=nothing)
 
 Run deterministic strict dominance on a workspace selected with
-`rules=:dominance`. Exact derivative-bound caches are prepared once and updated
-with touched free neighbors; a dirty candidate reads its cached bounds without
-rescanning its adjacency. Ties/zero scale produce no fixing. No weak or heuristic
-rule is enabled. Calls never build a residual or copy the source graph.
+`rules=:dominance`, optionally validating and operating through a
+[`DomainGaugeMap`](@ref). Exact derivative-bound caches are prepared once and
+updated with touched free neighbors; a dirty candidate reads its cached bounds
+without rescanning its adjacency. Unary strict dominance is algebraically
+equivalent across binary, spin and gauged coordinates; ties and zero scale
+produce no fixing. No weak or heuristic rule is enabled. Calls never build a
+residual or copy the source graph.
 
 Per-call `max_work` bounds examined candidates plus adjacency entries visited
 while installing deductions. Exact work reserves one cached sign check and,
@@ -81,11 +84,13 @@ proofs; execution counters retain actual work. Initialization may scan the graph
 subsequent no-change calls are constant-size. Arbitrary caller unfix conservatively
 rebuilds/replays explicit assumptions and discards deductions before resumption.
 """
-function propagate!(ws::Workspace;max_work=typemax(Int),max_deductions=typemax(Int),
+function propagate!(ws::Workspace;map::Union{Nothing,DomainGaugeMap}=nothing,
+                     max_work=typemax(Int),max_deductions=typemax(Int),
                      max_exact_work=typemax(Int),deadline_ns=nothing)
     _limits(max_work,deadline_ns)
     _limits(max_deductions,deadline_ns)
     _limits(max_exact_work,deadline_ns)
+    map === nothing || _validate_domain_map(ws, map)
     st = ws._state
     st.rules === :dominance || throw(ArgumentError("select Workspace(model; rules=:dominance)"))
     candidates,edges,deductions,exact = 0,0,0,0
@@ -116,7 +121,7 @@ function propagate!(ws::Workspace;max_work=typemax(Int),max_deductions=typemax(I
         remaining >= 1 && degree <= (remaining-1)÷3 || return finish(:verification_limit)
         reserved = 1+3*degree
         st.serial <= typemax(UInt64)-2 || throw(ArgumentError("trail serial exhausted; reset workspace"))
-        sizehint!(st.trail,length(st.trail)+2)
+        _reserve!(st.trail,length(st.trail)+2)
         result = _fix!(ws,i,step.value;proof=step,max_work=max_work-candidates-edges,deadline_ns)
         edges += result.edge_visits
         exact += reserved
@@ -143,26 +148,34 @@ function deductions(ws::Workspace;since=nothing)
     return [_owned_labels([s.labels[e.index]])[1]=>e.value for e in entries if e.proof !== nothing]
 end
 
-_proof_steps(ws::Workspace) = Tuple(deepcopy(ws._state.trail[p].proof) for p in ws._state.fixes
-                                   if ws._state.trail[p].proof !== nothing)
+function _proof_steps(ws::Workspace; map::Union{Nothing,DomainGaugeMap}=nothing)
+    raw = Tuple(deepcopy(ws._state.trail[p].proof) for p in ws._state.fixes
+                if ws._state.trail[p].proof !== nothing)
+    map === nothing && return raw
+    return _transport_steps(ws, _caller_scope(ws), raw, nothing, map)
+end
 
-function _export_certificate(ws::Workspace,source::_Snapshot)
+function _export_certificate(ws::Workspace,source::_Snapshot;map::Union{Nothing,DomainGaugeMap}=nothing)
     ws._state.proof_count == 0 && return nothing
-    return DominanceCertificate(generation(ws),checkpoint(ws),_caller_scope(ws),_proof_steps(ws),source)
+    owned_map = map === nothing ? nothing : deepcopy(map)
+    return DominanceCertificate(generation(ws),checkpoint(ws),_caller_scope(ws),
+                                _proof_steps(ws;map=owned_map),source,owned_map)
 end
 
 """
-    export_certificate(ws)
+    export_certificate(ws; map=nothing)
 
-Explicitly capture the complete owned strong-deduction chain and caller scope,
-or return `nothing` in constant-size work if no deduction exists. Source/proof
-copying is O(n+m+number of steps), plus scalar bit/label-copy costs. Verify with
+Explicitly capture the complete owned strong-deduction chain and caller scope
+(optionally transported into `map::DomainGaugeMap`), or return `nothing` in
+constant-size work if no deduction exists. Source/proof copying is
+O(n+m+number of steps), plus scalar bit/label-copy costs. Verify with
 `verify_certificate`; applicability requires the captured current trail tip.
 No inference, solver dispatch or residual materialization occurs here.
 """
-function export_certificate(ws::Workspace)
+function export_certificate(ws::Workspace; map::Union{Nothing,DomainGaugeMap}=nothing)
+    map === nothing || _validate_domain_map(ws, map; full=true)
     ws._state.proof_count == 0 && return nothing
     source = deepcopy(ws._snapshot)
     _validate_label_copy(ws._snapshot.labels,source.labels)
-    return _export_certificate(ws,source)
+    return _export_certificate(ws,source;map)
 end

@@ -17,6 +17,22 @@ function _incremental(s::_Snapshot;rules=:identity)
         push!(adjacency[i], j=>q)
         push!(adjacency[j], i=>q)
     end
+    degrees = [length(adj) for adj in adjacency]
+    dual_fields = Vector{_Exact}(undef, n)
+    quad_sum = _Exact(0)
+    for i in 1:n
+        csum = _Exact(0)
+        for (j, q) in adjacency[i]
+            csum += q
+            i < j && (quad_sum += q)
+        end
+        dual_fields[i] = s.domain === QT.BoolDomain ? (fields[i] // 2 + csum // 4) :
+                                                      (2 * fields[i] - 2 * csum)
+    end
+    field_sum = sum(fields; init=_Exact(0))
+    dual_constant = s.domain === QT.BoolDomain ?
+        (_Exact(s.offset) + field_sum // 2 + quad_sum // 4) :
+        (_Exact(s.offset) - field_sum + quad_sum)
     lower,upper = nothing,nothing
     if rules === :dominance
         lower,upper = copy(fields),copy(fields)
@@ -30,7 +46,7 @@ function _incremental(s::_Snapshot;rules=:identity)
     return _Incremental(Dict{Any,Int}(v=>i for (i,v) in enumerate(s.labels)),
                         adjacency, fields, _Exact(s.offset), fill(Int8(2), n),
                         queue, queued, _UndoEntry[], 0, uuid4(),rules,lower,upper,1,
-                        Int[],Int[],zeros(Int,n),0,0,0,0)
+                        Int[],Int[],zeros(Int,n),0,0,0,0,dual_fields,dual_constant,degrees)
 end
 
 """
@@ -136,40 +152,54 @@ function _fix!(ws::Workspace,i::Int,v::Int;proof=nothing,max_work=typemax(Int),d
     edges = st.adjacency[i]
     length(edges) <= max_work || return UpdateReport(:work_limit, 0, 0)
     _expired(deadline_ns) && return UpdateReport(:deadline, 0, 0)
+    is_bool = ws._snapshot.domain === QT.BoolDomain
+    dual_v = is_bool ? (2 * v - 1) : ((v + 1) ÷ 2)
     old = _NeighborRecord[]
     updated = _NeighborRecord[]
+    old_dual = Pair{Int,_Exact}[]
+    updated_dual = Pair{Int,_Exact}[]
     visits = 0
     for (j,q) in edges
         _expired(deadline_ns) && return UpdateReport(:deadline, visits, 0)
         visits += 1
         st.fixed[j] == 2 || continue
         field = st.fields[j] + q*v
+        dual_q = is_bool ? (q // 4) : (4 * q)
+        push!(old_dual, j => st.dual_fields[j])
+        push!(updated_dual, j => (st.dual_fields[j] + dual_q * dual_v))
         if st.lower === nothing
             push!(old,(j,st.fields[j],st.fields[j],st.fields[j]))
             push!(updated,(j,field,field,field))
         else
-            a = ws._snapshot.domain === QT.BoolDomain ? min(0,q) : -abs(q)
-            b = ws._snapshot.domain === QT.BoolDomain ? max(0,q) : abs(q)
+            a = is_bool ? min(0,q) : -abs(q)
+            b = is_bool ? max(0,q) : abs(q)
             push!(old,(j,st.fields[j],st.lower[j],st.upper[j]))
             push!(updated,(j,field,st.lower[j]+q*v-a,st.upper[j]+q*v-b))
         end
     end
     constant = st.constant + st.fields[i]*v
+    dual_constant = st.dual_constant + st.dual_fields[i]*dual_v
     _expired(deadline_ns) && return UpdateReport(:deadline, visits, 0)
     st.serial == typemax(UInt64) && throw(ArgumentError("trail serial exhausted; reset workspace"))
     # Complete allocation before committing field, queue and trail changes.
-    sizehint!(st.queue, length(st.queue) + length(updated))
-    sizehint!(st.trail, length(st.trail) + 1)
-    sizehint!(st.fixes,length(st.fixes)+1)
-    proof === nothing && sizehint!(st.callers,length(st.callers)+1)
-    entry = _UndoFix(st.serial + 1,length(st.fixes)+1,i,v,st.constant,old,length(st.queue),proof)
+    _reserve!(st.queue, length(st.queue) + length(updated))
+    _reserve!(st.trail, length(st.trail) + 1)
+    _reserve!(st.fixes, length(st.fixes) + 1)
+    proof === nothing && _reserve!(st.callers, length(st.callers) + 1)
+    entry = _UndoFix(st.serial + 1,length(st.fixes)+1,i,v,st.constant,old,length(st.queue),proof,st.dual_constant,old_dual)
     push!(st.trail, entry)
     push!(st.fixes,length(st.trail))
     proof === nothing ? push!(st.callers,length(st.trail)) : (st.proof_count += 1)
     st.entries[i] = length(st.trail)
     st.serial += 1
     st.constant = constant
+    st.dual_constant = dual_constant
     st.fixed[i] = v
+    st.degrees[i] = 0
+    for (j, df) in updated_dual
+        st.dual_fields[j] = df
+        st.degrees[j] -= 1
+    end
     for (j,field,lower,upper) in updated
         st.fields[j] = field
         if st.lower !== nothing
@@ -239,14 +269,20 @@ function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
                     st.lower[j],st.upper[j] = lower,upper
                 end
             end
+            for (j, df) in undo.dual_fields
+                st.dual_fields[j] = df
+                st.degrees[j] += 1
+            end
             while length(st.queue) > undo.queue_length
                 st.queued[pop!(st.queue)] = false
             end
             st.fixed[undo.index] = 2
+            st.degrees[undo.index] = length(undo.fields)
             st.entries[undo.index] = 0
             pop!(st.fixes)
             undo.proof === nothing ? pop!(st.callers) : (st.proof_count -= 1)
             st.constant = undo.constant
+            st.dual_constant = undo.dual_constant
         end
     end
     return report ? captured : ws
@@ -362,6 +398,7 @@ struct ConditionedExport{T}
     _quadratic::Tuple
     _constant::T
     _scale::T
+    _map::Union{Nothing,DomainGaugeMap}
 end
 generation(r::ConditionedExport) = r.generation
 original_variables(r::ConditionedExport) = _owned_labels(r._snapshot.label_type[r._snapshot.labels...])
@@ -381,24 +418,29 @@ function _transport(::Type{Float64}, q::_Exact)
 end
 _transport(::Type{_Exact}, q::_Exact) = deepcopy(q)
 
-function _conditioned_export(ws::Workspace, ::Type{T}) where T
+function _conditioned_export(ws::Workspace, ::Type{T}; map::Union{Nothing,DomainGaugeMap}=nothing) where T
     T in (Float64, _Exact) || throw(ArgumentError("supported transport: Float64 or Rational{BigInt}"))
+    map === nothing || _validate_domain_map(ws, map; full=true)
     s, st = ws._snapshot, ws._state
     snapshot = deepcopy(s)
     _validate_label_copy(s.labels, snapshot.labels)
+    owned_map = map === nothing ? nothing : deepcopy(map)
     free = findall(==(2), st.fixed)
-    map = index_map(ws)
-    linear = Tuple(_transport(T, st.fields[i]) for i in free)
-    quadratic = Tuple((map[i],map[j],_transport(T,q)) for i in free for (j,q) in st.adjacency[i]
-                      if i < j && st.fixed[j] == 2)
+    idxmap = index_map(ws)
+    linear = Tuple(_transport(T, _mapped_field(ws, i, owned_map)) for i in free)
+    quadratic = Tuple((idxmap[i],idxmap[j],_transport(T,_mapped_coupling(ws,i,j,q,owned_map)))
+                      for i in free for (j,q) in st.adjacency[i] if i < j && st.fixed[j] == 2)
     scope = _caller_scope(ws)
-    proof = _export_certificate(ws,snapshot)
+    proof = _export_certificate(ws,snapshot;map=owned_map)
     steps = proof === nothing ? () : proof.steps
+    unchanged = isempty(st.fixes) && (owned_map === nothing ||
+        (owned_map.target_domain === owned_map.source_domain && owned_map._identity_gauge))
+    c_export = _direct_mapped_constant(ws, owned_map)
     return ConditionedExport{T}(snapshot, generation(ws), :certified,
         (scope=isempty(scope) ? :original : :assumptions, assumptions=scope,
-         reduction_chain=steps, unchanged_representation=false,proof=proof),
+         reduction_chain=steps, unchanged_representation=unchanged,proof=proof),
         Tuple(st.fixed), Tuple(free), linear, quadratic,
-        _transport(T,st.constant), _transport(T,_Exact(s.scale)))
+        _transport(T, c_export), _transport(T,_Exact(s.scale)), owned_map)
 end
 
 function export_model(r::ConditionedExport{T}) where T
@@ -408,21 +450,24 @@ function export_model(r::ConditionedExport{T}) where T
     vm = QT.VariableMap{V}(Dict{V,Int}(v=>i for (i,v) in enumerate(labels)), labels)
     lf = QT.DictLinearForm{T}(Dict{Int,T}(i=>deepcopy(v) for (i,v) in enumerate(r._linear)))
     qf = QT.DictQuadraticForm{T}(Dict{Tuple{Int,Int},T}((i,j)=>deepcopy(q) for (i,j,q) in r._quadratic))
+    dom = r._map === nothing ? s.domain : _qt_domain(r._map.target_domain)
     f = QT.Form{T}(length(labels), lf, qf, deepcopy(r._scale), deepcopy(r._constant);
-                   sense=s.sense, domain=s.domain)
+                   sense=s.sense, domain=dom)
     return QT.Model{V,T,U}(vm, f)
 end
 
 function _lift_state(r::ConditionedExport, y::AbstractVector)
     Base.require_one_based_indexing(y)
     length(y) == length(r._free) || throw(ArgumentError("state must cover every free variable"))
-    low = r._snapshot.domain === QT.BoolDomain ? 0 : -1
+    target_dom = r._map === nothing ? _domain_symbol(r._snapshot.domain) : r._map.target_domain
+    low = target_dom === :bool ? 0 : -1
     state = Int[r._fixed...]
     for (j,i) in enumerate(r._free)
         v = y[j]
         v isa Real && isfinite(v) && (v == low || v == 1) ||
-            throw(ArgumentError("state value is outside the original domain"))
-        state[i] = Int(v)
+            throw(ArgumentError("state value is outside the residual domain"))
+        iv = Int(v)
+        state[i] = r._map === nothing ? iv : _lift_index_value(r._map, i, iv)
     end
     return state
 end

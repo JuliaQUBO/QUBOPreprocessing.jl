@@ -16,13 +16,17 @@ export Checkpoint, checkpoint, assume!, rollback!, unfix!, changes, assumptions,
        UpdateReport, RollbackReport, ConditionedExport
 
 export DominanceStep, DominanceCertificate, DominanceAttempt, VerificationResult,
-       prove_dominance, verify_certificate
+       prove_dominance, verify_certificate, transport_certificate
+
+export DomainGaugeMap, domain_map, map_value, lift_value, map_state, lift_state,
+       degree, effective_field, incident_couplings, conditioned_constant
 
 export propagate!, PropagationReport, deductions, export_certificate
 export sample_preprocessed, SolverResult
 
 include("trail.jl")
 include("identity.jl")
+include("domain.jl")
 include("workspace.jl")
 include("certificates.jl")
 include("propagation.jl")

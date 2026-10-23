@@ -1,0 +1,407 @@
+function exact_spin_oracle(L, Q, offset, domain)
+    R = Rational{BigInt}
+    n = length(L)
+    if domain === :spin
+        h = R.(L)
+        J = [i < j ? R(Q[i,j]) : R(0) for i in 1:n, j in 1:n]
+        return h, J, R(offset)
+    end
+    J = [i < j ? R(Q[i,j]) // 4 : R(0) for i in 1:n, j in 1:n]
+    h = [R(L[i]) // 2 + sum((R(Q[min(i,j),max(i,j)]) // 4 for j in 1:n if j != i); init=R(0)) for i in 1:n]
+    c = R(offset) + sum(R.(L); init=R(0)) // 2 + sum(J; init=R(0))
+    return h, J, c
+end
+
+function exact_mapped_oracle(L, Q, offset, src_domain, target_domain, gauge)
+    R = Rational{BigInt}
+    n = length(L)
+    h, J, c_spin = exact_spin_oracle(L, Q, offset, src_domain)
+    h_g = [gauge[i] * h[i] for i in 1:n]
+    J_g = [i < j ? gauge[i] * gauge[j] * J[i,j] : R(0) for i in 1:n, j in 1:n]
+    if target_domain === :spin
+        return h_g, J_g, c_spin
+    end
+    b_g = 4 .* J_g
+    a_g = [2 * h_g[i] - 2 * sum((J_g[min(i,j),max(i,j)] for j in 1:n if j != i); init=R(0)) for i in 1:n]
+    c_bool = c_spin - sum(h_g; init=R(0)) + sum(J_g; init=R(0))
+    return a_g, b_g, c_bool
+end
+
+@testset "domain and gauge bijections across all states and conditioned scopes" begin
+    labels = [(4, "d"), (1, "a"), (3, "c"), (2, "isolate")]
+    L = [0.75, -1.25, 0.5, 0.0]
+    Q = [0.0 -1.5 0.5 0.0; 0.0 0.0 1.0 0.0; 0.0 0.0 0.0 0.0; 0.0 0.0 0.0 0.0]
+    gauges = ([1, 1, 1, 1], [-1, 1, -1, 1], [-1, -1, -1, -1], Dict(labels[1] => -1, labels[3] => -1))
+    R = Rational{BigInt}
+    for kind in (:sparse, :dense, :dict), src_dom in (:bool, :spin),
+        dst_dom in (:bool, :spin), sense in (:min, :max),
+        scale in (-2.0, 0.0, 0.5), gspec in gauges
+        model = fixture(labels, L, Q; kind, domain=src_dom, sense, scale, offset=0.375)
+        ws = Workspace(model; rules=:dominance)
+        m = domain_map(ws; domain=dst_dom, gauge=gspec)
+        @test generation(m) == generation(ws)
+        @test original_variables(m) == labels
+        @test m.source_domain === src_dom
+        @test m.target_domain === dst_dom
+        @test m.sense === sense
+        @test m.scale == scale
+        @test m.offset == 0.375
+        g = collect(m.gauge)
+        exp_L, exp_Q, exp_c = exact_mapped_oracle(L, Q, 0.375, src_dom, dst_dom, g)
+        @test conditioned_constant(ws; map=m) == exp_c
+        for i in 1:4
+            @test effective_field(ws, labels[i]; map=m) == exp_L[i]
+            couplings = Dict(incident_couplings(ws, labels[i]; map=m))
+            for j in 1:4
+                i == j && continue
+                expected_q = exp_Q[min(i,j), max(i,j)]
+                if iszero(expected_q)
+                    @test !haskey(couplings, labels[j])
+                else
+                    @test couplings[labels[j]] == expected_q
+                end
+            end
+        end
+        for x in states(4, src_dom)
+            y = map_state(m, x)
+            @test lift_state(m, y) == x
+            for i in 1:4
+                @test map_value(m, labels[i], x[i]) == y[i]
+                @test lift_value(m, labels[i], y[i]) == x[i]
+            end
+            @test reference(exp_L, exp_Q, scale, exp_c, y, R) ==
+                  reference(L, Q, scale, 0.375, x, R)
+        end
+        # Check conditioned export + lifting in mapped coordinates.
+        root = checkpoint(ws)
+        low_src = src_dom === :bool ? 0 : -1
+        assume!(ws, labels[2], low_src)
+        propagate!(ws; map=m)
+        res = materialize(ws, m; coefficient_type=R)
+        out = export_model(res)
+        @test QT.domain(out) == (dst_dom === :bool ? QT.BoolDomain : QT.SpinDomain)
+        @test QT.sense(out) == (sense === :min ? QT.Min : QT.Max)
+        free = [i for i in 1:4 if ws._state.fixed[i] == 2]
+        @test QT.variables(out) == labels[free]
+        for y_free in states(length(free), dst_dom)
+            rec = reconstruct(res, y_free)
+            energy = R(QT.offset(out))
+            for j in eachindex(y_free)
+                energy += R(linear(out)[j]) * y_free[j]
+                for k in j+1:length(y_free)
+                    energy += R(quadratic(out)[j,k]) * y_free[j] * y_free[k]
+                end
+            end
+            energy *= R(QT.scale(out))
+            @test energy == reference(L, Q, scale, 0.375, rec.state, R)
+        end
+        rollback!(ws, root)
+        @test conditioned_constant(ws; map=m) == exp_c
+    end
+end
+
+@testset "floating cast abstention, exact fallback and subnormal/overflow bounds" begin
+    R = Rational{BigInt}
+    # 1. Accumulation during bool -> spin: h_1 = 1/2 + 2^-54 rounds in Float64.
+    m_acc = fixture([:x, :y], [1.0, 0.0], [0.0 2.0^-52; 0.0 0.0]; domain=:bool)
+    ws_acc = Workspace(m_acc)
+    spin_map = domain_map(ws_acc; domain=:spin)
+    @test effective_field(ws_acc, :x; map=spin_map) == 1//2 + big(1)//big(2)^54
+    @test_throws ArgumentError materialize(ws_acc, spin_map)
+    exact_res = materialize(ws_acc, spin_map; coefficient_type=R)
+    @test linear(export_model(exact_res))[1] == 1//2 + big(1)//big(2)^54
+
+    # 2. Subnormal underflow during bool -> spin: b_12 = nextfloat(0.0) => J_12 = b_12/4 underflows Float64.
+    tiny = nextfloat(0.0)
+    m_sub = fixture([:x, :y], [0.0, 0.0], [0.0 tiny; 0.0 0.0]; domain=:bool)
+    ws_sub = Workspace(m_sub)
+    sub_map = domain_map(ws_sub; domain=:spin)
+    @test Float64(tiny / 4) == 0.0
+    @test_throws ArgumentError materialize(ws_sub, sub_map)
+    sub_exact = export_model(materialize(ws_sub, sub_map; coefficient_type=R))
+    @test quadratic(sub_exact)[1,2] == R(tiny) // 4
+
+    # 3. Overflow during spin -> bool: J_12 = floatmax(Float64)/2 => b_12 = 4*J_12 overflows Float64.
+    big_val = floatmax(Float64) / 2
+    m_ovf = fixture([:x, :y], [0.0, 0.0], [0.0 big_val; 0.0 0.0]; domain=:spin)
+    ws_ovf = Workspace(m_ovf)
+    bool_map = domain_map(ws_ovf; domain=:bool)
+    @test_throws ArgumentError materialize(ws_ovf, bool_map)
+    ovf_exact = export_model(materialize(ws_ovf, bool_map; coefficient_type=R))
+    @test quadratic(ovf_exact)[1,2] == 4 * R(big_val)
+
+    # 4. Mapped dominance witness handles subnormal underflow and exact fallback.
+    m_dom = fixture([:x, :y], [tiny, 0.0], [0.0 tiny; 0.0 0.0]; domain=:bool)
+    ws_dom = Workspace(m_dom)
+    dmap = domain_map(ws_dom; domain=:spin, gauge=[-1, 1])
+    @test prove_dominance(ws_dom, :x; map=dmap, max_exact_work=0).stop_reason === :verification_limit
+    attempt = prove_dominance(ws_dom, :x; map=dmap)
+    @test attempt.stop_reason === :proved
+    @test attempt.method === :exact
+    @test only(attempt.certificate.steps).value == 0
+    @test verify_certificate(ws_dom, attempt.certificate; map=dmap).valid
+    for bmap in (domain_map(ws_dom; domain=:bool), domain_map(ws_dom; domain=:bool, gauge=[-1, 1]))
+        att_b = prove_dominance(ws_dom, :x; map=bmap)
+        @test att_b.stop_reason === :proved
+        @test att_b.method === :exact
+        @test only(att_b.certificate.steps).value == 0
+        @test verify_certificate(ws_dom, att_b.certificate; map=bmap).valid
+    end
+end
+
+@testset "domain-transported proof verification and rejection of wrong gauge, stale map or ordering" begin
+    labels = [:x, :y, :z]
+    L = [3.0, 1.0, 0.0]
+    Q = [0.0 -2.0 0.0; 0.0 0.0 0.5; 0.0 0.0 0.0]
+    model = fixture(labels, L, Q; domain=:bool, offset=0.25)
+    ws = Workspace(model; rules=:dominance)
+    smap = domain_map(ws; domain=:spin, gauge=[-1, 1, -1])
+    bmap_g = domain_map(ws; domain=:bool, gauge=[-1, 1, -1])
+    bmap_id = domain_map(ws; domain=:bool)
+
+    attempt = prove_dominance(ws, :x; map=smap)
+    @test attempt.stop_reason === :proved
+    cert_spin = attempt.certificate
+    @test verify_certificate(ws, cert_spin).valid
+    @test verify_certificate(ws, cert_spin; map=smap).valid
+
+    # Transport certificate across domain and gauge representations.
+    cert_bool_g = transport_certificate(ws, cert_spin, bmap_g)
+    @test verify_certificate(ws, cert_bool_g).valid
+    @test verify_certificate(ws, cert_bool_g; map=bmap_g).valid
+    cert_bool_id = transport_certificate(ws, cert_bool_g, bmap_id)
+    @test verify_certificate(ws, cert_bool_id).valid
+    @test verify_certificate(ws, cert_bool_id; map=bmap_id).valid
+
+    # Reject wrong gauge or wrong domain map.
+    wrong_gauge = domain_map(ws; domain=:spin, gauge=[1, 1, -1])
+    @test verify_certificate(ws, cert_spin; map=wrong_gauge).stop_reason === :invalid_gauge
+    @test verify_certificate(ws, cert_spin; map=bmap_g).stop_reason === :invalid_map
+    raw_cert = prove_dominance(ws, :x).certificate
+    @test verify_certificate(ws, raw_cert; map=smap).stop_reason === :invalid_map
+    @test verify_certificate(ws, raw_cert; map=bmap_g).stop_reason === :invalid_gauge
+
+    # Tampered gauge inside certificate map is rejected by polynomial verification.
+    forged_map = DomainGaugeMap(smap.generation, smap.source_domain, smap.target_domain,
+        smap.sense, smap.scale, smap.offset, (1, 1, -1), smap._label_map, smap._source)
+    forged_cert = DominanceCertificate(cert_spin.generation, cert_spin._scope_checkpoint,
+        cert_spin.assumptions, cert_spin.steps, cert_spin._source, forged_map)
+    @test verify_certificate(ws, forged_cert).stop_reason === :invalid_bound
+
+    # Mismatched variable ordering / labels or stale generation is rejected.
+    reordered = Workspace(fixture([:y, :x, :z], L, Q; domain=:bool, offset=0.25))
+    reordered_map = DomainGaugeMap(generation(ws), :bool, :spin, :min, 1.0, 0.25,
+        (-1, 1, -1), reordered._state.labels, reordered._snapshot)
+    @test_throws ArgumentError prove_dominance(ws, :x; map=reordered_map)
+    @test_throws ArgumentError transport_certificate(ws, cert_spin, reordered_map)
+    @test verify_certificate(ws, cert_spin; map=reordered_map).stop_reason === :different_source
+
+    other_ws = Workspace(model; rules=:dominance)
+    other_map = domain_map(other_ws; domain=:spin, gauge=[-1, 1, -1])
+    @test_throws ArgumentError prove_dominance(ws, :x; map=other_map)
+    @test_throws ArgumentError propagate!(ws; map=other_map)
+    @test_throws ArgumentError materialize(ws, other_map)
+    @test verify_certificate(ws, cert_spin; map=other_map).stop_reason === :stale_generation
+
+    # Direct DomainGaugeMap constructor enforces bijection and metadata invariants.
+    @test_throws ArgumentError DomainGaugeMap(smap.generation, smap.source_domain, smap.target_domain,
+        smap.sense, smap.scale, smap.offset, (0, 1, -1), smap._label_map, smap._source)
+    @test_throws ArgumentError DomainGaugeMap(smap.generation, :spin, smap.target_domain,
+        smap.sense, smap.scale, smap.offset, (-1, 1, -1), smap._label_map, smap._source)
+    @test_throws ArgumentError DomainGaugeMap(smap.generation, smap.source_domain, :ising,
+        smap.sense, smap.scale, smap.offset, (-1, 1, -1), smap._label_map, smap._source)
+    @test_throws ArgumentError DomainGaugeMap(smap.generation, smap.source_domain, smap.target_domain,
+        smap.sense, smap.scale, smap.offset, (-1, 1, -1), Dict{Any,Int}(:x => 2, :y => 1, :z => 3), smap._source)
+
+    # Post-construction mutation of _label_map is caught at export boundaries.
+    mutated_map = domain_map(ws; domain=:spin, gauge=[-1, 1, -1])
+    mutated_map._label_map[:x] = 2
+    @test_throws ArgumentError materialize(ws, mutated_map)
+    @test_throws ArgumentError prove_dominance(ws, :x; map=mutated_map)
+    @test_throws ArgumentError export_certificate(ws; map=mutated_map)
+    @test_throws ArgumentError transport_certificate(ws, cert_spin, mutated_map)
+
+    # Unvalidated forged map with invalid gauge is rejected at both workspace and verifier boundaries.
+    unvalidated_zero_gauge = DomainGaugeMap(smap.generation, smap.source_domain, smap.target_domain,
+        smap.sense, smap.scale, smap.offset, (0, 1, -1), smap._label_map, smap._source;
+        _allow_unvalidated=true)
+    @test_throws ArgumentError materialize(ws, unvalidated_zero_gauge)
+    @test_throws ArgumentError effective_field(ws, :x; map=unvalidated_zero_gauge)
+    @test verify_certificate(ws, cert_spin; map=unvalidated_zero_gauge).stop_reason === :invalid_gauge
+
+    # Direct DomainGaugeMap constructor derives _root_bool_constant internally and cannot be forged.
+    ws_fx = Workspace(fixture([:x], [2.0], zeros(1, 1); domain=:bool))
+    direct_bmap = DomainGaugeMap(generation(ws_fx), :bool, :bool, :min, 1.0, 0.0, (-1,),
+        Dict{Any,Int}(:x => 1), ws_fx._snapshot)
+    @test conditioned_constant(ws_fx; map=direct_bmap) == 2
+    res_fx = materialize(ws_fx, direct_bmap)
+    @test res_fx.status === :certified
+    @test QT.offset(export_model(res_fx)) == 2.0
+    @test reconstruct(res_fx, [0]).state == [1]
+    @test reconstruct(res_fx, [0]).energy.value == 2.0
+    @test_throws MethodError DomainGaugeMap(generation(ws_fx), :bool, :bool, :min, 1.0, 0.0, (-1,),
+        Dict{Any,Int}(:x => 1), ws_fx._snapshot; _root_bool_constant=Rational{BigInt}(100))
+
+    # Multi-step cascade export and verification in mapped coordinates (both spin and binary).
+    root = checkpoint(ws)
+    assume!(ws, :z, 1)
+    att_scoped = prove_dominance(ws, :x; map=smap)
+    @test att_scoped.stop_reason === :proved
+    @test verify_certificate(ws, att_scoped.certificate; map=smap).valid
+    propagate!(ws; map=smap)
+    casc_cert = export_certificate(ws; map=smap)
+    @test length(casc_cert.steps) == 2
+    @test verify_certificate(ws, casc_cert; map=smap).valid
+    casc_bool_id = export_certificate(ws; map=bmap_id)
+    @test verify_certificate(ws, casc_bool_id; map=bmap_id).valid
+    casc_bool_g = export_certificate(ws; map=bmap_g)
+    @test verify_certificate(ws, casc_bool_g; map=bmap_g).valid
+    rollback!(ws, root)
+    @test verify_certificate(ws, casc_cert; map=smap).stop_reason === :stale_scope
+
+    # Spin-source mapped certificate verification and quadratic fixed-pair substitution.
+    ws_spin_src = Workspace(fixture(labels, [3.0, 0.5, 0.5], Q; domain=:spin, offset=0.25); rules=:dominance)
+    spin_src_bmap = domain_map(ws_spin_src; domain=:bool, gauge=[-1, 1, -1])
+    cp_s1 = checkpoint(ws_spin_src)
+    assume!(ws_spin_src, :y, -1)
+    cp_s2 = checkpoint(ws_spin_src)
+    assume!(ws_spin_src, :z, 1)
+    @test conditioned_constant(ws_spin_src; map=spin_src_bmap) == QUBOPreprocessing._direct_mapped_constant(ws_spin_src, spin_src_bmap)
+    rollback!(ws_spin_src, cp_s2)
+    assume!(ws_spin_src, :z, -1)
+    @test conditioned_constant(ws_spin_src; map=spin_src_bmap) == QUBOPreprocessing._direct_mapped_constant(ws_spin_src, spin_src_bmap)
+    att_spin_src = prove_dominance(ws_spin_src, :x; map=spin_src_bmap)
+    @test att_spin_src.stop_reason === :proved
+    @test verify_certificate(ws_spin_src, att_spin_src.certificate; map=spin_src_bmap).valid
+    rollback!(ws_spin_src, cp_s1)
+
+    # Invalid domain/gauge construction refusals.
+    @test_throws ArgumentError materialize(ws; map=:invalid)
+    @test_throws ArgumentError domain_map(ws; domain=:ising)
+    @test_throws ArgumentError domain_map(ws; gauge=[1, -1])
+    @test_throws ArgumentError domain_map(ws; gauge=[1, 0, 1])
+    @test_throws ArgumentError domain_map(ws; gauge=[true, false, true])
+    @test_throws ArgumentError domain_map(ws; gauge=Dict(:unknown => -1))
+    @test_throws ArgumentError domain_map(ws; gauge=Dict(:x => 2))
+    @test_throws ArgumentError domain_map(ws; gauge=:invalid)
+    @test_throws ArgumentError map_value(smap, :unknown, 1)
+    @test_throws ArgumentError map_value(smap, :x, -1)
+    @test_throws ArgumentError lift_value(smap, :x, 0)
+    @test_throws ArgumentError map_state(smap, [1, 0])
+    @test_throws ArgumentError lift_state(smap, [1, -1])
+    @test_throws ArgumentError map_state(smap, :invalid)
+    @test_throws ArgumentError lift_state(smap, :invalid)
+end
+
+@testset "degree tracking, field separation and cross-domain dominance equivalence" begin
+    # Stored zero quadratic term in sparse storage must not inflate degree.
+    m = fixture([:a, :b, :c, :isolate], [2.5, -1.0, 0.5, 4.0], zeros(4, 4))
+    m.form = QT.Form{Float64}(4,
+        QT.SparseLinearForm{Float64}(SparseVector(4, [1, 2, 3, 4], [2.5, -1.0, 0.5, 4.0])),
+        QT.SparseQuadraticForm{Float64}(SparseMatrixCSC(4, 4, [1, 1, 2, 4, 5], [1, 1, 2, 3], [1.0, -0.5, 0.75, -0.0])))
+    ws = Workspace(m; rules=:dominance)
+    @test [degree(ws, v) for v in (:a, :b, :c, :isolate)] == [2, 2, 2, 0]
+    @test effective_field(ws, :isolate) == 4
+    @test isempty(incident_couplings(ws, :isolate))
+    root = checkpoint(ws)
+    assume!(ws, :a, 1)
+    @test [degree(ws, v) for v in (:a, :b, :c, :isolate)] == [0, 1, 1, 0]
+    @test_throws ArgumentError effective_field(ws, :a)
+    @test_throws ArgumentError incident_couplings(ws, :a)
+    assume!(ws, :b, 0)
+    @test [degree(ws, v) for v in (:a, :b, :c, :isolate)] == [0, 0, 0, 0]
+    unfix!(ws, :a)
+    @test [degree(ws, v) for v in (:a, :b, :c, :isolate)] == [1, 0, 1, 0]
+    reset!(ws, m)
+    @test [degree(ws, v) for v in (:a, :b, :c, :isolate)] == [2, 2, 2, 0]
+    cp = checkpoint(ws)
+    assume!(ws, :c, 1)
+    @test [degree(ws, v) for v in (:a, :b, :c, :isolate)] == [1, 1, 0, 0]
+    rollback!(ws, cp)
+    @test [degree(ws, v) for v in (:a, :b, :c, :isolate)] == [2, 2, 2, 0]
+
+    # Equivalent strict dominance across domains and gauges; tie cases abstain.
+    tie_bool = Workspace(fixture([:x, :y], [1.0, 0.0], [0.0 -1.0; 0.0 0.0]; domain=:bool); rules=:dominance)
+    tie_map = domain_map(tie_bool; domain=:spin, gauge=[-1, 1])
+    @test prove_dominance(tie_bool, :x).stop_reason === :not_strict
+    @test prove_dominance(tie_bool, :x; map=tie_map).stop_reason === :not_strict
+    @test propagate!(tie_bool; map=tie_map).deductions == 0
+end
+
+function mapped_local_cycle(ws, cp, m)
+    d0 = degree(ws, 2)
+    f0 = effective_field(ws, 2; map=m)
+    c0 = conditioned_constant(ws; map=m)
+    r = assume!(ws, 1, 1)
+    d1 = degree(ws, 2)
+    f1 = effective_field(ws, 2; map=m)
+    c1 = conditioned_constant(ws; map=m)
+    couplings = incident_couplings(ws, 2; map=m)
+    _, reason, _, visits, _, _ = QUBOPreprocessing._dominance_witness(ws, 2; map=m, max_work=4, max_exact_work=4)
+    p = propagate!(ws; map=m, max_work=16, max_exact_work=32)
+    rollback!(ws, cp)
+    return (r.edge_visits, reason, visits, p.deductions, length(couplings), d0, d1, f0 != f1, c0 == c1)
+end
+
+@testset "mapped local queries and updates do not scale with untouched graph" begin
+    small = Workspace(sparse_chain(10); rules=:dominance)
+    large = Workspace(sparse_chain(2000); rules=:dominance)
+    @test propagate!(small).deductions == propagate!(large).deductions == 0
+    cps, cpl = checkpoint(small), checkpoint(large)
+    for dom in (:spin, :bool), gauged in (false, true)
+        gs = gauged ? [iseven(i) ? -1 : 1 for i in 1:10] : nothing
+        gl = gauged ? [iseven(i) ? -1 : 1 for i in 1:2000] : nothing
+        ms = domain_map(small; domain=dom, gauge=gs)
+        ml = domain_map(large; domain=dom, gauge=gl)
+        for _ in 1:3
+            mapped_local_cycle(small, cps, ms)
+            mapped_local_cycle(large, cpl, ml)
+        end
+        res_s = mapped_local_cycle(small, cps, ms)
+        res_l = mapped_local_cycle(large, cpl, ml)
+        expected_c_unchanged = (dom === :bool && !gauged)
+        @test res_s == res_l == (1, :proved, 2, 1, 1, 2, 1, true, expected_c_unchanged)
+        bytes_s = @allocated mapped_local_cycle(small, cps, ms)
+        bytes_l = @allocated mapped_local_cycle(large, cpl, ml)
+        @test bytes_l <= bytes_s + 2048
+    end
+
+    # Pre-existing fixing history (5 fixings vs 1,000 fixings) must not make local queries scale with history length.
+    for i in 6:10
+        assume!(small, i, 0)
+    end
+    for i in 1001:2000
+        assume!(large, i, 0)
+    end
+    @test propagate!(small).deductions == propagate!(large).deductions == 0
+    cps_hist, cpl_hist = checkpoint(small), checkpoint(large)
+    for dom in (:spin, :bool), gauged in (false, true)
+        gs = gauged ? [iseven(i) ? -1 : 1 for i in 1:10] : nothing
+        gl = gauged ? [iseven(i) ? -1 : 1 for i in 1:2000] : nothing
+        ms = domain_map(small; domain=dom, gauge=gs)
+        ml = domain_map(large; domain=dom, gauge=gl)
+        for _ in 1:3
+            mapped_local_cycle(small, cps_hist, ms)
+            mapped_local_cycle(large, cpl_hist, ml)
+        end
+        res_s = mapped_local_cycle(small, cps_hist, ms)
+        res_l = mapped_local_cycle(large, cpl_hist, ml)
+        expected_c_unchanged = (dom === :bool && !gauged)
+        @test res_s == res_l == (1, :proved, 2, 1, 1, 2, 1, true, expected_c_unchanged)
+        bytes_s = @allocated mapped_local_cycle(small, cps_hist, ms)
+        bytes_l = @allocated mapped_local_cycle(large, cpl_hist, ml)
+        @test bytes_l <= bytes_s + 2048
+    end
+
+    # Binary and gauged certificate export scales linearly O(n+m+steps), not quadratically.
+    indep_n = 200
+    indep_m = QT.Model{Int,Float64,Int}(
+        Dict{Int,Float64}(i => (isodd(i) ? 2.0 : -3.0) for i in 1:indep_n),
+        Dict{Tuple{Int,Int},Float64}(); scale=1.0, offset=0.5, sense=:min, domain=:bool)
+    ws_indep = Workspace(indep_m; rules=:dominance)
+    @test propagate!(ws_indep).deductions == indep_n
+    bmap_indep = domain_map(ws_indep; domain=:bool, gauge=[isodd(i) ? -1 : 1 for i in 1:indep_n])
+    cert_indep = export_certificate(ws_indep; map=bmap_indep)
+    @test length(cert_indep.steps) == indep_n
+    @test verify_certificate(ws_indep, cert_indep; map=bmap_indep).valid
+end

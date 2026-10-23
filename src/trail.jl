@@ -6,6 +6,8 @@ const _Exact = Rational{BigInt}
 abstract type _ProofRecord end
 const _NeighborRecord = Tuple{Int,_Exact,_Exact,_Exact}
 
+_reserve!(a::Vector, sz::Int) = @static VERSION >= v"1.11.0-DEV" ? sizehint!(a, sz; shrink=false) : sizehint!(a, sz)
+
 struct _UndoFix
     serial::UInt64
     fix_depth::Int
@@ -15,6 +17,8 @@ struct _UndoFix
     fields::Vector{_NeighborRecord}
     queue_length::Int
     proof::Union{Nothing,_ProofRecord}
+    dual_constant::_Exact
+    dual_fields::Vector{Pair{Int,_Exact}}
 end
 
 struct _UndoQueue
@@ -51,4 +55,7 @@ mutable struct _Incremental
     total_candidates::Int
     total_edges::Int
     total_exact::Int
+    dual_fields::Vector{_Exact}
+    dual_constant::_Exact
+    degrees::Vector{Int}
 end

@@ -6,7 +6,11 @@ shows the complete loop; this reference explains what each update captures and
 which costs you need to budget.
 
 The workspace prepares signed sparse adjacency once and stores exact rational
-boundary fields and a constant. It retains the original domain, sense, scale
+boundary fields and constants for both binary and spin coordinates, plus per-variable
+free interaction degrees (`degree(ws, label)`). Stored zero quadratic entries do
+not inflate degrees, and linear fields (`effective_field(ws, label; map=...)`)
+are tracked separately from remaining nonzero interactions
+(`incident_couplings(ws, label; map=...)`). It retains the original domain, sense, scale
 and label order; no full QUBO–Ising casts occur during updates. Dense input is
 read once during initialization. `rules=:identity` has no inference;
 [dominance](dominance.md) separately records inferred values.
