@@ -339,11 +339,12 @@ end
 
     # Pre-existing fixing history (5 fixings vs 1,000 fixings) must not make local queries scale with history length.
     for i in 6:10
-        assume!(small, i, isodd(i) ? 1 : 0)
+        assume!(small, i, 0)
     end
     for i in 1001:2000
-        assume!(large, i, isodd(i) ? 1 : 0)
+        assume!(large, i, 0)
     end
+    @test propagate!(small).deductions == propagate!(large).deductions == 0
     cps_hist, cpl_hist = checkpoint(small), checkpoint(large)
     for dom in (:spin, :bool), gauged in (false, true)
         gs = gauged ? [iseven(i) ? -1 : 1 for i in 1:10] : nothing
