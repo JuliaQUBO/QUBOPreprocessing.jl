@@ -75,9 +75,18 @@ tag (`:strong` or `:weak`) queried with `persistency`:
   spin coordinates to ``-|h_u + \sum_{j \in \partial u} J_{uj} s_j|``) across all
   ``2^d`` boundary assignments of `neighbors`, with an exact argmin reconstruction
   `table` (`tie_break=:low` or `:high`) and exact quadratic polynomial deltas
-  (`constant_delta`, `linear_deltas`, `quadratic_deltas`). `unique_argmin` records
-  whether the minimizing value of ``u`` is strict on all boundary states. Higher-degree
-  variables are skipped/refused (`:degree_too_high`) with no higher-order truncation.
+  (`constant_delta`, `linear_deltas`, `quadratic_deltas`). For `d == 3`
+  (Boettcher–Davidheiser (2008) Section II Rule V Eq. (4) zero-field Ising
+  star–triangle reduction), ``u`` must have three distinct free neighbors with
+  nonzero couplings and an exact zero effective Ising field ``h_u = 0`` at the
+  moment of application so that spin-flip symmetry makes the local minimum an even
+  function of its three neighbors (pure constant + pair representation in Ising
+  coordinates, with zero cubic interaction ``\alpha_{123} = 0`` and zero neighbor
+  Ising field shifts). Nonzero cubic interactions are refused with
+  `:nonquadratic_elimination`, and nonzero center effective fields at `d == 3` are
+  refused with `:nonzero_field`. `unique_argmin` records whether the minimizing
+  value of ``u`` is strict on all boundary states. Higher-degree variables are
+  skipped/refused (`:degree_too_high`) with no higher-order truncation.
 - **`:optimum_preserving_restriction` (`DominanceStep`, `RelationStep`):**
   unary value fixing (`DominanceStep`) or signed pair contraction
   ``s_u = \sigma_{\text{orig}} s_v`` (`RelationStep`, proved via single-endpoint

@@ -150,3 +150,19 @@ println((
     dense_k5_candidates=rep_k5.candidates,
     dense_k5_edge_visits=rep_k5.edge_visits,
 ))
+
+# 4. Guarded zero-field degree-3 Ising star-triangle reduction (Boettcher-Davidheiser Rule V):
+#    On K_4 with zero field on vertex 1 and nonzero fields on vertices 2, 3, 4:
+#    - Default max_degree=2 eliminates 0 vertices (all degrees are 3).
+#    - Opt-in max_degree=3 eliminates vertex 1 via star-triangle reduction and cascades the rest!
+L_k4 = Dict(1 => 0.0, 2 => 0.25, 3 => -0.5, 4 => 0.75)
+Q_k4 = Dict((1, 2) => 1.0, (1, 3) => -1.5, (1, 4) => 2.0, (2, 3) => 0.5, (2, 4) => -0.75, (3, 4) => 1.25)
+m_k4 = QT.Model{Int,Float64,Int}(L_k4, Q_k4; domain=:spin, sense=:min)
+ws_k4 = Workspace(m_k4; rules=:elimination)
+@assert eliminate_low_degree!(ws_k4; max_degree=2).deductions == 0
+rep_k4 = eliminate_low_degree!(ws_k4; max_degree=3)
+@assert rep_k4.deductions == 4
+@assert verify_certificate(ws_k4, export_certificate(ws_k4)).valid
+rec_k4 = reconstruct(materialize(ws_k4; coefficient_type=R), Int[])
+@assert eval_exact(exact_coeffs(m_k4), rec_k4.state) == rec_k4.energy.value
+

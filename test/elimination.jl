@@ -297,8 +297,10 @@ end
 
     ws_dl = Workspace(m4; rules=:elimination)
     @test eliminate_low_degree!(ws_dl; deadline_ns=UInt64(0)).stop_reason === :deadline
-    @test_throws ArgumentError eliminate_low_degree!(ws_dl; max_degree=3)
+    @test_throws ArgumentError eliminate_low_degree!(ws_dl; max_degree=4)
     @test_throws ArgumentError eliminate_low_degree!(ws_dl; max_degree=-1)
+    @test_throws ArgumentError eliminate_low_degree!(ws_dl; max_fill=-1)
+    @test_throws ArgumentError eliminate_low_degree!(ws_dl; max_fill=true)
     @test_throws ArgumentError eliminate_low_degree!(ws_dl; tie_break=:none)
     @test_throws ArgumentError eliminate_low_degree!(Workspace(m4; rules=:identity); cascade_dominance=true)
 
@@ -489,4 +491,287 @@ end
     bytes_l = @allocated elim_cycle!(ws_large, cp_l)
     @test bytes_l <= bytes_s + 2048
 end
+
+@testset "guarded zero-field degree-3 Ising star-triangle reduction" begin
+    R = Rational{BigInt}
+
+    # 1. Exact 8-state boundary table & Boettcher-Davidheiser (2008) Rule V Eq. (4) identity
+    #    across bounded rational couplings, ties, existing triangle edges, cancellations,
+    #    both domains (:spin, :bool), senses (:min, :max), scales, tie_breaks and gauges:
+    star_cases = [
+        # (name, [J1, J2, J3], [h_w1, h_w2, h_w3], [J12_old, J13_old, J23_old])
+        (:generic_strict, R[3//2, -1//1, 5//4], R[1//2, -3//4, 1//4], R[0//1, 0//1, 0//1]),
+        (:symmetric_ferro, R[-1//1, -1//1, -1//1], R[1//4, -1//2, 3//4], R[1//2, -1//4, 0//1]),
+        (:tie_deg3, R[1//1, 1//1, 2//1], R[-1//2, 1//2, 0//1], R[0//1, 0//1, 0//1]),
+        (:dominant_branch_zero_pair, R[1//1, 1//1, 3//1], R[1//4, 1//4, -1//2], R[0//1, 0//1, 0//1]),
+        # Exact edge cancellation: for J1=J2=J3=-1 (min, scale>0), ΔJ_ab = -(3 - 1 - 1 + 1)/4 = -1/2,
+        # so setting J12_old = +1/2 cancels edge (w1, w2) completely!
+        (:exact_edge_cancellation, R[-1//1, -1//1, -1//1], R[1//2, -1//4, 0//1], R[1//2, 0//1, 0//1]),
+    ]
+    for (cname, J_u, h_w, J_tri) in star_cases,
+        domain in (:spin, :bool),
+        sense in (:min, :max),
+        scale in (1.25, -0.75),
+        tie_break in (:low, :high)
+
+        offset_val = 0.5
+        dir = (sense === :min ? 1 : -1) * (scale > 0 ? 1 : -1)
+        # Build 4-variable model on [:u, :w1, :w2, :w3] where :u has zero Ising field h_u == 0:
+        h_spin = R[0//1, h_w[1], h_w[2], h_w[3]]
+        J_spin = zeros(R, 4, 4)
+        J_spin[1, 2] = J_u[1]; J_spin[1, 3] = J_u[2]; J_spin[1, 4] = J_u[3]
+        J_spin[2, 3] = J_tri[1]; J_spin[2, 4] = J_tri[2]; J_spin[3, 4] = J_tri[3]
+        if domain === :spin
+            L_f = Float64.(h_spin)
+            Q_f = Float64.(J_spin)
+            c_f = offset_val
+        else
+            # Transform s_i = 2*x_i - 1 so Ising fields/couplings match (h_spin, J_spin) exactly:
+            L_r = zeros(R, 4)
+            Q_r = zeros(R, 4, 4)
+            c_r = R(offset_val)
+            for i in 1:4
+                L_r[i] += 2 * h_spin[i]
+                c_r -= h_spin[i]
+            end
+            for i in 1:4, j in (i+1):4
+                Q_r[i, j] = 4 * J_spin[i, j]
+                L_r[i] -= 2 * J_spin[i, j]
+                L_r[j] -= 2 * J_spin[i, j]
+                c_r += J_spin[i, j]
+            end
+            L_f = Float64.(L_r)
+            Q_f = Float64.(Q_r)
+            c_f = Float64(c_r)
+        end
+        m4 = fixture([:u, :w1, :w2, :w3], L_f, Q_f; scale, offset=c_f, domain, sense)
+        ws = Workspace(m4; rules=:elimination)
+        @test iszero(QUBOPreprocessing._spin_field(ws, 1))
+
+        # Boettcher-Davidheiser (2008) Rule V Eq. (4) expected Ising deltas:
+        eps0 = abs(J_u[1] + J_u[2] + J_u[3])
+        eps1 = abs(-J_u[1] + J_u[2] + J_u[3])
+        eps2 = abs(J_u[1] - J_u[2] + J_u[3])
+        eps3 = abs(J_u[1] + J_u[2] - J_u[3])
+        bd_const = -dir * (eps0 + eps1 + eps2 + eps3) // 4
+        bd_j12 = -dir * (eps0 - eps1 - eps2 + eps3) // 4
+        bd_j13 = -dir * (eps0 - eps1 + eps2 - eps3) // 4
+        bd_j23 = -dir * (eps0 + eps1 - eps2 - eps3) // 4
+
+        att = prove_elimination(ws, :u; max_degree=3, tie_break)
+        @test att.stop_reason === :proved
+        step = only(att.certificate.steps)
+        @test step isa EliminationStep
+        @test step.neighbors == (2, 3, 4)
+        has_tie = (eps0 == 0 || eps1 == 0 || eps2 == 0 || eps3 == 0)
+        @test step.unique_argmin == !has_tie
+        @test persistency(step) === (has_tie ? :weak : :strong)
+        if domain === :spin
+            @test isempty(step.linear_deltas)
+            @test step.constant_delta == bd_const
+            q_dict = Dict((a, b) => dq for (a, b, dq) in step.quadratic_deltas)
+            @test get(q_dict, (2, 3), R(0)) == bd_j12
+            @test get(q_dict, (2, 4), R(0)) == bd_j13
+            @test get(q_dict, (3, 4), R(0)) == bd_j23
+        end
+        @test verify_certificate(ws, att.certificate).valid
+        gmap = domain_map(ws; domain=(domain === :spin ? :bool : :spin), gauge=[-1, 1, -1, 1])
+        @test verify_certificate(ws, transport_certificate(ws, att.certificate, gmap); map=gmap).valid
+
+        # Apply via eliminate_variable!(ws, :u; max_degree=3, tie_break) and check all 8 boundary states:
+        rep = eliminate_variable!(ws, :u; max_degree=3, tie_break)
+        @test rep.stop_reason === :applied && rep.changed == 1
+        if cname === :exact_edge_cancellation && dir == 1
+            # Edge (w1, w2) was cancelled to 0, so w1 and w2 have degree 1 instead of 2!
+            @test degree(ws, :w1) == 1 && degree(ws, :w2) == 1 && degree(ws, :w3) == 2
+        end
+        res = materialize(ws; coefficient_type=R)
+        rmod = export_model(res)
+        @test QT.dimension(rmod) == 3
+        L_res = R[res._linear...]
+        Q_res = zeros(R, 3, 3)
+        for (i, j, q) in res._quadratic
+            Q_res[i, j] = R(q)
+        end
+        vals = domain === :bool ? (0, 1) : (-1, 1)
+        for v1 in vals, v2 in vals, v3 in vals
+            b_state = [v1, v2, v3]
+            e_red = reference(L_res, Q_res, R(res._scale), R(res._constant), b_state, R)
+            e_0 = reference(L_f, Q_f, scale, c_f, [vals[1], v1, v2, v3], R)
+            e_1 = reference(L_f, Q_f, scale, c_f, [vals[2], v1, v2, v3], R)
+            e_best = sense === :min ? min(e_0, e_1) : max(e_0, e_1)
+            @test e_red == e_best
+            rec = reconstruct(res, b_state)
+            @test rec.state[2:4] == b_state
+            @test reference(L_f, Q_f, scale, c_f, rec.state, R) == e_best
+        end
+    end
+
+    # 2. Nonzero-field degree-3 rejection, small floating fields, and tampered certificates:
+    Q_star = [0.0 1.0 1.0 1.0; 0.0 0.0 1.0 1.0; 0.0 0.0 0.0 1.0; 0.0 0.0 0.0 0.0]
+    for h_nz in (0.5, -0.25, 1e-16, -1e-15, nextfloat(0.0), -nextfloat(0.0))
+        ws_nz = Workspace(fixture([:u, :w1, :w2, :w3], [h_nz, 0.25, -0.5, 0.75], Q_star; domain=:spin); rules=:elimination)
+        @test !iszero(QUBOPreprocessing._spin_field(ws_nz, 1))
+        @test prove_elimination(ws_nz, :u; max_degree=3).stop_reason === :nonquadratic_elimination
+        @test eliminate_variable!(ws_nz, :u; max_degree=3).stop_reason === :nonquadratic_elimination
+        # eliminate_low_degree! skips nonzero-field degree-3 vertices in O(1) with 0 edge/exact work:
+        rep_nz = eliminate_low_degree!(ws_nz; max_degree=3)
+        @test rep_nz.stop_reason === :quiescent && rep_nz.deductions == 0 && rep_nz.exact_work == 0
+    end
+    # Nonzero field where |h_u| >= |J1|+|J2|+|J3| or |J3| >= |J1|+|J2|+|h_u| (so alpha_123 == 0) is rejected with :nonzero_field:
+    for (L_dom, Q_dom) in (
+        ([5.0, 0.0, 0.0, 0.0], Q_star),
+        ([0.5, 0.0, 0.0, 0.0], [0.0 1.0 1.0 3.0; 0.0 0.0 0.0 0.0; 0.0 0.0 0.0 0.0; 0.0 0.0 0.0 0.0]),
+    )
+        ws_dom = Workspace(fixture([:u, :w1, :w2, :w3], L_dom, Q_dom; domain=:spin); rules=:elimination)
+        @test prove_elimination(ws_dom, :u; max_degree=3).stop_reason === :nonzero_field
+        @test eliminate_variable!(ws_dom, :u; max_degree=3).stop_reason === :nonzero_field
+        # Forged EliminationStep on a nonzero-field degree-3 vertex is rejected by verify_certificate:
+        forged_step = EliminationStep(1, (2, 3, 4), (-1, -1, -1, -1, -1, -1, -1, -1),
+                                      R(-5), (), (), R(0), 0, 0, true)
+        forged_cert = QUBOPreprocessing.DominanceCertificate(
+            generation(ws_dom), checkpoint(ws_dom), (), (forged_step,), ws_dom._snapshot,
+        )
+        @test verify_certificate(ws_dom, forged_cert).stop_reason === :invalid_bound
+    end
+    # Forged EliminationStep with zero-coupling neighbor or zero delta in linear_deltas/quadratic_deltas is rejected:
+    ws_z = Workspace(fixture([:u, :w1, :w2, :w3], zeros(4), [0.0 1.0 1.0 0.0; 0.0 0.0 0.0 0.0; 0.0 0.0 0.0 0.0; 0.0 0.0 0.0 0.0]; domain=:spin))
+    forged_zero_nbr = EliminationStep(1, (2, 3, 4), (-1, -1, -1, -1, -1, -1, -1, -1), R(0), (), (), R(0), 0, 0, false)
+    @test verify_certificate(ws_z, QUBOPreprocessing.DominanceCertificate(generation(ws_z), checkpoint(ws_z), (), (forged_zero_nbr,), ws_z._snapshot)).stop_reason === :invalid_step
+    ws_ok3 = Workspace(fixture([:u, :w1, :w2, :w3], zeros(4), Q_star; domain=:spin))
+    valid_s3 = only(prove_elimination(ws_ok3, :u; max_degree=3).certificate.steps)
+    forged_zlin = EliminationStep(1, (2, 3, 4), valid_s3.table, valid_s3.constant_delta, (2 => R(0),), valid_s3.quadratic_deltas, valid_s3.constant, 0, 0, true)
+    @test verify_certificate(ws_ok3, QUBOPreprocessing.DominanceCertificate(generation(ws_ok3), checkpoint(ws_ok3), (), (forged_zlin,), ws_ok3._snapshot)).stop_reason === :invalid_step
+    forged_zquad = EliminationStep(1, (2, 3, 4), valid_s3.table, valid_s3.constant_delta, (), ((2, 3, R(0)),), valid_s3.constant, 0, 0, true)
+    @test verify_certificate(ws_ok3, QUBOPreprocessing.DominanceCertificate(generation(ws_ok3), checkpoint(ws_ok3), (), (forged_zquad,), ws_ok3._snapshot)).stop_reason === :invalid_step
+
+    # 3. Conditioning can create or cancel a center field on a degree-4 -> degree-3 vertex:
+    Q_deg4 = zeros(5, 5)
+    Q_deg4[1, 2] = 1.0; Q_deg4[1, 3] = -1.5; Q_deg4[1, 4] = 2.0; Q_deg4[1, 5] = 0.75
+    ws_cond = Workspace(fixture([:u, :w1, :w2, :w3, :w4], [0.0, 0.25, -0.5, 0.75, 0.0], Q_deg4; domain=:spin); rules=:elimination)
+    @test degree(ws_cond, :u) == 4
+    @test prove_elimination(ws_cond, :u; max_degree=3).stop_reason === :degree_too_high
+    cp_root4 = checkpoint(ws_cond)
+    # Assuming :w4 = 1 drops :u to degree 3, but creates effective field h_u = +0.75 != 0, invalidating eligibility!
+    assume!(ws_cond, :w4, 1)
+    @test degree(ws_cond, :u) == 3
+    @test !iszero(QUBOPreprocessing._spin_field(ws_cond, 1))
+    @test prove_elimination(ws_cond, :u; max_degree=3).stop_reason === :nonquadratic_elimination
+    @test eliminate_low_degree!(ws_cond; max_degree=3, max_deductions=1).deductions == 1 # eliminates degree-1 :w1, skips :u!
+    @test ws_cond._state.fixed[1] == 2 # :u was NOT eliminated at degree 3!
+    rollback!(ws_cond, cp_root4)
+    @test degree(ws_cond, :u) == 4
+
+    # Conversely, if initial h_u = -0.75, assuming :w4 = 1 cancels the field of :u to 0 and unlocks degree-3 elimination!
+    ws_cancel = Workspace(fixture([:u, :w1, :w2, :w3, :w4], [-0.75, 0.25, -0.5, 0.75, 0.0], Q_deg4; domain=:spin); rules=:elimination)
+    assume!(ws_cancel, :w4, 1)
+    @test degree(ws_cancel, :u) == 3 && iszero(QUBOPreprocessing._spin_field(ws_cancel, 1))
+    @test prove_elimination(ws_cancel, :u; max_degree=3).stop_reason === :proved
+    @test eliminate_variable!(ws_cancel, :u; max_degree=3).stop_reason === :applied
+    @test eliminate_low_degree!(ws_cancel; max_degree=2).deductions == 3
+    @test verify_certificate(ws_cancel, export_certificate(ws_cancel)).valid
+
+    # 4. Composition of relations, star-triangle (degree 3) and degree <= 2 eliminations:
+    #    Start with a 5-vertex graph where :r1 and :r2 are strongly equivalent (J_{r1,r2} = -5.0),
+    #    both coupled to zero-field :u, which is also coupled to :w1 and :w2 (and w1-w2-u have couplings).
+    #    Initially :u has degree 3 (neighbors :r1, :w1, :w2) and zero field, plus :r1=:r2 contracts first!
+    L_comp = [0.0, 0.0, 0.0, 0.5, -0.75]
+    Q_comp = [
+        0.0 -5.0  1.0  1.0  0.0; # :r1
+        0.0  0.0  1.0  0.0  1.0; # :r2
+        0.0  0.0  0.0 -1.5  2.0; # :u (zero field, neighbors :r1, :r2, :w1, :w2 -> degree 4 initially!)
+        0.0  0.0  0.0  0.0 -0.5; # :w1
+        0.0  0.0  0.0  0.0  0.0  # :w2
+    ]
+    m_comp = fixture([:r1, :r2, :u, :w1, :w2], L_comp, Q_comp; domain=:spin)
+    ws_comp = Workspace(m_comp; rules=:relations)
+    @test degree(ws_comp, :u) == 4
+    # Contracting relations merges :r1 and :r2, dropping :u from degree 4 to degree 3 with h_u == 0!
+    rep_rel = contract_relations!(ws_comp)
+    @test rep_rel.deductions >= 1
+    @test degree(ws_comp, :u) == 3 && iszero(QUBOPreprocessing._spin_field(ws_comp, 3))
+    # Now eliminate_low_degree!(ws_comp; max_degree=3) eliminates :u (degree 3) and cascades the rest to 0 variables!
+    rep_el3 = eliminate_low_degree!(ws_comp; max_degree=3)
+    @test rep_el3.stop_reason === :quiescent
+    @test QT.dimension(export_model(materialize(ws_comp))) == 0
+    @test verify_certificate(ws_comp, export_certificate(ws_comp)).valid
+    rec_comp = reconstruct(materialize(ws_comp; coefficient_type=R), Int[])
+    # Check against brute force over all 32 states:
+    best_comp = minimum(reference(L_comp, Q_comp, 1.0, 0.0, [s1, s2, s3, s4, s5], R)
+                        for s1 in (-1, 1), s2 in (-1, 1), s3 in (-1, 1), s4 in (-1, 1), s5 in (-1, 1))
+    @test reference(L_comp, Q_comp, 1.0, 0.0, rec_comp.state, R) == best_comp
+
+    # 5. Progressive max_degree (0 -> 1 -> 2 -> 3) and progressive max_fill (0 -> 1 -> 2 -> 3) with rollback:
+    #    - K_4 with zero field on vertex 1: all 3 neighbor pairs (2,3), (2,4), (3,4) ALREADY exist, so actual_fill == 0!
+    Q_k4 = [0.0 1.0 -1.5 2.0; 0.0 0.0 0.5 -0.75; 0.0 0.0 0.0 1.25; 0.0 0.0 0.0 0.0]
+    ws_k4 = Workspace(fixture([:u, :w1, :w2, :w3], [0.0, 0.25, -0.5, 0.75], Q_k4; domain=:spin); rules=:elimination)
+    @test eliminate_low_degree!(ws_k4; max_degree=2).deductions == 0
+    # Even with max_fill=0, :u on K_4 introduces 0 new fill edges, so it IS eliminated and cascades!
+    @test eliminate_low_degree!(ws_k4; max_degree=3, max_fill=0).deductions == 4
+    @test verify_certificate(ws_k4, export_certificate(ws_k4)).valid
+
+    #    - Star on 4 vertices (no existing triangle edges) with J = [1, 1, 3] (actual_fill == 2 because ΔJ_12 == 0)
+    #      and J = [1, 1, 1] (actual_fill == 3):
+    Q_star2 = [0.0 1.0 1.0 3.0; 0.0 0.0 0.0 0.0; 0.0 0.0 0.0 0.0; 0.0 0.0 0.0 0.0]
+    ws_fill = Workspace(fixture([:u, :w1, :w2, :w3], [0.0, 0.25, -0.5, 0.75], Q_star2; domain=:spin); rules=:elimination)
+    # Eliminate leaves :w1, :w2, :w3? Wait: in Q_star2, :w1, :w2, :w3 have degree 1!
+    # To make :w1, :w2, :w3 have degree >= 4 so only :u has degree 3, attach :w1, :w2, :w3 to a K_5 core!
+    L_sc = zeros(8)
+    L_sc[2:8] .= [0.25, -0.5, 0.75, 0.1, -0.2, 0.3, -0.4]
+    Q_sc = zeros(8, 8)
+    Q_sc[1, 2] = 1.0; Q_sc[1, 3] = 1.0; Q_sc[1, 4] = 3.0 # :u has degree 3, actual_fill == 2 ((2,4) and (3,4))
+    for i in 2:4, j in 5:8
+        Q_sc[i, j] = 0.5 * ((i + j) % 2 == 0 ? 1 : -1)
+    end
+    for i in 5:8, j in (i+1):8
+        Q_sc[i, j] = 1.0
+    end
+    ws_sc = Workspace(fixture([Symbol("v$i") for i in 1:8], L_sc, Q_sc; domain=:spin); rules=:elimination)
+    @test degree(ws_sc, :v1) == 3 && all(i -> degree(ws_sc, Symbol("v$i")) >= 4, 2:8)
+    @test eliminate_low_degree!(ws_sc; max_degree=3, max_fill=0).deductions == 0
+    @test eliminate_low_degree!(ws_sc; max_degree=3, max_fill=1).deductions == 0
+    cp_sc1 = checkpoint(ws_sc)
+    # Check max_work=0 and expired deadline_ns before deferred re-queue:
+    rep_sc_w0 = eliminate_low_degree!(ws_sc; max_degree=3, max_fill=2, max_work=0)
+    @test rep_sc_w0.stop_reason === :work_limit && rep_sc_w0.pending == 1 && checkpoint(ws_sc) == cp_sc1
+    rep_sc_dl = eliminate_low_degree!(ws_sc; max_degree=3, max_fill=2, deadline_ns=UInt64(1))
+    @test rep_sc_dl.stop_reason === :deadline && rep_sc_dl.pending == 1 && checkpoint(ws_sc) == cp_sc1
+    # Now with max_fill=2, :v1 IS re-queued and eliminated!
+    rep_sc2 = eliminate_low_degree!(ws_sc; max_degree=3, max_fill=2)
+    @test rep_sc2.stop_reason === :quiescent && rep_sc2.deductions == 1
+    @test verify_certificate(ws_sc, export_certificate(ws_sc)).valid
+    # Rollback to cp_sc1 undoes both the elimination and the deferred re-queue:
+    rollback!(ws_sc, cp_sc1)
+    @test degree(ws_sc, :v1) == 3
+    @test eliminate_low_degree!(ws_sc; max_degree=3, max_fill=1).deductions == 0
+    @test eliminate_low_degree!(ws_sc; max_degree=3, max_fill=2).deductions == 1
+    rollback!(ws_sc, cp_sc1)
+
+    # Also test duplicate entries in elim_queues[4][1:(elim_heads[4]-1)] (popped at max_fill=0,
+    # re-queued when a degree-2 subdivision vertex on one leg is eliminated, popped again at max_fill=0,
+    # and deduplicated by _count_deferred_elim):
+    L_dup = zeros(9)
+    L_dup[2:9] .= 0.25
+    L_dup[9] = 0.0 # degree-2 vertex :v9 between :v1 and :v2
+    Q_dup = zeros(9, 9)
+    Q_dup[1, 9] = 1.0; Q_dup[2, 9] = 1.0; Q_dup[1, 3] = 1.0; Q_dup[1, 4] = 1.0
+    for i in 2:4, j in 5:8
+        Q_dup[i, j] = 0.5
+    end
+    for i in 5:8, j in (i+1):8
+        Q_dup[i, j] = 1.0
+    end
+    ws_dup = Workspace(fixture([Symbol("v$i") for i in 1:9], L_dup, Q_dup; domain=:spin); rules=:elimination)
+    # First run with max_degree=3, max_fill=0: :v9 (deg 2, fill 1) and :v1 (deg 3, fill 3) are both popped with blocked_fill > 0:
+    @test eliminate_low_degree!(ws_dup; max_degree=3, max_fill=0).deductions == 0
+    # Now eliminate :v9 via max_degree=2, max_fill=1: this touches :v1 (keeping :v1 at degree 3!) and pushes :v1 to elim_queues[4] a 2nd time!
+    @test eliminate_low_degree!(ws_dup; max_degree=2, max_fill=1).deductions == 1
+    # Pop :v1 a 2nd time with max_fill=0:
+    @test eliminate_low_degree!(ws_dup; max_degree=3, max_fill=0).deductions == 0
+    # Now :v1 appears twice in elim_queues[4][1:(elim_heads[4]-1)]; check deduplicated pending == 1 and re-queue with max_fill=3:
+    @test eliminate_low_degree!(ws_dup; max_degree=3, max_fill=3, max_work=0).pending == 1
+    @test eliminate_low_degree!(ws_dup; max_degree=3, max_fill=3).deductions == 1
+    @test verify_certificate(ws_dup, export_certificate(ws_dup)).valid
+end
+
 

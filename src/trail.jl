@@ -50,7 +50,7 @@ struct _UndoQueue
     index::Int
     head::Int
     queued::Bool
-    bucket::Int8 # 0 for dominance queue, 1..4 for degree-(bucket-1) elim_queues, -1 for rel_queue pop, -2 for rel_queue requeue
+    bucket::Int8 # 0 for dominance queue, 1..4 for elim_queues pop, 5..8 for elim_queues requeue, -1 for rel_queue pop, -2 for rel_queue requeue
     blocked_fill::Int
     checked_weak::Bool
 end
@@ -94,6 +94,7 @@ mutable struct _Incremental
     elim_queues::NTuple{4,Vector{Int}}
     elim_queued::NTuple{4,BitVector}
     elim_heads::Vector{Int}
+    elim_blocked_fill::NTuple{4,Vector{Int}}
     rel_queue::Vector{Int}
     rel_queued::BitVector
     rel_head::Int

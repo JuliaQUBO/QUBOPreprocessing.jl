@@ -698,6 +698,8 @@ function _elimination_witness(ws::Workspace, u::Int;
     if d == 3
         alpha_123 = phi[8] - phi[4] - phi[6] - phi[7] + phi[2] + phi[3] + phi[5] - phi[1]
         iszero(alpha_123) || return (nothing, :nonquadratic_elimination, :exact, visits, exact_work)
+        h_u = is_bool ? (f_u // 2 + (couplings[1] + couplings[2] + couplings[3]) // 4) : f_u
+        iszero(h_u) || return (nothing, :nonzero_field, :exact, visits, exact_work)
     end
     alpha_0 = phi[1]
     alpha_lin = Vector{_Exact}(undef, d)
@@ -1237,8 +1239,10 @@ Prove an exact bounded-degree (`0 <= degree(ws, label) <= max_degree`) local
 variable elimination without mutating `ws`. By default (`max_degree=2`), only
 isolated, leaf and degree-two variables are eligible; higher-degree variables
 are refused with `:degree_too_high`. When `max_degree=3` is explicitly requested,
+guarded zero-field degree-three Ising star–triangle reduction is enabled:
 degree-3 variables whose exact marginal has a nonzero cubic interaction are
-refused with `:nonquadratic_elimination`.
+refused with `:nonquadratic_elimination`, and degree-3 variables with a nonzero
+effective Ising field are refused with `:nonzero_field`.
 """
 function prove_elimination(ws::Workspace, label;
                            map::Union{Nothing,DomainGaugeMap}=nothing,
@@ -1485,13 +1489,13 @@ function _verify_elimination_step(
     length(step.table) == num_states && all(v -> v in (low_orig, 1), step.table) ||
         return (false, :invalid_value, 0)
     seen_lin = Set{Int}()
-    for (w, _) in step.linear_deltas
-        (w in step.neighbors && !(w in seen_lin)) || return (false, :invalid_step, 0)
+    for (w, df) in step.linear_deltas
+        (!iszero(df) && (w in step.neighbors) && !(w in seen_lin)) || return (false, :invalid_step, 0)
         push!(seen_lin, w)
     end
     seen_quad = Set{Tuple{Int,Int}}()
-    for (a, b, _) in step.quadratic_deltas
-        (a < b && (a in step.neighbors) && (b in step.neighbors) && !((a, b) in seen_quad)) ||
+    for (a, b, dq) in step.quadratic_deltas
+        (!iszero(dq) && a < b && (a in step.neighbors) && (b in step.neighbors) && !((a, b) in seen_quad)) ||
             return (false, :invalid_step, 0)
         push!(seen_quad, (a, b))
     end
@@ -1504,9 +1508,14 @@ function _verify_elimination_step(
     for b in 1:d
         nbr = step.neighbors[b]
         pos = findfirst(pair -> pair.first == nbr, p.adj[u])
-        couplings[b] = pos === nothing ? _Exact(0) : p.adj[u][pos].second
+        pos !== nothing && !iszero(p.adj[u][pos].second) || return (false, :invalid_step, 0)
+        couplings[b] = p.adj[u][pos].second
     end
     f_u = p.fields[u]
+    if d == 3
+        h_u = p.domain === QT.BoolDomain ? (f_u // 2 + (couplings[1] + couplings[2] + couplings[3]) // 4) : f_u
+        iszero(h_u) || return (false, :invalid_bound, cost)
+    end
     all_strict = true
     z_map = Dict{Int,Int}()
     for idx in 1:num_states
