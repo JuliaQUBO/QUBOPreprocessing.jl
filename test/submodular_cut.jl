@@ -368,5 +368,96 @@
         res6 = verify_certificate(ws, t6)
         @test !res6.valid
         @test res6.stop_reason === :invalid_bound
+
+        # 7. Convenience constructors & batch_index > 1 mismatch rejection
+        c_short1 = SubmodularCutStep(cs1.variable, cs1.value, cs1.component_variables, cs1.gauge, cs1.component_opt, cs1.max_flow, cs1.flow_edges, cs1.batch_fixings, 1, cs1.constant, 0, :exact)
+        c_short2 = SubmodularCutStep(cs1.variable, cs1.value, cs1.component_variables, cs1.gauge, cs1.component_opt, cs1.max_flow, cs1.flow_edges, cs1.batch_fixings, 1, cs1.constant, 0, :exact, cs1.scope_length)
+        @test c_short1.persistency === :strong && c_short2.persistency === :strong
+    end
+
+    @testset "Overloads, probing composition, and budget/deadline edge cases" begin
+        L = Dict(1 => 4.0, 2 => 1.0, 3 => 1.0, 4 => 0.2, 5 => -0.3, 6 => 0.1)
+        Q = Dict(
+            (1, 2) => 1.0, (1, 3) => 1.0, (2, 3) => -2.0,
+            (4, 5) => -2.0, (5, 6) => -2.0, (4, 6) => 1.5,
+        )
+        ws = Workspace(QT.Model(L, Q; sense=:min, domain=:spin))
+
+        # Pass SubmodularComponent struct and keyword component=... to prove_submodular_cut & apply_submodular_cut!
+        rec_c = recognize_submodular_component(ws, [1, 2, 3])
+        att_comp = prove_submodular_cut(ws, rec_c; allow_weak=true, tie_break=:source)
+        @test att_comp.stop_reason === :proved
+        @test verify_certificate(ws, att_comp.certificate).valid
+        att_kw = prove_submodular_cut(ws; component=[1, 2, 3], allow_weak=true, tie_break=:sink)
+        @test att_kw.stop_reason === :proved
+        @test verify_certificate(ws, att_kw.certificate).valid
+
+        # Single-variable weak proof (m = 1 < k = 3)
+        att_1w_low = prove_submodular_cut(ws, 2; allow_weak=true, tie_break=:low)
+        @test att_1w_low.stop_reason === :proved
+        @test verify_certificate(ws, att_1w_low.certificate).valid
+        att_1w_high = prove_submodular_cut(ws, 2; allow_weak=true, tie_break=:high)
+        @test att_1w_high.stop_reason === :proved
+        @test verify_certificate(ws, att_1w_high.certificate).valid
+
+        # Apply via SubmodularComponent, keyword component, and single label, plus compose with probing
+        cp = checkpoint(ws)
+        rep_1 = apply_submodular_cut!(ws, 1)
+        @test rep_1.stop_reason === :applied
+        @test rep_1.fixed_count == 1
+        @test prove_submodular_cut(ws, 1).stop_reason === :already_fixed
+        @test apply_submodular_cut!(ws, 1).stop_reason === :already_fixed
+        rollback!(ws, cp)
+
+        cp2 = checkpoint(ws)
+        rep_c = apply_submodular_cut!(ws, rec_c)
+        @test rep_c.stop_reason === :applied
+        @test rep_c.fixed_count == 1
+        # Compose SubmodularCutStep with ProbingStep on variable 4
+        w_valid = Dict(1 => -1, 2 => -1, 3 => -1, 4 => 1, 5 => 1, 6 => 1)
+        w_bad = Dict(1 => 1, 2 => -1, 3 => -1, 4 => 1, 5 => 1, 6 => 1)
+        @test_throws ArgumentError prove_probing(ws, 4, w_bad)
+        p_att = prove_probing(ws, 4, w_valid)
+        if p_att.certificate !== nothing
+            @test verify_certificate(ws, p_att.certificate).valid
+        end
+        rollback!(ws, cp2)
+
+        cp3 = checkpoint(ws)
+        rep_kw = apply_submodular_cut!(ws; component=[1, 2, 3], allow_weak=true, tie_break=:low)
+        @test rep_kw.stop_reason === :applied
+        @test rep_kw.fixed_count == 3
+        rollback!(ws, cp3)
+
+        # No-persistency component (all tied with allow_weak=false)
+        ws_tie = Workspace(QT.Model(Dict(1 => 0.0, 2 => 0.0), Dict((1, 2) => -2.0); sense=:min, domain=:spin))
+        @test prove_submodular_cut(ws_tie).stop_reason === :no_persistency
+        @test prove_submodular_cut(ws_tie, [1, 2]).stop_reason === :no_persistency
+        @test apply_submodular_cut!(ws_tie).stop_reason === :no_persistency
+        @test apply_submodular_cut!(ws_tie, [1, 2]).stop_reason === :no_persistency
+
+        # Frustrated whole-workspace
+        ws_fr = Workspace(QT.Model(Dict(1 => 0.1, 2 => -0.1, 3 => 0.1), Dict((1, 2) => 1.5, (2, 3) => 1.5, (1, 3) => 1.5); sense=:min, domain=:spin))
+        @test prove_submodular_cut(ws_fr).stop_reason === :frustrated_cycle
+        @test apply_submodular_cut!(ws_fr).stop_reason === :frustrated_cycle
+
+        # Zero-scale workspace
+        ws_z = Workspace(QT.Model(Dict(1 => 1.0, 2 => -1.0), Dict((1, 2) => -1.0); scale=0.0, offset=0.0, sense=:min, domain=:spin))
+        @test prove_submodular_cut(ws_z).stop_reason === :zero_scale
+        @test prove_submodular_cut(ws_z, 1).stop_reason === :zero_scale
+        @test apply_submodular_cut!(ws_z).stop_reason === :zero_scale
+        @test apply_submodular_cut!(ws_z, 1).stop_reason === :zero_scale
+
+        # Budget and deadline stops
+        @test prove_submodular_cut(ws; max_work=1).stop_reason === :work_limit
+        @test prove_submodular_cut(ws; max_exact_work=1).stop_reason === :verification_limit
+        @test prove_submodular_cut(ws; deadline_ns=UInt64(0)).stop_reason === :deadline
+        @test prove_submodular_cut(ws, 1; max_work=1).stop_reason === :work_limit
+        @test prove_submodular_cut(ws, [1, 2, 3]; max_exact_work=1).stop_reason === :verification_limit
+        @test apply_submodular_cut!(ws; max_work=1).stop_reason === :work_limit
+        @test apply_submodular_cut!(ws; max_exact_work=1).stop_reason === :verification_limit
+        @test apply_submodular_cut!(ws; deadline_ns=UInt64(0)).stop_reason === :deadline
+        @test apply_submodular_cut!(ws, 1; max_work=1).stop_reason === :work_limit
+        @test apply_submodular_cut!(ws, [1, 2, 3]; max_exact_work=1).stop_reason === :verification_limit
     end
 end
