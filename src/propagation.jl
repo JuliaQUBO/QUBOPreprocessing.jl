@@ -1023,6 +1023,393 @@ function apply_submodular_cut!(
 end
 
 """
+    MaxCutReport{V,S}
+
+Report returned by [`apply_maxcut!`](@ref), recording `generation`, `checkpoint`,
+`stop_reason` (`:applied`, `:quiescent`, `:not_strict`, `:no_persistency`,
+`:already_fixed`, `:zero_scale`, `:fill_limit`, `:deduction_limit`,
+`:work_limit`, `:verification_limit`, `:deadline`, or `:optional_pass_disabled`),
+examined `candidates`, total committed `deductions`, `unary_fixings`,
+`pair_contractions`, `edge_deductions` (`:maxcut_edge`), `triangle_deductions`
+(`:maxcut_triangle`), total `triangles_used`, introduced `fill_edges`,
+`initial_reference_degree`, `residual_reference_degree`, committed `fixings`,
+committed `contractions` `(eliminated, representative, sign)`, and phase-separated
+work counters (`graph_work`, `triangle_work`, `materialization_work`,
+`edge_visits`, `exact_work`).
+"""
+struct MaxCutReport{V,S}
+    generation::Generation
+    checkpoint::Checkpoint
+    stop_reason::Symbol
+    candidates::Int
+    deductions::Int
+    unary_fixings::Int
+    pair_contractions::Int
+    edge_deductions::Int
+    triangle_deductions::Int
+    triangles_used::Int
+    fill_edges::Int
+    initial_reference_degree::Int
+    residual_reference_degree::Int
+    fixings::Vector{Pair{V,S}}
+    contractions::Vector{Tuple{V,V,Int}}
+    graph_work::Int
+    triangle_work::Int
+    materialization_work::Int
+    edge_visits::Int
+    exact_work::Int
+end
+generation(r::MaxCutReport) = r.generation
+
+"""
+    apply_maxcut!(ws, label; value=nothing, map=nothing, allow_weak=false,
+                  max_triangles=typemax(Int), max_work=typemax(Int),
+                  max_exact_work=typemax(Int), deadline_ns=nothing)
+    apply_maxcut!(ws, eliminated, representative; sign=nothing, map=nothing,
+                  allow_weak=false, max_triangles=typemax(Int),
+                  max_fill=typemax(Int), max_work=typemax(Int),
+                  max_exact_work=typemax(Int), deadline_ns=nothing)
+    apply_maxcut!(ws; candidates=nothing, map=nothing, allow_weak=false,
+                  enable_unary=true, enable_pairs=true,
+                  max_triangles=typemax(Int), max_fill=typemax(Int),
+                  max_deductions=typemax(Int), max_work=typemax(Int),
+                  max_exact_work=typemax(Int), deadline_ns=nothing)
+
+Certify and transactionally commit weighted Max-Cut edge and triangle reductions
+on the active residual Max-Cut graph ``G_{\\text{MC}} = (\\{0\\} \\cup F, E_{\\text{cut}}, w)``,
+recording [`MaxCutStep`](@ref) proof records on the reversible trail and returning
+a [`MaxCutReport`](@ref).
+"""
+function apply_maxcut!(
+    ws::Workspace,
+    label;
+    value=nothing,
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+    allow_weak::Bool=false,
+    max_triangles=typemax(Int),
+    max_work=typemax(Int),
+    max_exact_work=typemax(Int),
+    deadline_ns=nothing,
+)
+    _limits(max_work, deadline_ns)
+    _limits(max_exact_work, deadline_ns)
+    map === nothing || _validate_domain_map(ws, map)
+    u = _variable(ws, label)
+    s, st = ws._snapshot, ws._state
+    V, S = s.label_type, s.state_type
+    init_ref_deg = _reference_degree(ws)
+    raw_step, reason, method, _, tris_used, g_work, t_work, ex_work = _maxcut_witness(
+        ws, u, 0;
+        value=value, map=map, allow_weak=allow_weak, max_triangles=max_triangles,
+        max_work=max_work, max_exact_work=max_exact_work, deadline_ns=deadline_ns,
+        predecessors=st.proof_count, scope_length=length(st.callers),
+    )
+    visits = g_work + t_work
+    if raw_step === nothing
+        return MaxCutReport{V,S}(
+            generation(ws), checkpoint(ws), reason, 1, 0, 0, 0, 0, 0, 0, 0,
+            init_ref_deg, init_ref_deg, Pair{V,S}[], Tuple{V,V,Int}[],
+            g_work, t_work, 0, visits, ex_work,
+        )
+    end
+    step = map === nothing ? raw_step :
+        MaxCutStep(
+            u, 0, raw_step.anchor, raw_step.orig_sign, raw_step.orig_sign, raw_step.value,
+            deepcopy(raw_step.margin), deepcopy(raw_step.direct_weight),
+            deepcopy(raw_step.non_triangle_slack), deepcopy(raw_step.triangles),
+            deepcopy(st.constant), raw_step.predecessors, raw_step.method,
+            raw_step.scope_length, raw_step.persistency,
+        )
+    rep = _fix!(ws, u, step.value; proof=step, max_work=max_work - visits, deadline_ns=deadline_ns)
+    mat_work = rep.edge_visits
+    tot_visits = visits + mat_work
+    res_ref_deg = _reference_degree(ws)
+    if rep.stop_reason !== :applied
+        return MaxCutReport{V,S}(
+            generation(ws), checkpoint(ws), rep.stop_reason, 1, 0, 0, 0, 0, 0, 0, 0,
+            init_ref_deg, res_ref_deg, Pair{V,S}[], Tuple{V,V,Int}[],
+            g_work, t_work, mat_work, tot_visits, ex_work,
+        )
+    end
+    mapped_val = S(map === nothing ? step.value : _map_index_value(map, u, step.value))
+    fixings = Pair{V,S}[deepcopy(s.labels[u]) => mapped_val]
+    is_edge = method === :maxcut_edge ? 1 : 0
+    return MaxCutReport{V,S}(
+        generation(ws), checkpoint(ws), :applied, 1, 1, 1, 0, is_edge, 1 - is_edge,
+        tris_used, 0, init_ref_deg, res_ref_deg, fixings, Tuple{V,V,Int}[],
+        g_work, t_work, mat_work, tot_visits, ex_work,
+    )
+end
+
+function apply_maxcut!(
+    ws::Workspace,
+    eliminated,
+    representative;
+    sign::Union{Nothing,Int}=nothing,
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+    allow_weak::Bool=false,
+    max_triangles=typemax(Int),
+    max_fill=typemax(Int),
+    max_work=typemax(Int),
+    max_exact_work=typemax(Int),
+    deadline_ns=nothing,
+)
+    _limits(max_work, deadline_ns)
+    _limits(max_exact_work, deadline_ns)
+    max_fill isa Integer && !(max_fill isa Bool) && 0 <= max_fill <= typemax(Int) ||
+        throw(ArgumentError("max_fill must be a nonnegative machine-sized integer"))
+    map === nothing || _validate_domain_map(ws, map)
+    u = _variable(ws, eliminated)
+    v = _variable(ws, representative)
+    u != v || throw(ArgumentError("Max-Cut pair relation requires two distinct variables"))
+    s, st = ws._snapshot, ws._state
+    V, S = s.label_type, s.state_type
+    init_ref_deg = _reference_degree(ws)
+    if !(st.fixed[u] == 2 && st.fixed[v] == 2)
+        return MaxCutReport{V,S}(
+            generation(ws), checkpoint(ws), :already_fixed, 1, 0, 0, 0, 0, 0, 0, 0,
+            init_ref_deg, init_ref_deg, Pair{V,S}[], Tuple{V,V,Int}[],
+            0, 0, 0, 0, 0,
+        )
+    end
+    f_uv = _contraction_fill(st, u, v)
+    if f_uv > Int(max_fill)
+        return MaxCutReport{V,S}(
+            generation(ws), checkpoint(ws), :fill_limit, 1, 0, 0, 0, 0, 0, 0, 0,
+            init_ref_deg, init_ref_deg, Pair{V,S}[], Tuple{V,V,Int}[],
+            0, 0, 0, 0, 0,
+        )
+    end
+    raw_step, reason, method, _, tris_used, g_work, t_work, ex_work = _maxcut_witness(
+        ws, u, v;
+        sign=sign, map=map, allow_weak=allow_weak, max_triangles=max_triangles,
+        max_work=max_work, max_exact_work=max_exact_work, deadline_ns=deadline_ns,
+        predecessors=st.proof_count, scope_length=length(st.callers),
+    )
+    visits = g_work + t_work
+    if raw_step === nothing
+        return MaxCutReport{V,S}(
+            generation(ws), checkpoint(ws), reason, 1, 0, 0, 0, 0, 0, 0, 0,
+            init_ref_deg, init_ref_deg, Pair{V,S}[], Tuple{V,V,Int}[],
+            g_work, t_work, 0, visits, ex_work,
+        )
+    end
+    step = map === nothing ? raw_step :
+        MaxCutStep(
+            u, v, raw_step.anchor, raw_step.orig_sign, raw_step.orig_sign, 0,
+            deepcopy(raw_step.margin), deepcopy(raw_step.direct_weight),
+            deepcopy(raw_step.non_triangle_slack), deepcopy(raw_step.triangles),
+            deepcopy(st.constant), raw_step.predecessors, raw_step.method,
+            raw_step.scope_length, raw_step.persistency,
+        )
+    const_delta, field_deltas, quad_deltas = _relation_deltas(ws, u, v, step.orig_sign)
+    rep = _apply_reduction!(
+        ws, u, Int8(3), step, const_delta, field_deltas, quad_deltas;
+        max_work=max_work - visits, deadline_ns=deadline_ns, precharged_visits=0,
+    )
+    mat_work = rep.edge_visits
+    tot_visits = visits + mat_work
+    res_ref_deg = _reference_degree(ws)
+    if rep.stop_reason !== :applied
+        return MaxCutReport{V,S}(
+            generation(ws), checkpoint(ws), rep.stop_reason, 1, 0, 0, 0, 0, 0, 0, 0,
+            init_ref_deg, res_ref_deg, Pair{V,S}[], Tuple{V,V,Int}[],
+            g_work, t_work, mat_work, tot_visits, ex_work,
+        )
+    end
+    contractions = Tuple{V,V,Int}[(deepcopy(s.labels[u]), deepcopy(s.labels[v]), raw_step.sign)]
+    is_edge = method === :maxcut_edge ? 1 : 0
+    return MaxCutReport{V,S}(
+        generation(ws), checkpoint(ws), :applied, 1, 1, 0, 1, is_edge, 1 - is_edge,
+        tris_used, f_uv, init_ref_deg, res_ref_deg, Pair{V,S}[], contractions,
+        g_work, t_work, mat_work, tot_visits, ex_work,
+    )
+end
+
+function apply_maxcut!(
+    ws::Workspace;
+    candidates=nothing,
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+    allow_weak::Bool=false,
+    enable_unary::Bool=true,
+    enable_pairs::Bool=true,
+    max_triangles=typemax(Int),
+    max_fill=typemax(Int),
+    max_deductions=typemax(Int),
+    max_work=typemax(Int),
+    max_exact_work=typemax(Int),
+    deadline_ns=nothing,
+)
+    _limits(max_work, deadline_ns)
+    _limits(max_exact_work, deadline_ns)
+    _limits(max_deductions, deadline_ns)
+    max_triangles isa Integer && !(max_triangles isa Bool) && 0 <= max_triangles <= typemax(Int) ||
+        throw(ArgumentError("max_triangles must be a nonnegative machine-sized integer"))
+    max_fill isa Integer && !(max_fill isa Bool) && 0 <= max_fill <= typemax(Int) ||
+        throw(ArgumentError("max_fill must be a nonnegative machine-sized integer"))
+    map === nothing || _validate_domain_map(ws, map)
+    s, st = ws._snapshot, ws._state
+    V, S = s.label_type, s.state_type
+    cand_indices = _resolve_roof_candidates(ws, candidates)
+    init_ref_deg = _reference_degree(ws)
+    if !enable_unary && !enable_pairs
+        return MaxCutReport{V,S}(
+            generation(ws), checkpoint(ws), :optional_pass_disabled, 0, 0, 0, 0, 0, 0, 0, 0,
+            init_ref_deg, init_ref_deg, Pair{V,S}[], Tuple{V,V,Int}[],
+            0, 0, 0, 0, 0,
+        )
+    end
+    if _direction(s) == 0
+        return MaxCutReport{V,S}(
+            generation(ws), checkpoint(ws), :zero_scale, 0, 0, 0, 0, 0, 0, 0, 0,
+            init_ref_deg, init_ref_deg, Pair{V,S}[], Tuple{V,V,Int}[],
+            0, 0, 0, 0, 0,
+        )
+    end
+    mf = Int(max_fill)
+    mt = Int(max_triangles)
+    cand_count = 0
+    ded_count = 0
+    unary_count = 0
+    pair_count = 0
+    edge_count = 0
+    tri_count = 0
+    tris_total = 0
+    fill_total = 0
+    g_work_tot = 0
+    t_work_tot = 0
+    mat_work_tot = 0
+    ex_work_tot = 0
+    fixings = Pair{V,S}[]
+    contractions = Tuple{V,V,Int}[]
+    fill_skipped = false
+
+    function finish(reason)
+        tot_visits = g_work_tot + t_work_tot + mat_work_tot
+        st.total_candidates += cand_count
+        st.total_edges += tot_visits
+        st.total_exact += ex_work_tot
+        return MaxCutReport{V,S}(
+            generation(ws), checkpoint(ws), reason,
+            cand_count, ded_count, unary_count, pair_count, edge_count, tri_count,
+            tris_total, fill_total, init_ref_deg, _reference_degree(ws),
+            fixings, contractions,
+            g_work_tot, t_work_tot, mat_work_tot, tot_visits, ex_work_tot,
+        )
+    end
+
+    while true
+        changed_in_sweep = false
+        if enable_unary
+            for u in cand_indices
+                st.fixed[u] == 2 || continue
+                _expired(deadline_ns) && return finish(:deadline)
+                ded_count < max_deductions || return finish(:deduction_limit)
+                rem_w = Int(max_work) - (g_work_tot + t_work_tot + mat_work_tot)
+                rem_ex = Int(max_exact_work) - ex_work_tot
+                rem_w > 0 || return finish(:work_limit)
+                rem_ex > 0 || return finish(:verification_limit)
+                cand_count += 1
+                raw_step, reason, method, _, tris_used, gw, tw, exw = _maxcut_witness(
+                    ws, u, 0;
+                    map=map, allow_weak=allow_weak, max_triangles=mt,
+                    max_work=rem_w, max_exact_work=rem_ex, deadline_ns=deadline_ns,
+                    predecessors=st.proof_count, scope_length=length(st.callers),
+                )
+                g_work_tot += gw
+                t_work_tot += tw
+                ex_work_tot += exw
+                reason in (:deadline, :work_limit, :verification_limit) && return finish(reason)
+                raw_step === nothing && continue
+                step = map === nothing ? raw_step :
+                    MaxCutStep(
+                        u, 0, raw_step.anchor, raw_step.orig_sign, raw_step.orig_sign, raw_step.value,
+                        deepcopy(raw_step.margin), deepcopy(raw_step.direct_weight),
+                        deepcopy(raw_step.non_triangle_slack), deepcopy(raw_step.triangles),
+                        deepcopy(st.constant), raw_step.predecessors, raw_step.method,
+                        raw_step.scope_length, raw_step.persistency,
+                    )
+                rem_w2 = Int(max_work) - (g_work_tot + t_work_tot + mat_work_tot)
+                rep = _fix!(ws, u, step.value; proof=step, max_work=rem_w2, deadline_ns=deadline_ns)
+                mat_work_tot += rep.edge_visits
+                rep.stop_reason === :applied || return finish(rep.stop_reason)
+                ded_count += 1
+                unary_count += 1
+                method === :maxcut_edge ? (edge_count += 1) : (tri_count += 1)
+                tris_total += tris_used
+                mapped_val = S(map === nothing ? step.value : _map_index_value(map, u, step.value))
+                push!(fixings, deepcopy(s.labels[u]) => mapped_val)
+                changed_in_sweep = true
+            end
+        end
+        if enable_pairs
+            for u in cand_indices
+                st.fixed[u] == 2 && st.degrees[u] >= 1 || continue
+                _expired(deadline_ns) && return finish(:deadline)
+                ded_count < max_deductions || return finish(:deduction_limit)
+                nbrs = Int[w for (w, q) in st.adjacency[u] if st.fixed[w] == 2 && !iszero(_spin_coupling(ws, q))]
+                sort!(nbrs)
+                for v in nbrs
+                    (st.fixed[u] == 2 && st.fixed[v] == 2) || continue
+                    f_uv = _contraction_fill(st, u, v)
+                    f_vu = _contraction_fill(st, v, u)
+                    elim, rep_v, f_chosen = f_uv <= f_vu ? (u, v, f_uv) : (v, u, f_vu)
+                    if f_chosen > mf
+                        fill_skipped = true
+                        continue
+                    end
+                    _expired(deadline_ns) && return finish(:deadline)
+                    ded_count < max_deductions || return finish(:deduction_limit)
+                    rem_w = Int(max_work) - (g_work_tot + t_work_tot + mat_work_tot)
+                    rem_ex = Int(max_exact_work) - ex_work_tot
+                    rem_w > 0 || return finish(:work_limit)
+                    rem_ex > 0 || return finish(:verification_limit)
+                    cand_count += 1
+                    raw_step, reason, method, _, tris_used, gw, tw, exw = _maxcut_witness(
+                        ws, elim, rep_v;
+                        map=map, allow_weak=allow_weak, max_triangles=mt,
+                        max_work=rem_w, max_exact_work=rem_ex, deadline_ns=deadline_ns,
+                        predecessors=st.proof_count, scope_length=length(st.callers),
+                    )
+                    g_work_tot += gw
+                    t_work_tot += tw
+                    ex_work_tot += exw
+                    reason in (:deadline, :work_limit, :verification_limit) && return finish(reason)
+                    raw_step === nothing && continue
+                    step = map === nothing ? raw_step :
+                        MaxCutStep(
+                            elim, rep_v, raw_step.anchor, raw_step.orig_sign, raw_step.orig_sign, 0,
+                            deepcopy(raw_step.margin), deepcopy(raw_step.direct_weight),
+                            deepcopy(raw_step.non_triangle_slack), deepcopy(raw_step.triangles),
+                            deepcopy(st.constant), raw_step.predecessors, raw_step.method,
+                            raw_step.scope_length, raw_step.persistency,
+                        )
+                    const_delta, field_deltas, quad_deltas = _relation_deltas(ws, elim, rep_v, step.orig_sign)
+                    rem_w2 = Int(max_work) - (g_work_tot + t_work_tot + mat_work_tot)
+                    rep_apply = _apply_reduction!(
+                        ws, elim, Int8(3), step, const_delta, field_deltas, quad_deltas;
+                        max_work=rem_w2, deadline_ns=deadline_ns, precharged_visits=0,
+                    )
+                    mat_work_tot += rep_apply.edge_visits
+                    rep_apply.stop_reason === :applied || return finish(rep_apply.stop_reason)
+                    ded_count += 1
+                    pair_count += 1
+                    method === :maxcut_edge ? (edge_count += 1) : (tri_count += 1)
+                    tris_total += tris_used
+                    fill_total += f_chosen
+                    push!(contractions, (deepcopy(s.labels[elim]), deepcopy(s.labels[rep_v]), raw_step.sign))
+                    changed_in_sweep = true
+                    elim == u && break
+                end
+            end
+        end
+        changed_in_sweep || break
+    end
+    stop = ded_count > 0 ? :quiescent : (fill_skipped ? :fill_limit : :no_persistency)
+    return finish(stop)
+end
+
+"""
     contract_relation!(ws, eliminated, representative; sign=nothing, map=nothing,
                        allow_weak=false, max_work=typemax(Int),
                        max_exact_work=typemax(Int), deadline_ns=nothing)
@@ -2160,7 +2547,7 @@ function _resolve_relation_index(st::_Incremental, i::Int)
         pos = st.entries[curr]
         pos > 0 || throw(ArgumentError("missing trail entry for relation-contracted variable"))
         entry = st.trail[pos]::_UndoReduction
-        step = entry.proof::RelationStep
+        step = entry.proof::Union{RelationStep,MaxCutStep}
         orig_σ *= step.orig_sign
         curr = step.representative
     end

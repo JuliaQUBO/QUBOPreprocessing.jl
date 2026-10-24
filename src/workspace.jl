@@ -256,7 +256,7 @@ function _fix!(ws::Workspace,i::Int,v::Int;proof=nothing,max_work=typemax(Int),d
     else
         st.proof_count == 0 && (st.first_proof_pos = length(st.trail))
         st.proof_count += 1
-        (proof isa ProbingStep || proof isa RoofDualityStep || proof isa SubmodularCutStep ||
+        (proof isa ProbingStep || proof isa RoofDualityStep || proof isa SubmodularCutStep || proof isa MaxCutStep ||
          (hasproperty(proof, :method) && proof.method === :marginal)) &&
             (st.marginal_count += 1)
     end
@@ -499,6 +499,7 @@ function _apply_reduction!(
     push!(st.fixes, length(st.trail))
     st.proof_count == 0 && (st.first_proof_pos = length(st.trail))
     st.proof_count += 1
+    proof isa MaxCutStep && (st.marginal_count += 1)
     st.entries[u] = length(st.trail)
     st.serial += 1
     st.constant = new_constant
@@ -663,6 +664,7 @@ function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
             pop!(st.fixes)
             st.proof_count -= 1
             st.proof_count == 0 && (st.first_proof_pos = 0)
+            undo.proof isa MaxCutStep && (st.marginal_count -= 1)
             st.constant = undo.constant
             st.dual_constant = undo.dual_constant
         else
@@ -697,7 +699,7 @@ function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
             else
                 st.proof_count -= 1
                 st.proof_count == 0 && (st.first_proof_pos = 0)
-                (undo.proof isa ProbingStep || undo.proof isa RoofDualityStep || undo.proof isa SubmodularCutStep ||
+                (undo.proof isa ProbingStep || undo.proof isa RoofDualityStep || undo.proof isa SubmodularCutStep || undo.proof isa MaxCutStep ||
                  (hasproperty(undo.proof, :method) && undo.proof.method === :marginal)) &&
                     (st.marginal_count -= 1)
             end
@@ -898,6 +900,17 @@ function _lift_state(r::ConditionedExport, y::AbstractVector)
         step = steps[k]
         if step isa Union{DominanceStep,ProbingStep,RoofDualityStep,SubmodularCutStep}
             state[step.variable] = step.value
+        elseif step isa MaxCutStep
+            if step.representative == 0
+                state[step.eliminated] = step.value
+            else
+                rep_val = state[step.representative]
+                (rep_val == low_orig || rep_val == 1) ||
+                    throw(ArgumentError("representative variable $(step.representative) not reconstructed before relation step"))
+                s_rep = is_bool ? (2 * rep_val - 1) : rep_val
+                s_elim = step.orig_sign * s_rep
+                state[step.eliminated] = is_bool ? ((s_elim + 1) ÷ 2) : s_elim
+            end
         elseif step isa RelationStep
             rep_val = state[step.representative]
             (rep_val == low_orig || rep_val == 1) ||
