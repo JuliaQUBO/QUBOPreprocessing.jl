@@ -25,7 +25,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Check release provenance gate
@@ -65,7 +65,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -78,7 +78,7 @@ jobs:
           RELEASE_COMMIT: ${{ inputs.release_commit }}
       - name: Check out verified release source
         if: steps.release.outputs.tag != ''
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@v7
         with:
           ref: ${{ steps.release.outputs.commit }}
           path: release-source
@@ -108,7 +108,7 @@ jobs:
           QUBOPREPROCESSING_RELEASE_TAG: ${{ steps.release.outputs.tag }}
           QUBOPREPROCESSING_RELEASE_COMMIT: ${{ steps.release.outputs.commit }}
       - name: Check out the complete publication branch
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@v7
         with:
           ref: gh-pages
           path: publication
