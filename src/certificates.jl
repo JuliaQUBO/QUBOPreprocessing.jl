@@ -920,7 +920,6 @@ function _probing_witness(
     U_exact = direction * w_energy
     c_parent = deepcopy(_mapped_constant(ws, map))
     probe_cp = checkpoint(ws)
-    saved_serial = st.serial
     saved_star_hint = st.star_hint
     saved_rel_hint = st.rel_hint
     fallbacks = 0
@@ -1064,7 +1063,6 @@ function _probing_witness(
         if length(st.trail) > probe_cp._depth
             rollback!(ws, probe_cp)
         end
-        st.serial = saved_serial
         st.star_hint = saved_star_hint
         st.rel_hint = saved_rel_hint
     end

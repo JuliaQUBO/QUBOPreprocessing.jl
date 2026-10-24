@@ -462,6 +462,8 @@ function apply_probing!(
         _lift_index_value(map, i, _check_domain_scalar(value, map.target_domain))
     end
     st = ws._state
+    st.fixed[i] == 2 || return UpdateReport(:already_fixed, 0, 0)
+    _direction(ws._snapshot) != 0 || return UpdateReport(:zero_scale, 0, 0)
     deg_i = length(st.adjacency[i])
     deg_i <= max_work || return UpdateReport(:work_limit, 0, 0)
     raw_step, reason, _, visits, _, _ = _probing_witness(

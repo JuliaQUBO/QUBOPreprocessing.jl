@@ -194,7 +194,12 @@
                         L_s = Dict(k => dir * v for (k, v) in L_base)
                         Q_s = Dict(k => dir * v for (k, v) in Q_base)
                         m_spin = QT.Model{Symbol,Float64,Int}(L_s, Q_s; scale=scale, offset=offset, domain=:spin, sense=sense)
-                        m = dom === :spin ? m_spin : QT.cast(QT.SpinDomain => QT.BoolDomain, m_spin)
+                        m = if dom === :spin
+                            m_spin
+                        else
+                            ws_tmp = Workspace(m_spin)
+                            export_model(materialize(ws_tmp, domain_map(ws_tmp; domain=:bool)))
+                        end
                         ws = Workspace(m; rules=:dominance)
                         w_val = dom === :spin ? [-1, 1, 1] : [0, 1, 1]
                         expected_v1 = dom === :spin ? -1 : 0
@@ -219,11 +224,12 @@
             end
         end
 
-        # Zero scale abstains cleanly with :zero_scale
+        # Zero scale abstains cleanly with :zero_scale (even under tight max_work)
         m_zero = QT.Model{Int,Float64,Int}(Dict(1 => 4.0, 2 => 1.5), Dict((1, 2) => 2.5); scale=0.0, domain=:spin, sense=:min)
         ws_zero = Workspace(m_zero)
         @test prove_probing(ws_zero, 1, [-1, 1]).stop_reason === :zero_scale
         @test apply_probing!(ws_zero, 1, [-1, 1]).stop_reason === :zero_scale
+        @test apply_probing!(ws_zero, 1, [-1, 1]; max_work=0).stop_reason === :zero_scale
         @test probe_variables!(ws_zero, [-1, 1]).stop_reason === :zero_scale
     end
 
@@ -231,9 +237,8 @@
         L_spin = Dict(1 => 4.0, 2 => 1.5, 3 => 1.5)
         Q_spin = Dict((1, 2) => 2.5, (1, 3) => 2.5, (2, 3) => -1.0)
         m_spin = QT.Model{Int,Float64,Int}(L_spin, Q_spin; offset=1.25, scale=2.0, domain=:spin, sense=:min)
-        m_bool = QT.cast(QT.SpinDomain => QT.BoolDomain, m_spin)
-
         ws_spin = Workspace(m_spin; rules=:dominance)
+        m_bool = export_model(materialize(ws_spin, domain_map(ws_spin; domain=:bool)))
         ws_bool = Workspace(m_bool; rules=:dominance)
 
         att_spin = prove_probing(ws_spin, 1, [-1, 1, 1])
@@ -263,10 +268,24 @@
         # Commit on ws_bool with dmap and export conditioned model + reconstruct
         upd_m = apply_probing!(ws_bool, 1, w_mapped; map=dmap)
         @test upd_m.stop_reason === :applied
+        @test apply_probing!(ws_bool, 1, w_mapped; map=dmap, max_work=0).stop_reason === :already_fixed
         @test verify_certificate(ws_bool, export_certificate(ws_bool; map=dmap); map=dmap).valid
         cond_m = materialize(ws_bool, dmap)
         rec_m = reconstruct(cond_m, [w_mapped[2], w_mapped[3]])
         @test rec_m.state == [0, 1, 1]
+
+        # Non-identity gauged binary map on ws_spin must not corrupt dmap._cursor constant cache across probe rollback
+        ws_spin_g = Workspace(m_spin; rules=:dominance)
+        dmap_bool_g = domain_map(ws_spin_g; domain=:bool, gauge=[-1, 1, -1])
+        w_bool_g = map_state(dmap_bool_g, [-1, 1, 1])
+        att_bg = prove_probing(ws_spin_g, 1, w_bool_g; map=dmap_bool_g)
+        @test att_bg.stop_reason === :proved
+        ws_spin_ref = Workspace(m_spin; rules=:dominance)
+        dmap_bool_ref = domain_map(ws_spin_ref; domain=:bool, gauge=[-1, 1, -1])
+        assume!(ws_spin_g, 1, -1)
+        assume!(ws_spin_ref, 1, -1)
+        @test conditioned_constant(ws_spin_g; map=dmap_bool_g) ==
+              conditioned_constant(ws_spin_ref; map=dmap_bool_ref)
     end
 
     @testset "witness validation, tampered certificates, wrong scope, and stale generation" begin
