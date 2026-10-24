@@ -500,3 +500,68 @@ and exact energy identity
   `apply_maxcut!` is kept **off by default** in `Workspace`, `propagate!`, and
   `schedule_reductions!`. Call `prove_maxcut` or `apply_maxcut!` explicitly when
   dense triangles block single-endpoint dominance and pair relations.
+
+## Exact coefficient compression and sparsification audit (`#21`)
+
+Issue `#21` audits published dynamic-range compression and sparsification rules
+(specifically Mücke, Gerlach & Piatkowski 2023, *Optimum-Preserving QUBO Parameter Compression*,
+Definition 3 and Theorem 2, `arXiv:2307.02195`, and the `MIT`-licensed reference
+implementation in `qubolite/preprocessing.py` at commit
+`cbe57e0bea68e9f751f8591e3ba0254030ac5965`) against `QUBOPreprocessing.jl`'s
+residual-to-original reconstruction contract
+``\operatorname{lift}(\operatorname{opt}(F')) \subseteq \operatorname{opt}(F)``
+([`qubolite_compression_candidates`](@ref), [`compression_metrics`](@ref),
+[`audit_compression`](@ref), [`compression_counterexamples`](@ref),
+[`CompressionCandidate`](@ref), [`CompressionMetrics`](@ref),
+[`CompressionAuditReport`](@ref)):
+
+1. **Published update rule restated:** for a normalized Boolean minimization QUBO
+   ``F(x) = C + \sum_i L_i x_i + \sum_{i < j} Q_{ij} x_i x_j`` with 1-hop partial-derivative
+   bounds ``c_i^- = \sum_{j \ne i} \min(0, Q_{ij})``,
+   ``c_i^+ = \sum_{j \ne i} \max(0, Q_{ij})``, and pair-excluded bounds
+   ``c_{i,-j}^- = c_i^- - \min(0, Q_{ij})``, ``c_{i,-j}^+ = c_i^+ - \max(0, Q_{ij})``,
+   Theorem 2 of Mücke et al. (2023) compresses:
+   - Diagonal entries ``L_i \mapsto L_i' = -c_i^- + \tau`` when ``L_i + c_i^- \ge \tau``
+     (or ``L_i' = -c_i^+ - \tau`` when ``L_i + c_i^+ \le -\tau``), and
+   - Off-diagonal entries ``Q_{ij} > 0 \mapsto Q_{ij}' = \min_{a \in \{i,j\}} \max(0, -L_a - c_{a,-b}^- + \tau)``
+     when ``L_a + c_{a,-b}^- + Q_{ij} \ge \tau`` (and analogously for ``Q_{ij} < 0``),
+     where ``\tau = 0`` at the `:closed` endpoint and ``\tau = \epsilon > 0`` at the `:open` interior.
+2. **Exact optimum-set relations and counterexamples (`compression_counterexamples()`):**
+   - **Closed endpoints (`\tau = 0`) introduce suboptimal ties (`:introduced_suboptimal_tie`):**
+     setting ``L_i' = -c_i^-`` or ``Q_{ij}' = -L_a - c_{a,-b}^-`` proves only
+     ``\operatorname{opt}(F) \subseteq \operatorname{opt}(F')`` (weak intersection),
+     **not** ``\operatorname{opt}(F') \subseteq \operatorname{opt}(F)``. On ``F(x_1) = x_1 \to F'(x_1) = 0``
+     (`endpoint_tie`) and ``F(x_1, x_2) = -x_1 - x_2 + 3 x_1 x_2 \to Q_{12}' = 1``
+     (`quadratic_endpoint_tie`), suboptimal states become globally optimal in ``F'``;
+     re-evaluating their original energy does not turn them into optimal solutions.
+   - **Negative coupling compression can lose all original optima (`:disjoint_optimum_sets`):**
+     on ``F(x_1, x_2) = 2 x_1 + 2 x_2 - 5 x_1 x_2`` (`negative_quadratic_lost_optimum`),
+     even with open interior ``\tau = 1/10 > 0``, increasing ``Q_{12} = -5 \mapsto -21/10``
+     preserves 1-bit flip optimality at ``(1, 1)`` relative to ``(0, 1)`` and ``(1, 0)``,
+     but raises ``F'(1, 1) = +19/10`` above the 2-bit flip ``F'(0, 0) = 0``, yielding
+     ``\operatorname{opt}(F) = \{[1, 1]\}`` and ``\operatorname{opt}(F') = \{[0, 0]\}``
+     (`shared_optima_count == 0`).
+   - **Strict interior compression is subsumed by exact `#14`/`#15` elimination (`strict_interior_subsumed`):**
+     a diagonal update preserves ``\operatorname{opt}(F') = \operatorname{opt}(F)`` via 1-hop
+     bounds if and only if ``L_i + c_i^- > 0`` or ``L_i + c_i^+ < 0``—in which case
+     [`prove_dominance`](@ref) / [`apply_dominance!`](@ref) (`#14`) already fixes ``x_i`` with
+     `:strong` persistency and eliminates ``x_i`` and **all** incident couplings ``Q_{ij}``
+     with an exact constant-shift certificate. Similarly, for ``Q_{ij} > 0``,
+     ``c_{a,-b}^- = c_a^-``, so open-interval positive coupling compression can reach
+     ``Q_{ij}' = 0`` (sparsification) **if and only if** ``L_a + c_a^- \ge \epsilon > 0``
+     (i.e., ``x_a = 0`` is already unary-fixable by `#14`).
+   - **Non-constant energy transport:** any nonzero in-place coefficient shift
+     ``\delta_i x_i + \delta_{ij} x_i x_j`` produces a state-dependent energy change
+     (`constant_energy_shift == false`) and weakens global lower bounds by
+     ``\min_x (F(x) - F'(x)) = -\sum_i \max(0, \delta_i) - \sum_{i<j} \max(0, \delta_{ij})``.
+3. **Adopt / revise / defer decision:**
+   - **Adopted via exact elimination (`decision === :adopt_via_exact_elimination`):**
+     whenever strict 1-hop bounds hold (`subsumed_by_dominance == true`), use the existing
+     certified `#14` unary dominance or `#15` pair contraction passes rather than in-place
+     coefficient clipping.
+   - **Deferred for general in-place coefficient compression (`decision === :defer`):**
+     general in-place coefficient clipping/compression without variable or pair elimination
+     is **not** added to `Workspace`, `propagate!`, `preprocess`, or `ReductionCertificate`
+     because closed endpoints violate ``\operatorname{lift}(\operatorname{opt}(F')) \subseteq \operatorname{opt}(F)``,
+     negative coupling compression can lose all original optima, non-unary-dominated positive
+     couplings cannot be sparsified by 1-hop bounds, and energy transport is state-dependent.

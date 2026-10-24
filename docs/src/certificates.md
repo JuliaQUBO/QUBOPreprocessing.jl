@@ -177,6 +177,14 @@ A valid fixing proof does not authorize rounding the residual. Workspace
 Float64 export still rejects coefficients/constants that cannot be represented
 exactly; exact `Rational{BigInt}` transport is an explicit supported alternative.
 Re-evaluating a lifted state's Float64 energy cannot repair an unsound transport.
+Likewise, as verified by the Issue `#21` exact compression audit
+([`audit_compression`](@ref), [`qubolite_compression_candidates`](@ref),
+[`compression_counterexamples`](@ref)), in-place coefficient clipping or dynamic-range
+compression is excluded from `ReductionCertificate` because closed-endpoint updates
+introduce suboptimal ties, negative-coupling updates can lose all original optima,
+non-optimal energies cease to shift by a constant, and every sound 1-hop strict-interior
+case is already subsumed with strictly better sparsification and an exact constant-shift
+certificate by [`DominanceStep`](@ref) (`#14`) or [`RelationStep`](@ref) (`#15`).
 Domain- and gauge-transported proofs (`prove_dominance(ws, label; map=...)`,
 `export_certificate(ws; map=...)` and `transport_certificate(ws, cert, map)`)
 bind the same source generation and caller assumptions; `verify_certificate`
