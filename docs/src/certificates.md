@@ -69,12 +69,15 @@ tag (`:strong` or `:weak`) queried with `persistency`:
 - **`:energy_identity` (`DomainGaugeMap`):** bijective coordinate and gauge
   transformation ``F(x) = F'(T(x))`` preserving every state and its exact energy.
 - **`:exact_elimination` (`EliminationStep`):** local variable elimination of a
-  bounded-degree (`0 <= d <= 3`) variable ``u`` certifying
-  ``F'(y) = \operatorname{opt}_{x_u} F(y, x_u)`` across all ``2^d \le 8``
-  boundary assignments of `neighbors`, with an exact argmin reconstruction
-  `table` and exact quadratic polynomial deltas (`constant_delta`,
-  `linear_deltas`, `quadratic_deltas`). `unique_argmin` records whether the
-  minimizing value of ``u`` is strict on all boundary states.
+  bounded-degree (`0 <= d <= 3`, default `max_degree=2` in `prove_elimination`,
+  `eliminate_variable!` and `eliminate_low_degree!`) variable ``u`` certifying
+  ``F'(y) = \operatorname{opt}_{x_u} F(y, x_u)`` (equivalent in normalized Ising
+  spin coordinates to ``-|h_u + \sum_{j \in \partial u} J_{uj} s_j|``) across all
+  ``2^d`` boundary assignments of `neighbors`, with an exact argmin reconstruction
+  `table` (`tie_break=:low` or `:high`) and exact quadratic polynomial deltas
+  (`constant_delta`, `linear_deltas`, `quadratic_deltas`). `unique_argmin` records
+  whether the minimizing value of ``u`` is strict on all boundary states. Higher-degree
+  variables are skipped/refused (`:degree_too_high`) with no higher-order truncation.
 - **`:optimum_preserving_restriction` (`DominanceStep`, `RelationStep`):**
   unary value fixing (`DominanceStep`) or signed pair contraction
   ``s_u = \sigma_{\text{orig}} s_v`` (`RelationStep`). Tagged `:strong` when

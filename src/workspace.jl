@@ -38,20 +38,22 @@ function _incremental(s::_Snapshot;rules=:identity)
         (_Exact(s.offset) + field_sum // 2 + quad_sum // 4) :
         (_Exact(s.offset) - field_sum + quad_sum)
     lower,upper = nothing,nothing
-    if rules === :dominance
+    if rules in (:dominance, :elimination)
         lower,upper = copy(fields),copy(fields)
         for i in 1:n, (_,q) in adjacency[i]
             lower[i] += s.domain === QT.BoolDomain ? min(0,q) : -abs(q)
             upper[i] += s.domain === QT.BoolDomain ? max(0,q) : abs(q)
         end
     end
-    queue = rules === :dominance ? collect(1:n) : Int[]
-    queued = rules === :dominance ? trues(n) : falses(n)
+    queue = rules in (:dominance, :elimination) ? collect(1:n) : Int[]
+    queued = rules in (:dominance, :elimination) ? trues(n) : falses(n)
+    elim_queue = Int[i for i in 1:n if degrees[i] <= 3]
+    elim_queued = BitVector(degrees[i] <= 3 for i in 1:n)
     return _Incremental(Dict{Any,Int}(v=>i for (i,v) in enumerate(s.labels)),
                         adjacency, adj_pos, fields, _Exact(s.offset), fill(Int8(2), n),
                         queue, queued, _UndoEntry[], 0, uuid4(),rules,lower,upper,1,
                         Int[],Int[],zeros(Int,n),0,0,0,0,0,0,dual_fields,dual_constant,
-                        degrees, initial_degrees)
+                        degrees, initial_degrees, elim_queue, elim_queued, 1)
 end
 
 """
@@ -229,10 +231,11 @@ function _fix!(ws::Workspace,i::Int,v::Int;proof=nothing,max_work=typemax(Int),d
     st.serial == typemax(UInt64) && throw(ArgumentError("trail serial exhausted; reset workspace"))
     # Complete allocation before committing field, queue and trail changes.
     _reserve!(st.queue, length(st.queue) + length(updated))
+    _reserve!(st.elim_queue, length(st.elim_queue) + length(updated))
     _reserve!(st.trail, length(st.trail) + 1)
     _reserve!(st.fixes, length(st.fixes) + 1)
     proof === nothing && _reserve!(st.callers, length(st.callers) + 1)
-    entry = _UndoFix(st.serial + 1,length(st.fixes)+1,i,v,st.constant,old,length(st.queue),proof,st.dual_constant,old_dual)
+    entry = _UndoFix(st.serial + 1,length(st.fixes)+1,i,v,st.constant,old,length(st.queue),proof,st.dual_constant,old_dual,length(st.elim_queue))
     push!(st.trail, entry)
     push!(st.fixes,length(st.trail))
     if proof === nothing
@@ -251,6 +254,10 @@ function _fix!(ws::Workspace,i::Int,v::Int;proof=nothing,max_work=typemax(Int),d
     for (j, df) in updated_dual
         st.dual_fields[j] = df
         st.degrees[j] -= 1
+        if st.degrees[j] <= 3 && !st.elim_queued[j]
+            push!(st.elim_queue, j)
+            st.elim_queued[j] = true
+        end
     end
     for (j,field,lower,upper) in updated
         st.fields[j] = field
@@ -292,6 +299,13 @@ function _adj_set!(st::_Incremental, adj_edits::Vector{_AdjacencyEdit}, a::Int, 
     return nothing
 end
 
+function _touch!(touched::Vector{Int}, touched_seen::Set{Int}, w::Int)
+    w in touched_seen && return nothing
+    push!(touched_seen, w)
+    push!(touched, w)
+    return nothing
+end
+
 function _apply_reduction!(
     ws::Workspace,
     u::Int,
@@ -309,40 +323,42 @@ function _apply_reduction!(
     is_bool = ws._snapshot.domain === QT.BoolDomain
     visits = precharged_visits
     u_free_edges = Pair{Int,_Exact}[]
-    touched_set = Set{Int}()
+    touched = Int[]
+    touched_seen = Set{Int}()
     for (w, q) in st.adjacency[u]
         _expired(deadline_ns) && return UpdateReport(:deadline, visits, 0)
         visits < max_work || return UpdateReport(:work_limit, visits, 0)
         visits += 1
         if st.fixed[w] == 2
             push!(u_free_edges, w => q)
-            push!(touched_set, w)
+            _touch!(touched, touched_seen, w)
         end
     end
     for (w, df) in field_deltas
         iszero(df) && continue
         w != u && st.fixed[w] == 2 || throw(ArgumentError("field delta targets a non-free variable"))
-        push!(touched_set, w)
+        _touch!(touched, touched_seen, w)
     end
     merged_q = Dict{Tuple{Int,Int},_Exact}()
+    merged_order = Tuple{Int,Int}[]
     for (a, b, dq) in quad_deltas
         iszero(dq) && continue
         a != b && a != u && b != u && st.fixed[a] == 2 && st.fixed[b] == 2 ||
             throw(ArgumentError("quadratic delta targets non-free or identical variables"))
         j, k = min(a, b), max(a, b)
+        !haskey(merged_q, (j, k)) && push!(merged_order, (j, k))
         merged_q[(j, k)] = get(merged_q, (j, k), _Exact(0)) + dq
-        push!(touched_set, j)
-        push!(touched_set, k)
+        _touch!(touched, touched_seen, j)
+        _touch!(touched, touched_seen, k)
     end
     merged_quad_deltas = Tuple{Int,Int,_Exact}[
-        (j, k, dq) for ((j, k), dq) in sort!(collect(merged_q); by=first) if !iszero(dq)
+        (j, k, merged_q[(j, k)]) for (j, k) in merged_order if !iszero(merged_q[(j, k)])
     ]
     for _ in merged_quad_deltas
         2 <= max_work - visits || return UpdateReport(:work_limit, visits, 0)
         _expired(deadline_ns) && return UpdateReport(:deadline, visits, 0)
         visits += 2
     end
-    touched = sort!(collect(touched_set))
     old_fields = Vector{_NeighborRecord}(undef, length(touched))
     old_dual = Vector{_DualDegreeRecord}(undef, length(touched) + 1)
     old_dual[1] = (u, st.dual_fields[u], st.degrees[u])
@@ -417,6 +433,7 @@ function _apply_reduction!(
     _expired(deadline_ns) && return UpdateReport(:deadline, visits, 0)
     st.serial == typemax(UInt64) && throw(ArgumentError("trail serial exhausted; reset workspace"))
     _reserve!(st.queue, length(st.queue) + length(touched))
+    _reserve!(st.elim_queue, length(st.elim_queue) + length(touched))
     _reserve!(st.trail, length(st.trail) + 1)
     _reserve!(st.fixes, length(st.fixes) + 1)
     for w in touched
@@ -449,6 +466,7 @@ function _apply_reduction!(
         spin_const_delta,
         spin_field_deltas,
         spin_coupling_deltas,
+        length(st.elim_queue),
     )
     push!(st.trail, entry)
     push!(st.fixes, length(st.trail))
@@ -472,6 +490,10 @@ function _apply_reduction!(
         if !st.queued[w]
             push!(st.queue, w)
             st.queued[w] = true
+        end
+        if st.degrees[w] <= 3 && !st.elim_queued[w]
+            push!(st.elim_queue, w)
+            st.elim_queued[w] = true
         end
     end
     return UpdateReport(:applied, visits, 1)
@@ -526,8 +548,13 @@ function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
     while length(st.trail) > cp._depth
         undo = pop!(st.trail)
         if undo isa _UndoQueue
-            st.head = undo.head
-            st.queued[undo.index] = undo.queued
+            if undo.is_elim
+                st.elim_head = undo.head
+                st.elim_queued[undo.index] = undo.queued
+            else
+                st.head = undo.head
+                st.queued[undo.index] = undo.queued
+            end
         elseif undo isa _UndoReduction
             for r in length(undo.adj_edits):-1:1
                 op, a, pos, old_pair = undo.adj_edits[r]
@@ -561,6 +588,9 @@ function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
             while length(st.queue) > undo.queue_length
                 st.queued[pop!(st.queue)] = false
             end
+            while length(st.elim_queue) > undo.elim_queue_length
+                st.elim_queued[pop!(st.elim_queue)] = false
+            end
             st.fixed[undo.index] = 2
             st.entries[undo.index] = 0
             pop!(st.fixes)
@@ -581,6 +611,9 @@ function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
             end
             while length(st.queue) > undo.queue_length
                 st.queued[pop!(st.queue)] = false
+            end
+            while length(st.elim_queue) > undo.elim_queue_length
+                st.elim_queued[pop!(st.elim_queue)] = false
             end
             st.fixed[undo.index] = 2
             st.degrees[undo.index] = length(undo.fields)

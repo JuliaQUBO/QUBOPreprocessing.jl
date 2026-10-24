@@ -6,11 +6,22 @@ resume a bounded pass. See the [solve walkthrough](guide.md#guide-solve)
 for what to do with its residual and report.
 
 Select `Workspace(model; rules=:dominance)` and call `propagate!` explicitly,
-or use `preprocess(model; rules=:dominance, limits...)`. Identity remains the
+or use `preprocess(model; rules=:dominance, limits...)`. For queue-driven
+degree-0/1/2 exact local elimination (including arbitrary local fields, fill-edge
+merging/cancellation and optional alternating dominance/elimination cascades),
+select `Workspace(model; rules=:elimination)` or call
+`eliminate_low_degree!(ws; cascade_dominance=true, ...)`. Identity remains the
 default. Neither path dispatches a solver or implicitly materializes a residual.
-Only strong unary dominance is enabled: every reported value holds in **all**
-optima within the current caller scope. Pair relations, weak ties, elimination,
-roof duality and heuristic choices are separate methods.
+In pure dominance mode (`propagate!(ws)`), only strong unary dominance is enabled:
+every reported value holds in **all** optima within the current caller scope.
+Local variable elimination (`eliminate_variable!`, `eliminate_low_degree!`)
+records an `EliminationStep` in `reductions(ws)` with its conditional argmin
+reconstruction table rather than reporting the variable in `deductions(ws)` as a
+globally fixed constant; when boundary ties occur (`tie_break=:low` or `:high`),
+`persistency(step)` is `:weak` and preserves the optimal objective value and at
+least one optimal reconstruction without claiming that all original optima or
+their multiplicities are represented by a single tie choice. Pair relations,
+weak ties, roof duality and heuristic choices are separate methods.
 
 For minimization of the normalized objective, a binary derivative has bounds
 `aᵢ + Σ min(0,bᵢⱼ)` and `aᵢ + Σ max(0,bᵢⱼ)` over free neighbors.
@@ -123,3 +134,21 @@ The retained source artifact `docs/evidence/dominance-pilot.md` records the
 producing revision and all paired raw rows. In that tiny warm run, the all-fixed
 case reduced total time, while the cascade and both no-reduction controls were
 slower with preprocessing. Variable reduction alone did not predict payoff.
+
+For degree-0/1/2 local elimination (`eliminate_low_degree!`, `examples/elimination.jl`),
+the elimination queue `elim_queue` tracks only vertices with active degree `<= 3`:
+- **Dense / high-degree no-benefit control (`K_5` or 4-regular graphs):**
+  `elim_queue` is initially empty (`0` candidates examined, `0` edge visits), so
+  calling `eliminate_low_degree!(ws)` on an already-imported workspace incurs
+  constant-size overhead without scanning the graph.
+- **Tiny sparse instances (`n = 6`, 4-clique core + 2-vertex tail):**
+  eliminating 2 degree-`<= 2` vertices reduces the exhaustive child search from
+  `2^6 = 64` to `2^4 = 16` states, but exact `Rational{BigInt}` table
+  construction, residual materialization and certificate verification cost more
+  than evaluating the 48 saved states directly.
+- **Break-even and sparse payoff (`n >= 10..14`, 4-clique core + 6..10-vertex tail/chains/cycles):**
+  each eliminated degree-`<= 2` vertex halves the downstream exponential search
+  space at `O(touched)` local cost (`<= 4` boundary evaluations per vertex),
+  crossing break-even against unpreprocessed exhaustive evaluation around `6`
+  eliminated variables (`2^10 = 1024 -> 16` states) and yielding an order-of-magnitude
+  net reduction by `n = 14` (`2^14 = 16,384 -> 16` states).

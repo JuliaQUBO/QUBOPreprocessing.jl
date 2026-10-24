@@ -143,8 +143,8 @@ mutable struct Workspace
         return new(snapshot, Generation(uuid4(), uuid4()), state)
     end
 end
-_check_rules(rules) = rules in (:identity,:dominance) ? nothing :
-    throw(ArgumentError("supported rules are :identity and :dominance; requested $(repr(rules))"))
+_check_rules(rules) = rules in (:identity,:dominance,:elimination) ? nothing :
+    throw(ArgumentError("supported rules are :identity, :dominance and :elimination; requested $(repr(rules))"))
 
 """`generation(ws_or_export)` returns its immutable source/workspace identity."""
 generation(ws::Workspace) = ws._generation
@@ -308,6 +308,7 @@ No model is materialized implicitly.
 function preprocess(model; rules=:identity, kwargs...)
     ws = Workspace(model; rules)
     rules === :dominance && return ws, propagate!(ws;kwargs...)
-    isempty(kwargs) || throw(ArgumentError("propagation limits require rules=:dominance"))
+    rules === :elimination && return ws, eliminate_low_degree!(ws;kwargs...)
+    isempty(kwargs) || throw(ArgumentError("propagation limits require rules=:dominance or rules=:elimination"))
     return ws, IdentityReport(generation(ws), :identity, :quiescent, 0, 0)
 end

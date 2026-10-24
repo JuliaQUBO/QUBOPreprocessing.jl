@@ -261,10 +261,11 @@ end
     Q3 = [0.0 -1.0 -1.0 -1.0; 0.0 0.0 0.5 0.0; 0.0 0.0 0.0 -0.5; 0.0 0.0 0.0 0.0]
     ws3 = Workspace(fixture([:u, :w1, :w2, :w3], L3, Q3))
     @test degree(ws3, :u) == 3
-    att3 = prove_elimination(ws3, :u)
+    @test prove_elimination(ws3, :u).stop_reason === :degree_too_high
+    att3 = prove_elimination(ws3, :u; max_degree=3)
     @test att3.stop_reason === :proved
     @test verify_certificate(ws3, att3.certificate).valid
-    @test eliminate_variable!(ws3, :u).stop_reason === :applied
+    @test eliminate_variable!(ws3, :u; max_degree=3).stop_reason === :applied
 
     # Degree-3 variable with nonzero cubic term alpha_123 != 0 is refused with :nonquadratic_elimination:
     # For u in {0, 1} with f_u = -1.0 and couplings +2.0 to w1, w2, w3:
@@ -272,8 +273,8 @@ end
     L_cubic = [-1.0, 0.0, 0.0, 0.0]
     Q_cubic = [0.0 2.0 2.0 2.0; 0.0 0.0 0.0 0.0; 0.0 0.0 0.0 0.0; 0.0 0.0 0.0 0.0]
     ws_cubic = Workspace(fixture([:u, :w1, :w2, :w3], L_cubic, Q_cubic))
-    @test prove_elimination(ws_cubic, :u).stop_reason === :nonquadratic_elimination
-    @test eliminate_variable!(ws_cubic, :u).stop_reason === :nonquadratic_elimination
+    @test prove_elimination(ws_cubic, :u; max_degree=3).stop_reason === :nonquadratic_elimination
+    @test eliminate_variable!(ws_cubic, :u; max_degree=3).stop_reason === :nonquadratic_elimination
 end
 
 @testset "weak persistency is sequential, opt-in and rejects incompatible batches" begin

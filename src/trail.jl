@@ -21,6 +21,7 @@ struct _UndoFix
     proof::Union{Nothing,_ProofRecord}
     dual_constant::_Exact
     dual_fields::Vector{Pair{Int,_Exact}}
+    elim_queue_length::Int
 end
 
 struct _UndoReduction
@@ -38,6 +39,7 @@ struct _UndoReduction
     spin_const_delta::_Exact
     spin_field_deltas::Vector{Pair{Int,_Exact}}
     spin_coupling_deltas::Vector{Tuple{Int,Int,_Exact}}
+    elim_queue_length::Int
 end
 
 struct _UndoQueue
@@ -46,7 +48,10 @@ struct _UndoQueue
     index::Int
     head::Int
     queued::Bool
+    is_elim::Bool
 end
+_UndoQueue(serial::UInt64, fix_depth::Int, index::Int, head::Int, queued::Bool) =
+    _UndoQueue(serial, fix_depth, index, head, queued, false)
 const _UndoEntry = Union{_UndoFix,_UndoReduction,_UndoQueue}
 
 # Topology-changing reductions (relation contractions and bounded local
@@ -82,4 +87,7 @@ mutable struct _Incremental
     dual_constant::_Exact
     degrees::Vector{Int}
     initial_degrees::Vector{Int}
+    elim_queue::Vector{Int}
+    elim_queued::BitVector
+    elim_head::Int
 end
