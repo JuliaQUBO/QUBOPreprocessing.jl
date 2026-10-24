@@ -679,6 +679,350 @@ function apply_roof_duality!(
 end
 
 """
+    SubmodularCutReport{V,S}
+
+Summary of an optional certified gauge-submodular component cut pass run by
+[`apply_submodular_cut!`](@ref). Retains `stop_reason` (`:applied`,
+`:no_persistency`, `:frustrated_cycle`, `:boundary_coupled`, `:already_fixed`,
+`:zero_scale`, `:work_limit`, `:verification_limit`, or `:deadline`),
+`recognized_components`, `solved_components`, exact normalized `component_opt`,
+`max_flow`, `fixed_count`, committed `fixings::Vector{Pair{V,S}}`, and
+phase-separated work counters (`recognition_work`, `graph_work`, `flow_work`,
+`verification_work`, `materialization_work`, `edge_visits`, `exact_work`).
+"""
+struct SubmodularCutReport{V,S}
+    stop_reason::Symbol
+    recognized_components::Int
+    solved_components::Int
+    component_opt::Union{Nothing,_Exact}
+    max_flow::Union{Nothing,_Exact}
+    fixed_count::Int
+    fixings::Vector{Pair{V,S}}
+    recognition_work::Int
+    graph_work::Int
+    flow_work::Int
+    verification_work::Int
+    materialization_work::Int
+    edge_visits::Int
+    exact_work::Int
+end
+
+"""
+    apply_submodular_cut!(ws; component=nothing, map=nothing, allow_weak=false,
+                          tie_break=:low, max_work=typemax(Int),
+                          max_exact_work=typemax(Int), deadline_ns=nothing)
+    apply_submodular_cut!(ws, component; map=nothing, allow_weak=false,
+                          tie_break=:low, max_work=typemax(Int),
+                          max_exact_work=typemax(Int), deadline_ns=nothing)
+
+Recognize one or all gauge-submodular residual components in `ws`, solve each via
+a direct ``(|C| + 2)``-vertex exact ``s``-``t`` min-cut, and transactionally
+commit the resulting strong (`allow_weak=false`, default) or full minimum-cut
+(`allow_weak=true`, selected via `tie_break`) variable assignments as
+[`SubmodularCutStep`](@ref) records on the reversible trail. If committing the
+batch is interrupted by `max_work` or `deadline_ns`, the pass rolls back cleanly
+to the pre-pass checkpoint. Returns a [`SubmodularCutReport`](@ref).
+"""
+function apply_submodular_cut!(
+    ws::Workspace;
+    component=nothing,
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+    allow_weak::Bool=false,
+    tie_break::Symbol=:low,
+    max_work=typemax(Int),
+    max_exact_work=typemax(Int),
+    deadline_ns=nothing,
+)
+    component !== nothing && return apply_submodular_cut!(
+        ws, component;
+        map=map, allow_weak=allow_weak, tie_break=tie_break,
+        max_work=max_work, max_exact_work=max_exact_work, deadline_ns=deadline_ns,
+    )
+    _limits(max_work, deadline_ns)
+    _limits(max_exact_work, deadline_ns)
+    map === nothing || _validate_domain_map(ws, map)
+    tie_break in (:low, :high, :source, :sink) ||
+        throw(ArgumentError("tie_break must be :low, :high, :source, or :sink"))
+    s = ws._snapshot
+    st = ws._state
+    V = s.label_type
+    S = s.state_type
+    direction = _direction(s)
+    if direction == 0
+        return SubmodularCutReport{V,S}(
+            :zero_scale, 0, 0, nothing, nothing, 0, Pair{V,S}[],
+            0, 0, 0, 0, 0, 0, 0,
+        )
+    end
+    comps, rec_stop, rec_work = recognize_submodular_components(
+        ws; max_work=max_work, deadline_ns=deadline_ns,
+    )
+    if rec_stop in (:deadline, :work_limit)
+        return SubmodularCutReport{V,S}(
+            rec_stop, 0, 0, nothing, nothing, 0, Pair{V,S}[],
+            rec_work, 0, 0, 0, 0, rec_work, 0,
+        )
+    end
+    submod_comps = SubmodularComponent{V}[c for c in comps if c.is_submodular]
+    n_rec = length(submod_comps)
+    if isempty(submod_comps)
+        stop = isempty(comps) ? :no_persistency : :frustrated_cycle
+        return SubmodularCutReport{V,S}(
+            stop, 0, 0, nothing, nothing, 0, Pair{V,S}[],
+            rec_work, 0, 0, 0, 0, rec_work, 0,
+        )
+    end
+    total_graph_work = 0
+    total_flow_work = 0
+    total_ver_work = 0
+    total_visits = rec_work
+    total_exact_work = 0
+    total_comp_opt = _Exact(0)
+    total_max_flow = _Exact(0)
+    n_solved = 0
+    all_batch_pairs = Pair{Int,Int}[]
+    component_batches = Tuple{
+        Vector{Int},Vector{Int},_Exact,_Exact,
+        Tuple{Vararg{Tuple{Int,Int,_Exact}}},Vector{Pair{Int,Int}},Vector{Symbol},
+    }[]
+    for c in submod_comps
+        batch_pairs, batch_pers, _, gauge_vec,
+            flow_edges, comp_opt, c_flow,
+            stop, _, _, g_work, f_work, v_work, c_visits, c_exact = _submodular_cut_component_pass(
+            ws, c.indices;
+            map=map, allow_weak=allow_weak, tie_break=tie_break,
+            pre_rec=c,
+            max_work=max_work - total_visits,
+            max_exact_work=max_exact_work - total_exact_work,
+            deadline_ns=deadline_ns,
+        )
+        total_graph_work += g_work
+        total_flow_work += f_work
+        total_ver_work += v_work
+        total_visits += c_visits
+        total_exact_work += c_exact
+        if stop in (:deadline, :work_limit, :verification_limit)
+            return SubmodularCutReport{V,S}(
+                stop, n_rec, n_solved, nothing, nothing, 0, Pair{V,S}[],
+                rec_work, total_graph_work, total_flow_work, total_ver_work, 0, total_visits, total_exact_work,
+            )
+        end
+        n_solved += 1
+        total_comp_opt += comp_opt
+        total_max_flow += c_flow
+        if !isempty(batch_pairs)
+            append!(all_batch_pairs, batch_pairs)
+            push!(
+                component_batches,
+                (c.indices, gauge_vec, comp_opt, c_flow, flow_edges, batch_pairs, batch_pers),
+            )
+        end
+    end
+    if isempty(all_batch_pairs)
+        return SubmodularCutReport{V,S}(
+            :no_persistency, n_rec, n_solved, total_comp_opt, total_max_flow, 0, Pair{V,S}[],
+            rec_work, total_graph_work, total_flow_work, total_ver_work, 0, total_visits, total_exact_work,
+        )
+    end
+    scope_len = length(st.callers)
+    base_preds = st.proof_count
+    cp = checkpoint(ws)
+    saved_star_hint = st.star_hint
+    saved_rel_hint = st.rel_hint
+    mat_visits = 0
+    step_offset = 0
+    for (comp_indices, gauge_vec, comp_opt, c_flow, flow_edges, batch_pairs, batch_pers) in component_batches
+        comp_tuple = Tuple(comp_indices)
+        gauge_tuple = Tuple(gauge_vec)
+        batch_tuple = Tuple(batch_pairs)
+        for (r, (u, orig_val)) in enumerate(batch_pairs)
+            if _expired(deadline_ns)
+                rollback!(ws, cp)
+                st.star_hint = saved_star_hint
+                st.rel_hint = saved_rel_hint
+                return SubmodularCutReport{V,S}(
+                    :deadline, n_rec, n_solved, total_comp_opt, total_max_flow, 0, Pair{V,S}[],
+                    rec_work, total_graph_work, total_flow_work, total_ver_work,
+                    mat_visits, total_visits + mat_visits, total_exact_work,
+                )
+            end
+            c_before = deepcopy(st.constant)
+            step_r = SubmodularCutStep(
+                u, orig_val,
+                comp_tuple, gauge_tuple,
+                deepcopy(comp_opt), deepcopy(c_flow),
+                flow_edges, batch_tuple, r,
+                c_before, base_preds + step_offset,
+                :exact, scope_len, batch_pers[r],
+            )
+            step_offset += 1
+            rep = _fix!(
+                ws, u, orig_val;
+                proof=step_r, max_work=max_work - total_visits - mat_visits, deadline_ns=deadline_ns,
+            )
+            mat_visits += rep.edge_visits
+            if rep.stop_reason !== :applied
+                rollback!(ws, cp)
+                st.star_hint = saved_star_hint
+                st.rel_hint = saved_rel_hint
+                return SubmodularCutReport{V,S}(
+                    rep.stop_reason, n_rec, n_solved, total_comp_opt, total_max_flow, 0, Pair{V,S}[],
+                    rec_work, total_graph_work, total_flow_work, total_ver_work,
+                    mat_visits, total_visits + mat_visits, total_exact_work,
+                )
+            end
+        end
+    end
+    fixings = Pair{V,S}[
+        deepcopy(s.labels[u]) => S(map === nothing ? orig_val : _map_index_value(map, u, orig_val))
+        for (u, orig_val) in all_batch_pairs
+    ]
+    return SubmodularCutReport{V,S}(
+        :applied, n_rec, n_solved, total_comp_opt, total_max_flow, length(fixings), fixings,
+        rec_work, total_graph_work, total_flow_work, total_ver_work,
+        mat_visits, total_visits + mat_visits, total_exact_work,
+    )
+end
+
+function apply_submodular_cut!(
+    ws::Workspace,
+    component;
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+    allow_weak::Bool=false,
+    tie_break::Symbol=:low,
+    max_work=typemax(Int),
+    max_exact_work=typemax(Int),
+    deadline_ns=nothing,
+)
+    _limits(max_work, deadline_ns)
+    _limits(max_exact_work, deadline_ns)
+    map === nothing || _validate_domain_map(ws, map)
+    tie_break in (:low, :high, :source, :sink) ||
+        throw(ArgumentError("tie_break must be :low, :high, :source, or :sink"))
+    s = ws._snapshot
+    st = ws._state
+    V = s.label_type
+    S = s.state_type
+    comp_indices = Int[]
+    candidate_index = nothing
+    init_rec_work = 0
+    if component isa SubmodularComponent
+        seen = Set{Int}()
+        for lbl in component.variables
+            u = _variable(ws, lbl)
+            if !(u in seen)
+                push!(comp_indices, u)
+                push!(seen, u)
+            end
+        end
+        isempty(comp_indices) && throw(ArgumentError("component must contain at least one variable"))
+        sort!(comp_indices)
+    elseif !(component isa Union{AbstractVector,AbstractSet}) && haskey(st.labels, component)
+        i = _variable(ws, component)
+        candidate_index = i
+        if st.fixed[i] != 2
+            return SubmodularCutReport{V,S}(
+                :already_fixed, 0, 0, nothing, nothing, 0, Pair{V,S}[],
+                0, 0, 0, 0, 0, 0, 0,
+            )
+        end
+        if _direction(s) == 0
+            return SubmodularCutReport{V,S}(
+                :zero_scale, 0, 0, nothing, nothing, 0, Pair{V,S}[],
+                0, 0, 0, 0, 0, 0, 0,
+            )
+        end
+        comp_indices, conn_reason, conn_work = _connected_active_component(
+            ws, i; max_work=max_work, deadline_ns=deadline_ns,
+        )
+        init_rec_work = conn_work
+        if conn_reason !== :ok
+            return SubmodularCutReport{V,S}(
+                conn_reason, 0, 0, nothing, nothing, 0, Pair{V,S}[],
+                init_rec_work, 0, 0, 0, 0, init_rec_work, 0,
+            )
+        end
+    else
+        seen = Set{Int}()
+        for lbl in component
+            u = _variable(ws, lbl)
+            if !(u in seen)
+                push!(comp_indices, u)
+                push!(seen, u)
+            end
+        end
+        isempty(comp_indices) && throw(ArgumentError("component must contain at least one variable"))
+        sort!(comp_indices)
+    end
+    batch_pairs, batch_pers, _, gauge_vec,
+        flow_edges, comp_opt, total_flow,
+        stop, _, rec_work, graph_work, flow_work, ver_work, total_visits, exact_work = _submodular_cut_component_pass(
+        ws, comp_indices;
+        map=map, allow_weak=allow_weak, tie_break=tie_break,
+        candidate_index=candidate_index,
+        max_work=max_work - init_rec_work, max_exact_work=max_exact_work, deadline_ns=deadline_ns,
+    )
+    rec_work += init_rec_work
+    total_visits += init_rec_work
+    n_rec = isempty(gauge_vec) ? 0 : 1
+    n_solved = comp_opt === nothing ? 0 : 1
+    if isempty(batch_pairs)
+        return SubmodularCutReport{V,S}(
+            stop, n_rec, n_solved, comp_opt, total_flow, 0, Pair{V,S}[],
+            rec_work, graph_work, flow_work, ver_work, 0, total_visits, exact_work,
+        )
+    end
+    scope_len = length(st.callers)
+    base_preds = st.proof_count
+    comp_tuple = Tuple(comp_indices)
+    gauge_tuple = Tuple(gauge_vec)
+    batch_tuple = Tuple(batch_pairs)
+    cp = checkpoint(ws)
+    saved_star_hint = st.star_hint
+    saved_rel_hint = st.rel_hint
+    mat_visits = 0
+    for (r, (u, orig_val)) in enumerate(batch_pairs)
+        if _expired(deadline_ns)
+            rollback!(ws, cp)
+            st.star_hint = saved_star_hint
+            st.rel_hint = saved_rel_hint
+            return SubmodularCutReport{V,S}(
+                :deadline, n_rec, n_solved, comp_opt, total_flow, 0, Pair{V,S}[],
+                rec_work, graph_work, flow_work, ver_work, mat_visits, total_visits + mat_visits, exact_work,
+            )
+        end
+        c_before = deepcopy(st.constant)
+        step_r = SubmodularCutStep(
+            u, orig_val,
+            comp_tuple, gauge_tuple,
+            deepcopy(comp_opt), deepcopy(total_flow),
+            flow_edges, batch_tuple, r,
+            c_before, base_preds + r - 1,
+            :exact, scope_len, batch_pers[r],
+        )
+        rep = _fix!(ws, u, orig_val; proof=step_r, max_work=max_work - total_visits - mat_visits, deadline_ns=deadline_ns)
+        mat_visits += rep.edge_visits
+        if rep.stop_reason !== :applied
+            rollback!(ws, cp)
+            st.star_hint = saved_star_hint
+            st.rel_hint = saved_rel_hint
+            return SubmodularCutReport{V,S}(
+                rep.stop_reason, n_rec, n_solved, comp_opt, total_flow, 0, Pair{V,S}[],
+                rec_work, graph_work, flow_work, ver_work, mat_visits, total_visits + mat_visits, exact_work,
+            )
+        end
+    end
+    fixings = Pair{V,S}[
+        deepcopy(s.labels[u]) => S(map === nothing ? orig_val : _map_index_value(map, u, orig_val))
+        for (u, orig_val) in batch_pairs
+    ]
+    return SubmodularCutReport{V,S}(
+        :applied, n_rec, n_solved, comp_opt, total_flow, length(fixings), fixings,
+        rec_work, graph_work, flow_work, ver_work, mat_visits, total_visits + mat_visits, exact_work,
+    )
+end
+
+"""
     contract_relation!(ws, eliminated, representative; sign=nothing, map=nothing,
                        allow_weak=false, max_work=typemax(Int),
                        max_exact_work=typemax(Int), deadline_ns=nothing)

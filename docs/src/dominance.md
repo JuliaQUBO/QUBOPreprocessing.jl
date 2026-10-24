@@ -420,3 +420,47 @@ external C++/Python dependency or floating-point capacity clipping:
    zero-field frustrated instances (`:no_persistency`). Call `apply_roof_duality!`
    explicitly once after cheap propagation quiesces when attractive couplings block
    unary dominance.
+
+## Optional certified gauge-submodular component recognition and cut pass
+
+When a connected residual component ``C \subseteq F`` has no free external neighbors
+and admits a bipartite spin gauge ``\sigma_u \in \{-1, +1\}`` making every active
+quadratic coupling in ``C`` attractive (``\tilde{J}'_{uv} = \sigma_u \sigma_v \tilde{J}_{uv} \le 0``),
+the component is **gauge-submodular** and can be solved directly on a compact
+``(|C| + 2)``-vertex ``s``-``t`` network (`recognize_submodular_component`,
+`recognize_submodular_components`, `prove_submodular_cut`, `apply_submodular_cut!`)
+without constructing the doubled ``(2n + 2)``-vertex implication network:
+
+1. **Structural recognition (`recognize_submodular_component`, `recognize_submodular_components`):**
+   verifies in ``O(|V_C| + |E_C|)`` work that ``C`` is a closed active residual
+   component (rejecting any subset with nonzero couplings to free external
+   neighbors as `:boundary_coupled`) and runs a bipartite edge-parity BFS on
+   ``\operatorname{sign}(\tilde{J}_{uv})`` to discover ``\sigma_u \in \{-1, +1\}``
+   (rejecting odd frustrated cycles as `:frustrated_cycle`) before allocating any
+   flow network.
+2. **Direct ``(|C| + 2)``-vertex cut network (``G_{\text{cut}}(C, \sigma)``):**
+   in gauged spin variables ``s'_a = \sigma_a s_u \in \{-1, +1\}``, assigning
+   ``a \in S_C`` corresponds to ``s'_a = +1`` (``s_u = \sigma_a``) and ``a \in T_C``
+   corresponds to ``s'_a = -1`` (``s_u = -\sigma_a``). Starting from
+   ``C_{\text{comp}} = -\sum_{a=1}^{|C|} |\tilde{h}'_a| - \sum_{1 \le a < b \le |C|} |\tilde{J}'_{ab}|``,
+   directed arcs ``a \to T`` (for ``\tilde{h}'_a > 0``) or ``S \to a`` (for
+   ``\tilde{h}'_a < 0``) receive capacity ``2|\tilde{h}'_a|``, and internal edges
+   ``a \leftrightarrow b`` receive symmetric capacity ``2|\tilde{J}'_{ab}|``. Every
+   ``S``-``T`` cut ``(S_C, T_C)`` is in exact bijection with a spin assignment on
+   ``C``, and ``C_{\text{comp}} + \operatorname{Cap}(S_C, T_C)`` equals the exact
+   normalized spin energy of ``C``.
+3. **Strong vs. weak persistency (`allow_weak`, `tie_break`):** from the residual
+   network ``G_f`` of the exact rational maximum flow, vertices in
+   ``C \cap (\mathcal{R}_S \cup \mathcal{R}_T)`` take the same value in **every**
+   minimum cut of ``C`` and are certified with `:strong` persistency (the default
+   `allow_weak=false` mode). When `allow_weak=true`, a complete jointly optimal
+   minimum cut of ``C`` is selected deterministically via `tie_break` (`:low`,
+   `:high`, `:source`, or `:sink`), tagging tied vertices ``a \notin \mathcal{R}_S \cup \mathcal{R}_T``
+   with `:weak` persistency.
+4. **Independent verification (`SubmodularCutStep`):** `verify_certificate`
+   independently checks that ``C`` is closed in the evolving polynomial state,
+   verifies ``\sigma_u \sigma_v \tilde{J}_{uv} \le 0`` on all active edges of ``C``,
+   reconstructs ``G_{\text{cut}}(C, \sigma)``, verifies flow conservation,
+   capacity bounds, residual ``S``-``T`` disconnection, and primal-dual cut
+   equality, and verifies both `:strong` reachability membership and joint minimum-cut
+   capacity equality for any `:weak` batch.

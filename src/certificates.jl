@@ -148,13 +148,46 @@ RoofDualityStep(i, v, rlo, mf, fe, bf, bi, c, p, m, sc) =
     RoofDualityStep(i, v, rlo, mf, fe, bf, bi, c, p, m, sc, :strong)
 
 """
+    SubmodularCutStep
+
+Recorded variable-fixing proof step derived from an exact rational Kolmogorov–Zabih
+``s``–``t`` min-cut / max-flow pass on a closed gauge-submodular residual
+component `component_variables` with certified bipartite spin gauge `gauge`.
+Tagged `:strong` when the variable's cut side is mandatory across all minimum
+cuts (``u \\in \\mathcal{R}_S \\cup \\mathcal{R}_T``), or `:weak` when
+`allow_weak=true` commits a jointly compatible minimum cut across the entire
+closed component.
+"""
+struct SubmodularCutStep <: _ProofRecord
+    variable::Int
+    value::Int
+    component_variables::Tuple{Vararg{Int}}
+    gauge::Tuple{Vararg{Int}}
+    component_opt::_Exact
+    max_flow::_Exact
+    flow_edges::Tuple{Vararg{Tuple{Int,Int,_Exact}}}
+    batch_fixings::Tuple{Vararg{Pair{Int,Int}}}
+    batch_index::Int
+    constant::_Exact
+    predecessors::Int
+    method::Symbol
+    scope_length::Int
+    persistency::Symbol
+end
+SubmodularCutStep(i, v, cv, g, copt, mf, fe, bf, bi, c, p, m) =
+    SubmodularCutStep(i, v, cv, g, copt, mf, fe, bf, bi, c, p, m, -1, :strong)
+SubmodularCutStep(i, v, cv, g, copt, mf, fe, bf, bi, c, p, m, sc) =
+    SubmodularCutStep(i, v, cv, g, copt, mf, fe, bf, bi, c, p, m, sc, :strong)
+
+"""
     DominanceCertificate
 
 Owned source/generation, explicit caller scope and ordered reduction steps
 ([`DominanceStep`](@ref), [`RelationStep`](@ref), [`EliminationStep`](@ref),
-[`ProbingStep`](@ref), [`RoofDualityStep`](@ref)). Every step retains all scoped
-optima (`:strong`) or at least one scoped optimum of the evolving residual
-(`:weak` / non-unique argmin). Also aliased as [`ReductionCertificate`](@ref).
+[`ProbingStep`](@ref), [`RoofDualityStep`](@ref), [`SubmodularCutStep`](@ref)).
+Every step retains all scoped optima (`:strong`) or at least one scoped optimum
+of the evolving residual (`:weak` / non-unique argmin). Also aliased as
+[`ReductionCertificate`](@ref).
 """
 struct DominanceCertificate
     generation::Generation
@@ -186,7 +219,7 @@ Return the algebraic guarantee class of a preprocessing step or coordinate map:
 """
 step_guarantee(::DomainGaugeMap) = :energy_identity
 step_guarantee(::EliminationStep) = :exact_elimination
-step_guarantee(::Union{DominanceStep,RelationStep,ProbingStep,RoofDualityStep}) = :optimum_preserving_restriction
+step_guarantee(::Union{DominanceStep,RelationStep,ProbingStep,RoofDualityStep,SubmodularCutStep}) = :optimum_preserving_restriction
 
 """
     persistency(step_or_certificate)
@@ -195,7 +228,7 @@ Return `:strong` when a step, map, or certificate preserves all optima on its
 scope, or `:weak` when any step relies on tie-breaking / weak persistency.
 """
 persistency(::DomainGaugeMap) = :strong
-persistency(step::Union{DominanceStep,RelationStep,ProbingStep,RoofDualityStep}) = step.persistency
+persistency(step::Union{DominanceStep,RelationStep,ProbingStep,RoofDualityStep,SubmodularCutStep}) = step.persistency
 persistency(step::EliminationStep) = step.unique_argmin ? :strong : :weak
 persistency(cert::DominanceCertificate) =
     any(s -> persistency(s) === :weak, cert.steps) ? :weak : :strong
@@ -268,6 +301,28 @@ struct RoofDualityAttempt{V,S}
     objective_bound::Union{Nothing,_Exact}
     max_flow::Union{Nothing,_Exact}
     fixings::Vector{Pair{V,S}}
+    graph_work::Int
+    flow_work::Int
+    verification_work::Int
+    edge_visits::Int
+    exact_work::Int
+end
+
+"""Certified gauge-submodular component cut proof attempt with optional `certificate`,
+`stop_reason`, `method`, exact normalized `component_opt`, `max_flow`, discovered
+bipartite `gauge`, complete optimal component `assignment`, certified `fixings`,
+and phase-separated work counters (`recognition_work`, `graph_work`, `flow_work`,
+`verification_work`, `edge_visits`, `exact_work`)."""
+struct SubmodularCutAttempt{V,S}
+    certificate::Union{Nothing,DominanceCertificate}
+    stop_reason::Symbol
+    method::Symbol
+    component_opt::Union{Nothing,_Exact}
+    max_flow::Union{Nothing,_Exact}
+    gauge::Vector{Pair{V,Int}}
+    assignment::Vector{Pair{V,S}}
+    fixings::Vector{Pair{V,S}}
+    recognition_work::Int
     graph_work::Int
     flow_work::Int
     verification_work::Int
@@ -884,7 +939,7 @@ function _extract_witness_state(ws::Workspace, witness, map::Union{Nothing,Domai
         entry = st.trail[pos]
         entry.proof === nothing && continue
         pstep = entry.proof
-        if pstep isa Union{DominanceStep,ProbingStep,RoofDualityStep}
+        if pstep isa Union{DominanceStep,ProbingStep,RoofDualityStep,SubmodularCutStep}
             w[pstep.variable] == pstep.value ||
                 throw(ArgumentError("witness violates committed workspace reduction"))
         elseif pstep isa RelationStep
@@ -1514,6 +1569,18 @@ function _transport_one_step(
         )
         _poly_fix!(p, rstep.variable, rstep.value)
         return out
+    elseif step isa SubmodularCutStep
+        sstep = step::SubmodularCutStep
+        out = SubmodularCutStep(
+            sstep.variable, sstep.value,
+            sstep.component_variables, sstep.gauge,
+            deepcopy(sstep.component_opt), deepcopy(sstep.max_flow),
+            sstep.flow_edges, sstep.batch_fixings, sstep.batch_index,
+            deepcopy(c_to), sstep.predecessors, sstep.method,
+            sstep.scope_length, sstep.persistency,
+        )
+        _poly_fix!(p, sstep.variable, sstep.value)
+        return out
     else
         estep = step::EliminationStep
         out = EliminationStep(
@@ -1954,6 +2021,502 @@ function prove_roof_duality(
     )
 end
 
+function _connected_active_component(ws::Workspace, seed::Int; max_work::Int=typemax(Int), deadline_ns=nothing)
+    st = ws._state
+    n = length(ws._snapshot.labels)
+    visited = falses(n)
+    visited[seed] = true
+    queue = Int[seed]
+    work = 0
+    head = 1
+    while head <= length(queue)
+        _expired(deadline_ns) && return (Int[], :deadline, work)
+        u = queue[head]
+        head += 1
+        for (v, q) in st.adjacency[u]
+            _expired(deadline_ns) && return (Int[], :deadline, work)
+            work < max_work || return (Int[], :work_limit, work)
+            work += 1
+            (st.fixed[v] == 2 && !visited[v] && !iszero(_spin_coupling(ws, q))) || continue
+            visited[v] = true
+            push!(queue, v)
+        end
+    end
+    return (sort!(queue), :ok, work)
+end
+
+function _submodular_cut_component_pass(
+    ws::Workspace,
+    comp_indices::Vector{Int};
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+    allow_weak::Bool=false,
+    tie_break::Symbol=:low,
+    candidate_index::Union{Nothing,Int}=nothing,
+    value_filter::Union{Nothing,Int}=nothing,
+    pre_rec::Union{Nothing,SubmodularComponent}=nothing,
+    max_work::Int=typemax(Int),
+    max_exact_work::Int=typemax(Int),
+    deadline_ns=nothing,
+)
+    s = ws._snapshot
+    rec = pre_rec === nothing ?
+        _recognize_component_indices(ws, comp_indices; max_work=max_work, deadline_ns=deadline_ns) :
+        pre_rec
+    rec_work = pre_rec === nothing ? rec.recognition_work : 0
+    if !rec.is_submodular
+        meth = rec.stop_reason in (:already_fixed, :zero_scale) ? :none : :exact
+        return (
+            Pair{Int,Int}[], Symbol[], Pair{Int,Int}[], Int[],
+            (), nothing, nothing,
+            rec.stop_reason, meth, rec_work, 0, 0, 0, rec_work, 0,
+        )
+    end
+    ok, reason, net, C_comp, graph_work, exact_work = _build_submodular_cut_network(
+        ws, comp_indices, rec.gauge;
+        max_work=max_work - rec_work,
+        max_exact_work=max_exact_work,
+        deadline_ns=deadline_ns,
+    )
+    total_visits = rec_work + graph_work
+    ok || return (
+        Pair{Int,Int}[], Symbol[], Pair{Int,Int}[], rec.gauge,
+        (), nothing, nothing,
+        reason, :exact, rec_work, graph_work, 0, 0, total_visits, exact_work,
+    )
+    ok_flow, flow_reason, total_flow, flow_work, flow_exact = _dinic_max_flow!(
+        net;
+        max_work=max_work - total_visits,
+        max_exact_work=max_exact_work - exact_work,
+        deadline_ns=deadline_ns,
+    )
+    exact_work += flow_exact
+    total_visits += flow_work
+    ok_flow || return (
+        Pair{Int,Int}[], Symbol[], Pair{Int,Int}[], rec.gauge,
+        (), nothing, nothing,
+        flow_reason, :exact, rec_work, graph_work, flow_work, 0, total_visits, exact_work,
+    )
+    R_S, R_T, ver_work = _residual_reachability(net)
+    if _expired(deadline_ns)
+        return (
+            Pair{Int,Int}[], Symbol[], Pair{Int,Int}[], rec.gauge,
+            (), nothing, nothing,
+            :deadline, :exact, rec_work, graph_work, flow_work, ver_work, total_visits + ver_work, exact_work,
+        )
+    end
+    if total_visits + ver_work > max_work
+        return (
+            Pair{Int,Int}[], Symbol[], Pair{Int,Int}[], rec.gauge,
+            (), nothing, nothing,
+            :work_limit, :exact, rec_work, graph_work, flow_work, max_work - total_visits, max_work, exact_work,
+        )
+    end
+    total_visits += ver_work
+    flow_edges = _extract_flow_edges(net)
+    comp_opt = C_comp + total_flow
+    low_orig = s.domain === QT.BoolDomain ? 0 : -1
+    k = length(comp_indices)
+    orig_sink = Vector{Int}(undef, k)
+    orig_source = Vector{Int}(undef, k)
+    mapped_sink = Vector{Int}(undef, k)
+    mapped_source = Vector{Int}(undef, k)
+    for a in 1:k
+        u = comp_indices[a]
+        g_a = rec.gauge[a]
+        s_prime_sink = R_S[a] ? 1 : -1
+        s_prime_source = R_T[a] ? -1 : 1
+        s_u_sink = g_a * s_prime_sink
+        s_u_source = g_a * s_prime_source
+        v_sink = s_u_sink == 1 ? 1 : low_orig
+        v_source = s_u_source == 1 ? 1 : low_orig
+        orig_sink[a] = v_sink
+        orig_source[a] = v_source
+        mapped_sink[a] = map === nothing ? v_sink : _map_index_value(map, u, v_sink)
+        mapped_source[a] = map === nothing ? v_source : _map_index_value(map, u, v_source)
+    end
+    use_sink = if tie_break === :sink
+        true
+    elseif tie_break === :source
+        false
+    elseif tie_break === :low
+        mapped_sink <= mapped_source
+    else
+        mapped_sink >= mapped_source
+    end
+    chosen_orig = use_sink ? orig_sink : orig_source
+    assignment_pairs = Pair{Int,Int}[comp_indices[a] => chosen_orig[a] for a in 1:k]
+    batch_pairs = Pair{Int,Int}[]
+    batch_pers = Symbol[]
+    for a in 1:k
+        u = comp_indices[a]
+        (candidate_index === nothing || u == candidate_index) || continue
+        is_strong = R_S[a] || R_T[a]
+        (is_strong || allow_weak) || continue
+        orig_val = chosen_orig[a]
+        (value_filter === nothing || orig_val == value_filter) || continue
+        push!(batch_pairs, u => orig_val)
+        push!(batch_pers, is_strong ? :strong : :weak)
+    end
+    stop = if !isempty(batch_pairs)
+        :proved
+    elseif value_filter !== nothing
+        :not_strict
+    else
+        :no_persistency
+    end
+    return (
+        batch_pairs, batch_pers, assignment_pairs, rec.gauge,
+        flow_edges, comp_opt, total_flow,
+        stop, :exact, rec_work, graph_work, flow_work, ver_work, total_visits, exact_work,
+    )
+end
+
+function _build_submodular_cut_certificate(
+    ws::Workspace,
+    component_batches::Vector{Tuple{
+        Vector{Int},
+        Vector{Int},
+        _Exact,
+        _Exact,
+        Tuple{Vararg{Tuple{Int,Int,_Exact}}},
+        Vector{Pair{Int,Int}},
+        Vector{Symbol},
+    }},
+    map::Union{Nothing,DomainGaugeMap},
+    max_work::Int,
+    deadline_ns,
+)
+    st = ws._state
+    scope_len = length(st.callers)
+    base_preds = st.proof_count
+    raw_steps = SubmodularCutStep[]
+    cp = checkpoint(ws)
+    saved_star_hint = st.star_hint
+    saved_rel_hint = st.rel_hint
+    mat_visits = 0
+    try
+        for (comp_indices, gauge_vec, comp_opt, total_flow, flow_edges, batch_pairs, batch_pers) in component_batches
+            comp_tuple = Tuple(comp_indices)
+            gauge_tuple = Tuple(gauge_vec)
+            batch_tuple = Tuple(batch_pairs)
+            for (r, (u, orig_val)) in enumerate(batch_pairs)
+                _expired(deadline_ns) && return (nothing, :deadline, mat_visits)
+                c_before = deepcopy(st.constant)
+                step_r = SubmodularCutStep(
+                    u, orig_val,
+                    comp_tuple, gauge_tuple,
+                    deepcopy(comp_opt), deepcopy(total_flow),
+                    flow_edges, batch_tuple, r,
+                    c_before, base_preds + length(raw_steps),
+                    :exact, scope_len, batch_pers[r],
+                )
+                push!(raw_steps, step_r)
+                rep = _fix!(ws, u, orig_val; proof=step_r, max_work=max_work - mat_visits, deadline_ns=deadline_ns)
+                mat_visits += rep.edge_visits
+                rep.stop_reason === :applied || return (nothing, rep.stop_reason, mat_visits)
+            end
+        end
+    finally
+        if length(st.trail) > cp._depth
+            rollback!(ws, cp)
+        end
+        st.star_hint = saved_star_hint
+        st.rel_hint = saved_rel_hint
+    end
+    source = deepcopy(ws._snapshot)
+    _validate_label_copy(ws._snapshot.labels, source.labels)
+    owned_map = map === nothing ? nothing : deepcopy(map)
+    raw_prefix = Tuple(deepcopy(st.trail[p].proof) for p in st.fixes if st.trail[p].proof !== nothing)
+    raw_all = (raw_prefix..., raw_steps...)
+    steps = owned_map === nothing ? raw_all :
+        _transport_steps(ws, _caller_scope(ws), raw_all, nothing, owned_map)
+    _expired(deadline_ns) && return (nothing, :deadline, mat_visits)
+    cert = DominanceCertificate(generation(ws), checkpoint(ws), _caller_scope(ws), steps, source, owned_map)
+    return (cert, :proved, mat_visits)
+end
+
+"""
+    prove_submodular_cut(ws; component=nothing, map=nothing, allow_weak=false,
+                         tie_break=:low, max_work=typemax(Int),
+                         max_exact_work=typemax(Int), deadline_ns=nothing)
+    prove_submodular_cut(ws, component_or_label; map=nothing, allow_weak=false,
+                         tie_break=:low, value=nothing, max_work=typemax(Int),
+                         max_exact_work=typemax(Int), deadline_ns=nothing)
+
+Recognize one or all gauge-submodular residual components in `ws` and solve them
+via a direct ``(|C| + 2)``-vertex exact ``s``-``t`` min-cut without mutating `ws`.
+By default (`allow_weak=false`), only strongly persistent assignments (optimal in
+every minimum cut of the component) are certified. When `allow_weak=true`, a
+complete jointly optimal component assignment is selected via `tie_break`
+(`:low`, `:high`, `:source`, or `:sink`), tagging tied vertices with `:weak`
+persistency. Returns a [`SubmodularCutAttempt`](@ref).
+"""
+function prove_submodular_cut(
+    ws::Workspace;
+    component=nothing,
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+    allow_weak::Bool=false,
+    tie_break::Symbol=:low,
+    max_work=typemax(Int),
+    max_exact_work=typemax(Int),
+    deadline_ns=nothing,
+)
+    component !== nothing && return prove_submodular_cut(
+        ws, component;
+        map=map, allow_weak=allow_weak, tie_break=tie_break,
+        max_work=max_work, max_exact_work=max_exact_work, deadline_ns=deadline_ns,
+    )
+    _limits(max_work, deadline_ns)
+    _limits(max_exact_work, deadline_ns)
+    map === nothing || _validate_domain_map(ws, map; full=true)
+    tie_break in (:low, :high, :source, :sink) ||
+        throw(ArgumentError("tie_break must be :low, :high, :source, or :sink"))
+    s = ws._snapshot
+    V = s.label_type
+    S = s.state_type
+    direction = _direction(s)
+    if direction == 0
+        return SubmodularCutAttempt{V,S}(
+            nothing, :zero_scale, :none, nothing, nothing,
+            Pair{V,Int}[], Pair{V,S}[], Pair{V,S}[],
+            0, 0, 0, 0, 0, 0,
+        )
+    end
+    comps, rec_stop, rec_work = recognize_submodular_components(
+        ws; max_work=max_work, deadline_ns=deadline_ns,
+    )
+    if rec_stop in (:deadline, :work_limit)
+        return SubmodularCutAttempt{V,S}(
+            nothing, rec_stop, :exact, nothing, nothing,
+            Pair{V,Int}[], Pair{V,S}[], Pair{V,S}[],
+            rec_work, 0, 0, 0, rec_work, 0,
+        )
+    end
+    submod_comps = SubmodularComponent{V}[c for c in comps if c.is_submodular]
+    if isempty(submod_comps)
+        stop = isempty(comps) ? :no_persistency : :frustrated_cycle
+        return SubmodularCutAttempt{V,S}(
+            nothing, stop, :exact, nothing, nothing,
+            Pair{V,Int}[], Pair{V,S}[], Pair{V,S}[],
+            rec_work, 0, 0, 0, rec_work, 0,
+        )
+    end
+    total_graph_work = 0
+    total_flow_work = 0
+    total_ver_work = 0
+    total_visits = rec_work
+    total_exact_work = 0
+    total_comp_opt = _Exact(0)
+    total_max_flow = _Exact(0)
+    all_gauge = Pair{V,Int}[]
+    all_assignment = Pair{V,S}[]
+    all_batch_pairs = Pair{Int,Int}[]
+    component_batches = Tuple{
+        Vector{Int},Vector{Int},_Exact,_Exact,
+        Tuple{Vararg{Tuple{Int,Int,_Exact}}},Vector{Pair{Int,Int}},Vector{Symbol},
+    }[]
+    for c in submod_comps
+        batch_pairs, batch_pers, assign_pairs, gauge_vec,
+            flow_edges, comp_opt, c_flow,
+            stop, _, _, g_work, f_work, v_work, c_visits, c_exact = _submodular_cut_component_pass(
+            ws, c.indices;
+            map=map, allow_weak=allow_weak, tie_break=tie_break,
+            pre_rec=c,
+            max_work=max_work - total_visits,
+            max_exact_work=max_exact_work - total_exact_work,
+            deadline_ns=deadline_ns,
+        )
+        total_graph_work += g_work
+        total_flow_work += f_work
+        total_ver_work += v_work
+        total_visits += c_visits
+        total_exact_work += c_exact
+        if stop in (:deadline, :work_limit, :verification_limit)
+            return SubmodularCutAttempt{V,S}(
+                nothing, stop, :exact, nothing, nothing,
+                all_gauge, all_assignment, Pair{V,S}[],
+                rec_work, total_graph_work, total_flow_work, total_ver_work, total_visits, total_exact_work,
+            )
+        end
+        total_comp_opt += comp_opt
+        total_max_flow += c_flow
+        for (a, u) in enumerate(c.indices)
+            push!(all_gauge, deepcopy(s.labels[u]) => gauge_vec[a])
+        end
+        for (u, orig_val) in assign_pairs
+            push!(
+                all_assignment,
+                deepcopy(s.labels[u]) => S(map === nothing ? orig_val : _map_index_value(map, u, orig_val)),
+            )
+        end
+        if !isempty(batch_pairs)
+            append!(all_batch_pairs, batch_pairs)
+            push!(
+                component_batches,
+                (c.indices, gauge_vec, comp_opt, c_flow, flow_edges, batch_pairs, batch_pers),
+            )
+        end
+    end
+    if isempty(all_batch_pairs)
+        return SubmodularCutAttempt{V,S}(
+            nothing, :no_persistency, :exact, total_comp_opt, total_max_flow,
+            all_gauge, all_assignment, Pair{V,S}[],
+            rec_work, total_graph_work, total_flow_work, total_ver_work, total_visits, total_exact_work,
+        )
+    end
+    cert, cert_reason, mat_visits = _build_submodular_cut_certificate(
+        ws, component_batches, map, max_work - total_visits, deadline_ns,
+    )
+    total_visits += mat_visits
+    if cert === nothing
+        return SubmodularCutAttempt{V,S}(
+            nothing, cert_reason, :exact, total_comp_opt, total_max_flow,
+            all_gauge, all_assignment, Pair{V,S}[],
+            rec_work, total_graph_work, total_flow_work, total_ver_work, total_visits, total_exact_work,
+        )
+    end
+    fixings = Pair{V,S}[
+        deepcopy(s.labels[u]) => S(map === nothing ? orig_val : _map_index_value(map, u, orig_val))
+        for (u, orig_val) in all_batch_pairs
+    ]
+    return SubmodularCutAttempt{V,S}(
+        cert, :proved, :exact, total_comp_opt, total_max_flow,
+        all_gauge, all_assignment, fixings,
+        rec_work, total_graph_work, total_flow_work, total_ver_work, total_visits, total_exact_work,
+    )
+end
+
+function prove_submodular_cut(
+    ws::Workspace,
+    component_or_label;
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+    allow_weak::Bool=false,
+    tie_break::Symbol=:low,
+    value=nothing,
+    max_work=typemax(Int),
+    max_exact_work=typemax(Int),
+    deadline_ns=nothing,
+)
+    _limits(max_work, deadline_ns)
+    _limits(max_exact_work, deadline_ns)
+    map === nothing || _validate_domain_map(ws, map; full=true)
+    tie_break in (:low, :high, :source, :sink) ||
+        throw(ArgumentError("tie_break must be :low, :high, :source, or :sink"))
+    s = ws._snapshot
+    st = ws._state
+    V = s.label_type
+    S = s.state_type
+    comp_indices = Int[]
+    candidate_index = nothing
+    req_orig = nothing
+    init_rec_work = 0
+    if component_or_label isa SubmodularComponent
+        value === nothing || throw(ArgumentError("value keyword is only supported when proving a single variable label"))
+        seen = Set{Int}()
+        for lbl in component_or_label.variables
+            u = _variable(ws, lbl)
+            if !(u in seen)
+                push!(comp_indices, u)
+                push!(seen, u)
+            end
+        end
+        isempty(comp_indices) && throw(ArgumentError("component must contain at least one variable"))
+        sort!(comp_indices)
+    elseif !(component_or_label isa Union{AbstractVector,AbstractSet}) && haskey(st.labels, component_or_label)
+        i = _variable(ws, component_or_label)
+        candidate_index = i
+        if value !== nothing
+            req_orig = map === nothing ? _assignment(ws, value) :
+                _lift_index_value(map, i, _check_domain_scalar(value, map.target_domain))
+        end
+        if st.fixed[i] != 2
+            return SubmodularCutAttempt{V,S}(
+                nothing, :already_fixed, :none, nothing, nothing,
+                Pair{V,Int}[], Pair{V,S}[], Pair{V,S}[],
+                0, 0, 0, 0, 0, 0,
+            )
+        end
+        if _direction(s) == 0
+            return SubmodularCutAttempt{V,S}(
+                nothing, :zero_scale, :none, nothing, nothing,
+                Pair{V,Int}[], Pair{V,S}[], Pair{V,S}[],
+                0, 0, 0, 0, 0, 0,
+            )
+        end
+        comp_indices, conn_reason, conn_work = _connected_active_component(
+            ws, i; max_work=max_work, deadline_ns=deadline_ns,
+        )
+        init_rec_work = conn_work
+        if conn_reason !== :ok
+            return SubmodularCutAttempt{V,S}(
+                nothing, conn_reason, :exact, nothing, nothing,
+                Pair{V,Int}[], Pair{V,S}[], Pair{V,S}[],
+                init_rec_work, 0, 0, 0, init_rec_work, 0,
+            )
+        end
+    else
+        value === nothing || throw(ArgumentError("value keyword is only supported when proving a single variable label"))
+        seen = Set{Int}()
+        for lbl in component_or_label
+            u = _variable(ws, lbl)
+            if !(u in seen)
+                push!(comp_indices, u)
+                push!(seen, u)
+            end
+        end
+        isempty(comp_indices) && throw(ArgumentError("component must contain at least one variable"))
+        sort!(comp_indices)
+    end
+    batch_pairs, batch_pers, assign_pairs, gauge_vec,
+        flow_edges, comp_opt, total_flow,
+        stop, method, rec_work, graph_work, flow_work, ver_work, total_visits, exact_work = _submodular_cut_component_pass(
+        ws, comp_indices;
+        map=map, allow_weak=allow_weak, tie_break=tie_break,
+        candidate_index=candidate_index, value_filter=req_orig,
+        max_work=max_work - init_rec_work, max_exact_work=max_exact_work, deadline_ns=deadline_ns,
+    )
+    rec_work += init_rec_work
+    total_visits += init_rec_work
+    gauge_out = isempty(gauge_vec) ? Pair{V,Int}[] :
+        Pair{V,Int}[deepcopy(s.labels[comp_indices[a]]) => gauge_vec[a] for a in 1:length(comp_indices)]
+    assign_out = isempty(assign_pairs) ? Pair{V,S}[] :
+        Pair{V,S}[
+            deepcopy(s.labels[u]) => S(map === nothing ? orig_val : _map_index_value(map, u, orig_val))
+            for (u, orig_val) in assign_pairs
+        ]
+    if isempty(batch_pairs)
+        return SubmodularCutAttempt{V,S}(
+            nothing, stop, method, comp_opt, total_flow,
+            gauge_out, assign_out, Pair{V,S}[],
+            rec_work, graph_work, flow_work, ver_work, total_visits, exact_work,
+        )
+    end
+    component_batches = Tuple{
+        Vector{Int},Vector{Int},_Exact,_Exact,
+        Tuple{Vararg{Tuple{Int,Int,_Exact}}},Vector{Pair{Int,Int}},Vector{Symbol},
+    }[(comp_indices, gauge_vec, comp_opt, total_flow, flow_edges, batch_pairs, batch_pers)]
+    cert, cert_reason, mat_visits = _build_submodular_cut_certificate(
+        ws, component_batches, map, max_work - total_visits, deadline_ns,
+    )
+    total_visits += mat_visits
+    if cert === nothing
+        return SubmodularCutAttempt{V,S}(
+            nothing, cert_reason, method, comp_opt, total_flow,
+            gauge_out, assign_out, Pair{V,S}[],
+            rec_work, graph_work, flow_work, ver_work, total_visits, exact_work,
+        )
+    end
+    fixings = Pair{V,S}[
+        deepcopy(s.labels[u]) => S(map === nothing ? orig_val : _map_index_value(map, u, orig_val))
+        for (u, orig_val) in batch_pairs
+    ]
+    return SubmodularCutAttempt{V,S}(
+        cert, :proved, method, comp_opt, total_flow,
+        gauge_out, assign_out, fixings,
+        rec_work, graph_work, flow_work, ver_work, total_visits, exact_work,
+    )
+end
+
 """
     transport_certificate(ws::Workspace, cert::DominanceCertificate, map::DomainGaugeMap)
 
@@ -2316,7 +2879,7 @@ function _verify_probing_step(
         w[idx] == val || return (false, :invalid_witness, cost)
     end
     for pstep in prefix_steps
-        if pstep isa Union{DominanceStep,ProbingStep,RoofDualityStep}
+        if pstep isa Union{DominanceStep,ProbingStep,RoofDualityStep,SubmodularCutStep}
             w[pstep.variable] == pstep.value || return (false, :invalid_witness, cost)
         elseif pstep isa RelationStep
             s_elim = is_bool ? (2 * w[pstep.eliminated] - 1) : w[pstep.eliminated]
@@ -2437,15 +3000,132 @@ function _verify_roof_duality_step(
     return (true, :verified, cost)
 end
 
+function _verify_submodular_cut_step(
+    p::_PolyState,
+    step::SubmodularCutStep,
+    active_map::Union{Nothing,DomainGaugeMap},
+    prefix_steps,
+    all_steps,
+    step_idx::Int,
+    later_assumptions,
+    cost::Int,
+    deadline,
+)
+    u = step.variable
+    1 <= u <= p.n && p.active[u] || return (false, :invalid_step, 0)
+    is_bool = p.domain === QT.BoolDomain
+    low_orig = is_bool ? 0 : -1
+    step.value in (low_orig, 1) || return (false, :invalid_value, 0)
+    step.method === :exact && step.persistency in (:strong, :weak) ||
+        return (false, :invalid_method, 0)
+    isempty(later_assumptions) || return (false, :invalid_scope, cost)
+    direction = _direction_poly(p)
+    direction != 0 || return (false, :zero_scale, 0)
+    c_expected = _poly_mapped_constant(p, active_map)
+    _expired(deadline) && return (false, :deadline, cost)
+    c_expected == step.constant || return (false, :invalid_constant, cost)
+    m = length(step.batch_fixings)
+    (1 <= step.batch_index <= m && step.batch_fixings[step.batch_index] == (u => step.value)) ||
+        return (false, :invalid_step, cost)
+    if step.batch_index == 1
+        step_idx + m - 1 <= length(all_steps) || return (false, :invalid_step, cost)
+        for r in 1:m
+            s_r = all_steps[step_idx + r - 1]
+            (s_r isa SubmodularCutStep &&
+             s_r.batch_index == r &&
+             s_r.component_variables == step.component_variables &&
+             s_r.gauge == step.gauge &&
+             s_r.component_opt == step.component_opt &&
+             s_r.max_flow == step.max_flow &&
+             s_r.flow_edges == step.flow_edges &&
+             s_r.batch_fixings == step.batch_fixings &&
+             s_r.scope_length == step.scope_length &&
+             s_r.method === :exact &&
+             s_r.persistency in (:strong, :weak) &&
+             step.batch_fixings[r] == (s_r.variable => s_r.value)) ||
+                return (false, :invalid_step, cost)
+        end
+        ok_net, net_reason, net, C_comp, _ = _build_poly_submodular_cut_network(
+            p, step.component_variables, step.gauge, deadline,
+        )
+        ok_net || return (false, net_reason, cost)
+        k = length(step.component_variables)
+        local_idx = Dict{Int,Int}(step.component_variables[a] => a for a in 1:k)
+        seen_batch = Set{Int}()
+        for (v_idx, v_val) in step.batch_fixings
+            (haskey(local_idx, v_idx) && !(v_idx in seen_batch) && v_val in (low_orig, 1)) ||
+                return (false, :invalid_step, cost)
+            push!(seen_batch, v_idx)
+        end
+        ok_flow, flow_reason, _, R_S, R_T = _verify_flow_and_reachability!(
+            net, step.flow_edges, step.max_flow, deadline,
+        )
+        ok_flow || return (false, flow_reason, cost)
+        step.component_opt == C_comp + step.max_flow || return (false, :invalid_bound, cost)
+        matches_sink = true
+        matches_source = true
+        has_weak = false
+        for r in 1:m
+            s_r = all_steps[step_idx + r - 1]::SubmodularCutStep
+            v_idx, v_val = step.batch_fixings[r]
+            a = local_idx[v_idx]
+            s_val = is_bool ? (2 * v_val - 1) : v_val
+            s_prime = step.gauge[a] * s_val
+            if R_S[a]
+                (s_prime == 1 && s_r.persistency === :strong) || return (false, :invalid_bound, cost)
+            elseif R_T[a]
+                (s_prime == -1 && s_r.persistency === :strong) || return (false, :invalid_bound, cost)
+            else
+                s_r.persistency === :weak || return (false, :invalid_bound, cost)
+                has_weak = true
+                s_prime == -1 || (matches_sink = false)
+                s_prime == 1 || (matches_source = false)
+            end
+        end
+        if has_weak
+            if m == k
+                in_S = falses(k + 2)
+                in_S[k + 1] = true
+                for r in 1:m
+                    v_idx, v_val = step.batch_fixings[r]
+                    a = local_idx[v_idx]
+                    s_val = is_bool ? (2 * v_val - 1) : v_val
+                    step.gauge[a] * s_val == 1 && (in_S[a] = true)
+                end
+                _cut_capacity(net, in_S) == step.max_flow || return (false, :invalid_bound, cost)
+            else
+                (matches_sink || matches_source) || return (false, :invalid_bound, cost)
+                in_S = matches_sink ? R_S : BitVector([!R_T[idx] for idx in 1:(k + 2)])
+                _cut_capacity(net, in_S) == step.max_flow || return (false, :invalid_bound, cost)
+            end
+        end
+    else
+        !isempty(prefix_steps) || return (false, :invalid_step, cost)
+        prev = prefix_steps[end]
+        (prev isa SubmodularCutStep &&
+         prev.batch_index == step.batch_index - 1 &&
+         prev.component_variables == step.component_variables &&
+         prev.gauge == step.gauge &&
+         prev.component_opt == step.component_opt &&
+         prev.max_flow == step.max_flow &&
+         prev.flow_edges == step.flow_edges &&
+         prev.batch_fixings == step.batch_fixings &&
+         prev.scope_length == step.scope_length) ||
+            return (false, :invalid_step, cost)
+    end
+    _poly_fix!(p, u, step.value)
+    return (true, :verified, cost)
+end
+
 """
     verify_certificate(ws, certificate; map=nothing, max_work=typemax(Int), deadline_ns=nothing)
 
 Independently recheck source identity, current caller scope, optional
 [`DomainGaugeMap`](@ref) provenance and the complete ordered reduction chain
 ([`DominanceStep`](@ref), [`RelationStep`](@ref), [`EliminationStep`](@ref),
-[`ProbingStep`](@ref), [`RoofDualityStep`](@ref)) using exact original-coefficient
-evolution and domain/gauge conversion. Never trust cached workspace fields or an
-authenticated identifier alone.
+[`ProbingStep`](@ref), [`RoofDualityStep`](@ref), [`SubmodularCutStep`](@ref))
+using exact original-coefficient evolution and domain/gauge conversion. Never
+trust cached workspace fields or an authenticated identifier alone.
 """
 function verify_certificate(ws::Workspace, cert::DominanceCertificate;
                             map::Union{Nothing,DomainGaugeMap}=nothing,
@@ -2502,7 +3182,7 @@ function verify_certificate(ws::Workspace, cert::DominanceCertificate;
     base_step_cost = length(s.linear.values) + length(s.quadratic.values)
     introduced = 0
     for (k,step) in enumerate(cert.steps)
-        step isa Union{DominanceStep,RelationStep,EliminationStep,ProbingStep,RoofDualityStep} && step.predecessors == k-1 ||
+        step isa Union{DominanceStep,RelationStep,EliminationStep,ProbingStep,RoofDualityStep,SubmodularCutStep} && step.predecessors == k-1 ||
             return VerificationResult(false,:invalid_predecessors,cost)
         count = step.scope_length == -1 ? length(cert.assumptions) : step.scope_length
         introduced <= count <= length(cert.assumptions) ||
@@ -2531,6 +3211,13 @@ function verify_certificate(ws::Workspace, cert::DominanceCertificate;
         elseif step isa RoofDualityStep
             later = cert.assumptions[(count + 1):end]
             _verify_roof_duality_step(
+                p, step, active_map,
+                cert.steps[1:(k - 1)], cert.steps, k, later,
+                step_cost, deadline_ns,
+            )
+        elseif step isa SubmodularCutStep
+            later = cert.assumptions[(count + 1):end]
+            _verify_submodular_cut_step(
                 p, step, active_map,
                 cert.steps[1:(k - 1)], cert.steps, k, later,
                 step_cost, deadline_ns,

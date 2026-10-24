@@ -287,6 +287,17 @@ function _verify_flow_and_reachability!(
     return (true, :verified, visits, R_S, R_T)
 end
 
+function _cut_capacity(net::_FlowNetwork, in_S::BitVector)
+    cap = _Exact(0)
+    for u in 1:net.n_verts
+        in_S[u] || continue
+        for e in net.adj[u]
+            (!in_S[e.to] && e.cap > 0) && (cap += e.cap)
+        end
+    end
+    return cap
+end
+
 function _build_implication_network(
     ws::Workspace;
     max_work::Int=typemax(Int),
@@ -392,4 +403,312 @@ function _build_poly_implication_network(p, deadline=nothing)
         end
     end
     return (net, C_base, visits)
+end
+
+"""
+    SubmodularComponent{V}
+
+Result of structural gauge-submodularity recognition on a candidate residual
+component, recording original-order `variables::Vector{V}`, internal
+`indices::Vector{Int}`, whether the subset has no free external neighbors
+(`is_closed::Bool`), whether a consistent spin gauge makes all active couplings
+nonpositive (`is_submodular::Bool`), `stop_reason::Symbol` (`:submodular`,
+`:frustrated_cycle`, `:boundary_coupled`, `:already_fixed`, `:zero_scale`,
+`:work_limit`, or `:deadline`), the discovered `gauge::Vector{Int}` (`{-1, +1}`),
+and `recognition_work::Int`.
+"""
+struct SubmodularComponent{V}
+    variables::Vector{V}
+    indices::Vector{Int}
+    is_closed::Bool
+    is_submodular::Bool
+    stop_reason::Symbol
+    gauge::Vector{Int}
+    recognition_work::Int
+end
+
+function _recognize_component_indices(
+    ws::Workspace,
+    comp_indices::Vector{Int};
+    max_work::Int=typemax(Int),
+    deadline_ns=nothing,
+)
+    s = ws._snapshot
+    st = ws._state
+    V = s.label_type
+    n = length(s.labels)
+    vars = V[deepcopy(s.labels[u]) for u in comp_indices]
+    for u in comp_indices
+        st.fixed[u] == 2 ||
+            return SubmodularComponent{V}(vars, comp_indices, false, false, :already_fixed, Int[], 0)
+    end
+    direction = _direction(s)
+    direction != 0 ||
+        return SubmodularComponent{V}(vars, comp_indices, false, false, :zero_scale, Int[], 0)
+    in_comp = falses(n)
+    for u in comp_indices
+        in_comp[u] = true
+    end
+    work = 0
+    for u in comp_indices
+        _expired(deadline_ns) &&
+            return SubmodularComponent{V}(vars, comp_indices, false, false, :deadline, Int[], work)
+        work < max_work ||
+            return SubmodularComponent{V}(vars, comp_indices, false, false, :work_limit, Int[], work)
+        work += 1
+        for (v, q) in st.adjacency[u]
+            _expired(deadline_ns) &&
+                return SubmodularComponent{V}(vars, comp_indices, false, false, :deadline, Int[], work)
+            work < max_work ||
+                return SubmodularComponent{V}(vars, comp_indices, false, false, :work_limit, Int[], work)
+            work += 1
+            st.fixed[v] == 2 || continue
+            iszero(_spin_coupling(ws, q)) && continue
+            if !in_comp[v]
+                return SubmodularComponent{V}(vars, comp_indices, false, false, :boundary_coupled, Int[], work)
+            end
+        end
+    end
+    sigma = zeros(Int, n)
+    queue = Int[]
+    for r in comp_indices
+        sigma[r] != 0 && continue
+        sigma[r] = 1
+        empty!(queue)
+        push!(queue, r)
+        head = 1
+        while head <= length(queue)
+            _expired(deadline_ns) &&
+                return SubmodularComponent{V}(vars, comp_indices, true, false, :deadline, Int[], work)
+            u = queue[head]
+            head += 1
+            for (v, q) in st.adjacency[u]
+                _expired(deadline_ns) &&
+                    return SubmodularComponent{V}(vars, comp_indices, true, false, :deadline, Int[], work)
+                work < max_work ||
+                    return SubmodularComponent{V}(vars, comp_indices, true, false, :work_limit, Int[], work)
+                work += 1
+                st.fixed[v] == 2 || continue
+                dJ = direction * _spin_coupling(ws, q)
+                iszero(dJ) && continue
+                req = dJ < 0 ? sigma[u] : -sigma[u]
+                if sigma[v] == 0
+                    sigma[v] = req
+                    push!(queue, v)
+                elseif sigma[v] != req
+                    return SubmodularComponent{V}(vars, comp_indices, true, false, :frustrated_cycle, Int[], work)
+                end
+            end
+        end
+    end
+    gauge = Int[sigma[u] for u in comp_indices]
+    return SubmodularComponent{V}(vars, comp_indices, true, true, :submodular, gauge, work)
+end
+
+"""
+    recognize_submodular_component(ws, component; max_work=typemax(Int), deadline_ns=nothing)
+
+Check whether `component` (an iterable of original variable labels) is a closed
+active residual component (no free external neighbors with nonzero coupling) and
+whether a spin gauge ``\\sigma_u \\in \\{-1, +1\\}`` makes every active coupling in
+`component` nonpositive (``\\sigma_u \\sigma_v \\tilde{J}_{uv} \\le 0``). Returns a
+[`SubmodularComponent`](@ref) without constructing a flow network.
+"""
+function recognize_submodular_component(
+    ws::Workspace,
+    component;
+    max_work=typemax(Int),
+    deadline_ns=nothing,
+)
+    _limits(max_work, deadline_ns)
+    seen = Set{Int}()
+    comp_indices = Int[]
+    for label in component
+        u = _variable(ws, label)
+        if !(u in seen)
+            push!(comp_indices, u)
+            push!(seen, u)
+        end
+    end
+    isempty(comp_indices) && throw(ArgumentError("component must contain at least one variable"))
+    sort!(comp_indices)
+    return _recognize_component_indices(ws, comp_indices; max_work=max_work, deadline_ns=deadline_ns)
+end
+
+"""
+    recognize_submodular_components(ws; max_work=typemax(Int), deadline_ns=nothing)
+
+Partition all currently free variables in `ws` into connected residual components
+and test each component for gauge-submodularity via bipartite edge-parity BFS.
+Returns `(components::Vector{SubmodularComponent{V}}, stop_reason::Symbol, recognition_work::Int)`.
+"""
+function recognize_submodular_components(
+    ws::Workspace;
+    max_work=typemax(Int),
+    deadline_ns=nothing,
+)
+    _limits(max_work, deadline_ns)
+    s = ws._snapshot
+    st = ws._state
+    V = s.label_type
+    n = length(s.labels)
+    direction = _direction(s)
+    direction != 0 || return (SubmodularComponent{V}[], :zero_scale, 0)
+    visited = falses(n)
+    raw_comps = Vector{Vector{Int}}()
+    work = 0
+    queue = Int[]
+    for r in 1:n
+        (st.fixed[r] == 2 && !visited[r]) || continue
+        _expired(deadline_ns) && return (SubmodularComponent{V}[], :deadline, work)
+        work < max_work || return (SubmodularComponent{V}[], :work_limit, work)
+        work += 1
+        visited[r] = true
+        empty!(queue)
+        push!(queue, r)
+        head = 1
+        while head <= length(queue)
+            _expired(deadline_ns) && return (SubmodularComponent{V}[], :deadline, work)
+            u = queue[head]
+            head += 1
+            for (v, q) in st.adjacency[u]
+                _expired(deadline_ns) && return (SubmodularComponent{V}[], :deadline, work)
+                work < max_work || return (SubmodularComponent{V}[], :work_limit, work)
+                work += 1
+                (st.fixed[v] == 2 && !visited[v] && !iszero(_spin_coupling(ws, q))) || continue
+                visited[v] = true
+                push!(queue, v)
+            end
+        end
+        comp = sort!(copy(queue))
+        push!(raw_comps, comp)
+    end
+    results = SubmodularComponent{V}[]
+    for comp in raw_comps
+        rec = _recognize_component_indices(
+            ws, comp; max_work=max_work - work, deadline_ns=deadline_ns,
+        )
+        work += rec.recognition_work
+        push!(results, rec)
+        if rec.stop_reason in (:deadline, :work_limit)
+            return (results, rec.stop_reason, work)
+        end
+    end
+    return (results, :completed, work)
+end
+
+function _build_submodular_cut_network(
+    ws::Workspace,
+    comp_indices::Vector{Int},
+    gauge::Vector{Int};
+    max_work::Int=typemax(Int),
+    max_exact_work::Int=typemax(Int),
+    deadline_ns=nothing,
+)
+    s = ws._snapshot
+    st = ws._state
+    direction = _direction(s)
+    k = length(comp_indices)
+    S_node = k + 1
+    T_node = k + 2
+    net = _FlowNetwork(k + 2, S_node, T_node)
+    local_idx = Dict{Int,Int}(comp_indices[a] => a for a in 1:k)
+    C_comp = _Exact(0)
+    graph_work = 0
+    exact_work = 0
+    for a in 1:k
+        _expired(deadline_ns) && return (false, :deadline, nothing, _Exact(0), graph_work, exact_work)
+        graph_work < max_work || return (false, :work_limit, nothing, _Exact(0), graph_work, exact_work)
+        graph_work += 1
+        exact_work < max_exact_work || return (false, :verification_limit, nothing, _Exact(0), graph_work, exact_work)
+        exact_work += 1
+        u = comp_indices[a]
+        g_a = gauge[a]
+        h_prime = g_a * direction * _spin_field(ws, u)
+        if !iszero(h_prime)
+            ah = abs(h_prime)
+            C_comp -= ah
+            if h_prime > 0
+                _add_directed_pair!(net, a, T_node, 2 * ah, _Exact(0))
+            else
+                _add_directed_pair!(net, S_node, a, 2 * ah, _Exact(0))
+            end
+        end
+        for (v, q) in st.adjacency[u]
+            _expired(deadline_ns) && return (false, :deadline, nothing, _Exact(0), graph_work, exact_work)
+            graph_work < max_work || return (false, :work_limit, nothing, _Exact(0), graph_work, exact_work)
+            graph_work += 1
+            st.fixed[v] == 2 || continue
+            J_raw = _spin_coupling(ws, q)
+            iszero(J_raw) && continue
+            b = get(local_idx, v, 0)
+            b > 0 || return (false, :boundary_coupled, nothing, _Exact(0), graph_work, exact_work)
+            u < v || continue
+            exact_work < max_exact_work || return (false, :verification_limit, nothing, _Exact(0), graph_work, exact_work)
+            exact_work += 1
+            J_prime = g_a * gauge[b] * direction * J_raw
+            J_prime < 0 || return (false, :frustrated_cycle, nothing, _Exact(0), graph_work, exact_work)
+            aJ = abs(J_prime)
+            C_comp -= aJ
+            _add_directed_pair!(net, a, b, 2 * aJ, 2 * aJ)
+        end
+    end
+    return (true, :ok, net, C_comp, graph_work, exact_work)
+end
+
+function _build_poly_submodular_cut_network(
+    p,
+    comp_indices::Tuple{Vararg{Int}},
+    gauge::Tuple{Vararg{Int}},
+    deadline=nothing,
+)
+    k = length(comp_indices)
+    length(gauge) == k && k > 0 || return (false, :invalid_step, nothing, _Exact(0), 0)
+    direction = _direction_poly(p)
+    is_bool = p.domain === QT.BoolDomain
+    S_node = k + 1
+    T_node = k + 2
+    net = _FlowNetwork(k + 2, S_node, T_node)
+    local_idx = Dict{Int,Int}()
+    for a in 1:k
+        u = comp_indices[a]
+        (1 <= u <= p.n && p.active[u] && gauge[a] in (-1, 1)) ||
+            return (false, :invalid_step, nothing, _Exact(0), 0)
+        (a > 1 && comp_indices[a - 1] >= u) &&
+            return (false, :invalid_step, nothing, _Exact(0), 0)
+        local_idx[u] = a
+    end
+    C_comp = _Exact(0)
+    visits = 0
+    for a in 1:k
+        _expired(deadline) && return (false, :deadline, nothing, _Exact(0), visits)
+        visits += 1
+        u = comp_indices[a]
+        g_a = gauge[a]
+        h_prime = g_a * direction * p.h_spin[u]
+        if !iszero(h_prime)
+            ah = abs(h_prime)
+            C_comp -= ah
+            if h_prime > 0
+                _add_directed_pair!(net, a, T_node, 2 * ah, _Exact(0))
+            else
+                _add_directed_pair!(net, S_node, a, 2 * ah, _Exact(0))
+            end
+        end
+        for (v, q) in p.adj[u]
+            _expired(deadline) && return (false, :deadline, nothing, _Exact(0), visits)
+            visits += 1
+            (p.active[v] && !iszero(q)) || continue
+            b = get(local_idx, v, 0)
+            b > 0 || return (false, :boundary_coupled, nothing, _Exact(0), visits)
+            u < v || continue
+            J_uv_raw = is_bool ? (q // 4) : q
+            J_prime = g_a * gauge[b] * direction * J_uv_raw
+            J_prime <= 0 || return (false, :frustrated_cycle, nothing, _Exact(0), visits)
+            aJ = abs(J_prime)
+            C_comp -= aJ
+            _add_directed_pair!(net, a, b, 2 * aJ, 2 * aJ)
+        end
+    end
+    return (true, :ok, net, C_comp, visits)
 end
