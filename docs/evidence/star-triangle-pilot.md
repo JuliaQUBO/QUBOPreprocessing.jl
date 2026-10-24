@@ -9,7 +9,7 @@ each across `off`, `deg2` (`max_degree=2`), and `deg3` (`max_degree=3`), no
 randomness. CPU timings and byte allocations are machine observations with no
 pass/fail speed threshold or universal claim.
 
-Producing branch: `feat/issue-17-star-triangle` (base `cf542b202c7e9d68474db68456e95c0977aaf818`).
+Producing commit: `7d3757a3e9b9779dcbe9decd9fd80a8978741625` (branch `feat/issue-17-star-triangle`, base `cf542b202c7e9d68474db68456e95c0977aaf818`).
 Julia 1.10.11, QUBOTools 0.16.3, Linux x86_64, CPU target sapphirerapids,
 one Julia/OpenBLAS thread, 16 GiB cgroup memory cap (`MemorySwapMax=0`).
 No child/model exceeds ten spin variables; oversized input is rejected before
