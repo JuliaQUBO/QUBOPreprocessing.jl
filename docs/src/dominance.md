@@ -137,27 +137,27 @@ slower with preprocessing. Variable reduction alone did not predict payoff.
 
 For degree-0/1/2 local elimination (`eliminate_low_degree!`, `examples/elimination.jl`,
 `scripts/elimination_pilot.jl`, and retained artifact `docs/evidence/elimination-pilot.md`
-with raw rows in `docs/evidence/elimination-pilot.tsv`), `elim_queue` tracks only
-vertices with active degree `<= 3` and reversibly preserves candidates deferred at
-a smaller `max_degree` cutoff so subsequent calls with a larger `max_degree`
-reconsider them without a full-graph scan:
+with raw rows in `docs/evidence/elimination-pilot.tsv`), the per-degree queues
+`elim_queues[1..4]` track only vertices with active degree `0..3` so calls with
+a smaller `max_degree` cutoff leave higher-degree buckets untouched for subsequent
+calls with a larger `max_degree` without any rescan:
 - **Dense / high-degree no-benefit control (`dense_k5`, 5-vertex `K_5`):**
-  `elim_queue` is initially empty (`0` candidates examined, `0` edge visits, `32 -> 32`
+  `elim_queues` are initially empty (`0` candidates examined, `0` edge visits, `32 -> 32`
   states). End-to-end `on` (including workspace construction and residual export)
-  takes `947.15 µs` (`388.5 KiB`) vs `441.84 µs` (`327.5 KiB`) `off` (median paired
-  `+409.88 µs`).
+  takes `1100.78 µs` (`401.4 KiB`) vs `650.26 µs` (`327.5 KiB`) `off` (median paired
+  `+431.42 µs`).
 - **Tiny sparse instances (`whisker_5`, 4-clique core + 1 leaf, `n = 5 -> 4`):**
   eliminating 1 degree-`<= 2` vertex halves the exhaustive child search (`32 -> 16`
   states), but workspace construction, exact `Rational{BigInt}` table certification,
-  proof verification and residual materialization take `1173.34 µs` (`241.4 KiB`)
-  vs `460.29 µs` (`257.4 KiB`) `off` (median paired `+713.05 µs`).
+  proof verification and residual materialization take `481.00 µs` (`255.2 KiB`)
+  vs `287.09 µs` (`257.4 KiB`) `off` (median paired `+199.98 µs`).
 - **Break-even and sparse payoff (`whisker_7`, `whisker_10`, and `cycle_8`):**
   each eliminated degree-`<= 2` vertex halves the downstream exponential search
   space at `O(touched)` local cost (`<= 4` boundary evaluations per vertex),
   crossing end-to-end break-even against the exact-enumeration child at 3
-  eliminated variables (`whisker_7`, `128 -> 16` states, `2138.64 -> 1359.81 µs`,
-  median paired `−642.35 µs`, `1274.6 -> 401.0 KiB`), reaching a ~10x total time
-  and ~21x allocation reduction at 6 eliminated variables (`whisker_10`, `1024 -> 16`
-  states, `23469.22 -> 2316.66 µs`, median paired `−21152.56 µs`, `13622.6 -> 639.6 KiB`),
+  eliminated variables (`whisker_7`, `128 -> 16` states, `1824.74 -> 1054.68 µs`,
+  median paired `−754.36 µs`, `1274.6 -> 353.7 KiB`), reaching a ~14x total time
+  and ~27x allocation reduction at 6 eliminated variables (`whisker_10`, `1024 -> 16`
+  states, `29738.92 -> 2094.45 µs`, median paired `−18940.16 µs`, `13622.6 -> 502.2 KiB`),
   and solving `cycle_8` completely where strict dominance removes 0 variables
-  (`256 -> 1` state, `4204.97 -> 1817.25 µs`, median paired `−2303.33 µs`).
+  (`256 -> 1` state, `2920.62 -> 1436.53 µs`, median paired `−1518.64 µs`).
