@@ -15,7 +15,11 @@ certified pair relations and reversible signed contractions (`:interval`, `:exac
 and Glover–Lewis–Kochenberger cross-endpoint `:glk_pair`), select
 `Workspace(model; rules=:relations)` or call
 `contract_relations!(ws; max_fill=..., cascade_dominance=..., ...)` and inspect
-active representatives/parities via `relation_map(ws)`. Identity remains the
+active representatives/parities via `relation_map(ws)`. For deterministic mixed
+pass scheduling across all four reduction families on one shared `Workspace`
+and `Generation` without alternating QUBO↔Ising materializations, select
+`Workspace(model; rules=:mixed)` or `preprocess(model; rules=:mixed, ...)` and
+call `schedule_reductions!(ws; ...)`. Identity remains the
 default. Neither path dispatches a solver or implicitly materializes a residual.
 In pure dominance mode (`propagate!(ws)`), only strong unary dominance is enabled:
 every reported value holds in **all** optima within the current caller scope.
@@ -277,3 +281,42 @@ policy and `max_degree=3` is opt-in:
   cube where all 8 degree-3 vertices have nonzero fields, `deg3` rejects all 8
   candidates in `O(1)` with `0` edge visits and `0` exact table work (`8/0/0`
   work vs `0/0/0` under `deg2`, `+926.23 µs` vs `deg2`).
+
+## Mixed exact reduction pass scheduling and 7-phase pipeline accounting
+
+`schedule_reductions!(ws; ...)` (invoked automatically by
+`preprocess(model; rules=:mixed, ...)`) runs a deterministic cheap-first fixpoint
+loop on one shared `Workspace` and `Generation` without alternating QUBO↔Ising
+model materializations:
+
+1. **Cheap dirty-neighborhood propagation (`:dominance`):** drains all dirty
+   unary dominance candidates (`st.queue`).
+2. **Degree-`<= 2` local elimination (`:elimination`):** drains buckets 1..3
+   (degrees 0, 1, 2) under `max_fill` / `max_total_fill`, immediately cascading
+   back to `:dominance` whenever an elimination dirties a neighbor's derivative
+   bounds.
+3. **Optional guarded degree-3 star–triangle (`:star_triangle`):** disabled by
+   default (`enable_star_triangle=false`); when enabled and cheap passes are
+   quiescent, applies at most one zero-field degree-3 elimination before returning
+   to `:dominance` and `:elimination`.
+4. **Bounded pair relations (`:relations`):** when earlier passes are quiescent,
+   examines active relation candidates under `relation_work_budget` and
+   `max_fill` / `max_total_fill`, applying at most one signed contraction before
+   returning to `:dominance` and `:elimination`.
+
+`ScheduleReport` records per-pass summaries (`passes::Vector{SchedulePassSummary}`),
+per-family deduction counts (`dominance_deductions`, `elimination_deductions`,
+`star_triangle_deductions`, `relation_deductions`), introduced `fill_edges`,
+initial/residual variable and edge counts, `optional_passes_disabled`, and exact
+stop reasons (`:quiescent`, `:work_limit`, `:verification_limit`,
+`:deduction_limit`, `:deadline`, `:unsupported_arithmetic`, `:fill_limit`,
+`:optional_pass_disabled`).
+
+`audit_pipeline!(model_or_ws; ...)` measures and reports `PipelineAccounting`
+with `PhaseAccounting` across all seven lifecycle boundaries
+(`conversion_import`, `discovery`, `arithmetic_fallback`, `verification`,
+`export_phase`, `reconstruction`, `rollback_replay`). Run `examples/scheduler.jl`
+for the resumable mixed schedule and `scripts/scheduler_pilot.jl` for the 5-policy
+paired ablation study (`off`, `dominance_only`, `cheap_dom_elim`, `mixed_default`,
+`mixed_star_triangle`), retained in `docs/evidence/scheduler-pilot.md` and
+`docs/evidence/scheduler-pilot.tsv`.

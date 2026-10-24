@@ -14,10 +14,10 @@ end
 
 @testset "exact direct on/off domain/sense/scale/label parity" begin
     labels = [(9,"x"),(1,"y"),(4,"tie")]
-    for domain in (:bool,:spin),sense in (:min,:max),scale in (-2.0,0.0,0.5),rules in (:identity,:dominance,:elimination,:relations)
+    for domain in (:bool,:spin),sense in (:min,:max),scale in (-2.0,0.0,0.5),rules in (:identity,:dominance,:elimination,:relations,:mixed)
         model = QT.Model(Dict(labels[1]=>3.0,labels[2]=>1.0,labels[3]=>0.0),
                          Dict((labels[1],labels[2])=>-2.0);domain,sense,scale,offset=0.75)
-        r = sample_preprocessed(model,ScriptedChild.factory();rules)
+        r = sample_preprocessed(model,ScriptedChild.factory();rules,enable_star_triangle=(rules === :mixed))
         @test r.optimal && r.scope_optimal
         @test r.scope === :original
         @test r.stop_reason === :optimal

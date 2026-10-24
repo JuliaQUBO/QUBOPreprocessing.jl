@@ -58,7 +58,10 @@ end
 
 function QP.sample_preprocessed(input,child_factory;rules=nothing,max_work=typemax(Int),
         max_deductions=typemax(Int),max_exact_work=typemax(Int),deadline_ns=nothing,
-        max_child_variables=16,max_results=1024,child_work_bound=nothing)
+        max_child_variables=16,max_results=1024,child_work_bound=nothing,
+        enable_dominance=true,enable_elimination=true,enable_relations=true,
+        enable_star_triangle=false,max_fill=typemax(Int),max_total_fill=typemax(Int),
+        relation_work_budget=typemax(Int))
     QP._limits(max_work,deadline_ns)
     QP._limits(max_deductions,deadline_ns)
     QP._limits(max_exact_work,deadline_ns)
@@ -131,7 +134,16 @@ function QP.sample_preprocessed(input,child_factory;rules=nothing,max_work=typem
         timings[:propagation] = Float64(time_ns()-t)/1e9
         propagation.stop_reason === :deadline && return finish(:deadline)
     elseif ws._state.rules === :relations
-        propagation = QP.contract_relations!(ws;max_work=budget.remaining,max_deductions,max_exact_work,deadline_ns)
+        propagation = QP.contract_relations!(ws;max_fill,max_work=budget.remaining,max_deductions,max_exact_work,deadline_ns)
+        used = propagation.candidates+propagation.edge_visits
+        budget.remaining -= used
+        budget.used += used
+        timings[:propagation] = Float64(time_ns()-t)/1e9
+        propagation.stop_reason === :deadline && return finish(:deadline)
+    elseif ws._state.rules === :mixed
+        propagation = QP.schedule_reductions!(ws;enable_dominance,enable_elimination,enable_relations,
+            enable_star_triangle,max_fill,max_total_fill,relation_work_budget,
+            max_work=budget.remaining,max_deductions,max_exact_work,deadline_ns)
         used = propagation.candidates+propagation.edge_visits
         budget.remaining -= used
         budget.used += used
