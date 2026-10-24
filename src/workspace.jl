@@ -499,6 +499,7 @@ function _apply_reduction!(
     push!(st.fixes, length(st.trail))
     st.proof_count == 0 && (st.first_proof_pos = length(st.trail))
     st.proof_count += 1
+    proof isa MaxCutStep && (st.marginal_count += 1)
     st.entries[u] = length(st.trail)
     st.serial += 1
     st.constant = new_constant
@@ -663,6 +664,7 @@ function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
             pop!(st.fixes)
             st.proof_count -= 1
             st.proof_count == 0 && (st.first_proof_pos = 0)
+            undo.proof isa MaxCutStep && (st.marginal_count -= 1)
             st.constant = undo.constant
             st.dual_constant = undo.dual_constant
         else

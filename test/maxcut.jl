@@ -144,6 +144,13 @@ end
         @test res_val ≈ opt_val
         lifted = [reconstruct(exported, y).state for y in res_states]
         @test Set(lifted) == Set(opt_states)
+
+        # Pair MaxCutStep depends on free triangle vertices: subsequent assume! on a free
+        # triangle vertex (:s3) rolls back the pair MaxCutStep suffix before replaying:
+        assume!(ws, :s3, 1)
+        @test isempty(reductions(ws))
+        @test assumptions(ws) == [:s3 => 1]
+        @test export_certificate(ws) === nothing
     end
 
     @testset "Frustrated triangle co-flip relief and unary reference-triangle fixing" begin
