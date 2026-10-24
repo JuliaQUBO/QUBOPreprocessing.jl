@@ -49,9 +49,11 @@ struct _UndoQueue
     head::Int
     queued::Bool
     is_elim::Bool
+    old_cutoff::Int8
+    added_deferred::Bool
 end
-_UndoQueue(serial::UInt64, fix_depth::Int, index::Int, head::Int, queued::Bool) =
-    _UndoQueue(serial, fix_depth, index, head, queued, false)
+_UndoQueue(serial::UInt64, fix_depth::Int, index::Int, head::Int, queued::Bool, is_elim::Bool=false) =
+    _UndoQueue(serial, fix_depth, index, head, queued, is_elim, Int8(4), false)
 const _UndoEntry = Union{_UndoFix,_UndoReduction,_UndoQueue}
 
 # Topology-changing reductions (relation contractions and bounded local
@@ -90,4 +92,7 @@ mutable struct _Incremental
     elim_queue::Vector{Int}
     elim_queued::BitVector
     elim_head::Int
+    elim_deferred::Vector{Int}
+    elim_in_deferred::BitVector
+    elim_deferred_cutoff::Vector{Int8}
 end

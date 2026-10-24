@@ -316,6 +316,94 @@ end
     rollback!(ws_k4_leaf, cp_k4)
     @test !ws_k4_leaf._state.elim_queued[2]
 
+    # Direct cancellation-to-queue regression: eliminating degree-2 :x1 cancels
+    # existing edge (:x2, :x3), dropping :x2 and :x3 from degree 4 to degree 2,
+    # removing the edge from adjacency/adj_pos, and queuing both in elim_queue.
+    # For x1 in {0, 1}, -2*x1*x2 + 2*x1*x3 with L[1] = 1 gives min_{x1}(x1*(1 - 2*x2 + 2*x3)):
+    # (x2,x3)=(0,0)->0, (1,0)->-1, (0,1)->0, (1,1)->0 => delta_Q_{23} = 0 - (-1) - 0 + 0 = +1,
+    # cancelling Q[2, 3] = -1.0!
+    L_canc = [1.0, 0.25, -0.5, 0.0, 0.0, 0.0]
+    Q_canc = zeros(6, 6)
+    Q_canc[1, 2] = -2.0
+    Q_canc[1, 3] = 2.0
+    Q_canc[2, 3] = -1.0
+    # Give x2 and x3 two additional neighbors each (from x4, x5, x6) so deg(x2) = deg(x3) = 4
+    Q_canc[2, 4] = 1.0; Q_canc[2, 5] = -1.0
+    Q_canc[3, 5] = 1.0; Q_canc[3, 6] = -1.0
+    Q_canc[4, 5] = 1.0; Q_canc[4, 6] = 1.0; Q_canc[5, 6] = 1.0
+    ws_canc = Workspace(fixture([:x1, :x2, :x3, :x4, :x5, :x6], L_canc, Q_canc); rules=:elimination)
+    @test degree(ws_canc, :x2) == 4
+    @test degree(ws_canc, :x3) == 4
+    @test !ws_canc._state.elim_queued[2]
+    @test !ws_canc._state.elim_queued[3]
+    @test haskey(ws_canc._state.adj_pos[2], 3)
+    cp_canc = checkpoint(ws_canc)
+    @test eliminate_variable!(ws_canc, :x1).stop_reason === :applied
+    @test degree(ws_canc, :x2) == 2
+    @test degree(ws_canc, :x3) == 2
+    @test !haskey(ws_canc._state.adj_pos[2], 3)
+    @test !haskey(ws_canc._state.adj_pos[3], 2)
+    @test all(first(p) != 3 for p in ws_canc._state.adjacency[2])
+    @test ws_canc._state.elim_queued[2]
+    @test ws_canc._state.elim_queued[3]
+    rollback!(ws_canc, cp_canc)
+    @test degree(ws_canc, :x2) == 4
+    @test degree(ws_canc, :x3) == 4
+    @test haskey(ws_canc._state.adj_pos[2], 3)
+    @test haskey(ws_canc._state.adj_pos[3], 2)
+    @test !ws_canc._state.elim_queued[2]
+    @test !ws_canc._state.elim_queued[3]
+
+    # Progressive max_degree cutoff increases (0 -> 1 -> 2 and 1 -> 2) with checkpoints/rollback:
+    m_tri = QT.Model{Int,Float64,Int}(
+        Dict(i => 0.25 * i for i in 1:3),
+        Dict((1, 2) => 1.0, (1, 3) => -1.5, (2, 3) => 2.0);
+        domain=:spin, sense=:min,
+    )
+    ws_tri = Workspace(m_tri; rules=:elimination)
+    cp_tri0 = checkpoint(ws_tri)
+    r_cut0 = eliminate_low_degree!(ws_tri; max_degree=0)
+    @test r_cut0.stop_reason === :quiescent
+    @test r_cut0.deductions == 0
+    @test r_cut0.pending == 0
+    # Repeated call at same cutoff does not re-scan deferred vertices
+    @test eliminate_low_degree!(ws_tri; max_degree=0).candidates == 0
+    cp_tri1 = checkpoint(ws_tri)
+    r_cut1 = eliminate_low_degree!(ws_tri; max_degree=1)
+    @test r_cut1.stop_reason === :quiescent
+    @test r_cut1.deductions == 0
+    @test r_cut1.candidates == 0 # degree-2 vertices remain deferred without re-popping at max_degree=1
+    cp_tri2 = checkpoint(ws_tri)
+    r_cut2 = eliminate_low_degree!(ws_tri; max_degree=2)
+    @test r_cut2.stop_reason === :quiescent
+    @test r_cut2.deductions == 3
+    @test verify_certificate(ws_tri, export_certificate(ws_tri)).valid
+    # Rollback to cp_tri2 (after max_degree=1) and re-run max_degree=2
+    rollback!(ws_tri, cp_tri2)
+    @test isempty(reductions(ws_tri))
+    @test eliminate_low_degree!(ws_tri; max_degree=2).deductions == 3
+    # Rollback to cp_tri1 (after max_degree=0) and jump directly 0 -> 2
+    rollback!(ws_tri, cp_tri1)
+    @test isempty(reductions(ws_tri))
+    @test eliminate_low_degree!(ws_tri; max_degree=2).deductions == 3
+    # Rollback to root cp_tri0
+    rollback!(ws_tri, cp_tri0)
+    @test isempty(ws_tri._state.elim_deferred)
+    @test !any(ws_tri._state.elim_in_deferred)
+    @test all(==(Int8(4)), ws_tri._state.elim_deferred_cutoff)
+
+    # Paw graph (leaf 1 attached to triangle 2-3-4) stepping 0 -> 1 -> 2:
+    m_paw = QT.Model{Int,Float64,Int}(
+        Dict(i => 0.25 * i for i in 1:4),
+        Dict((1, 2) => -1.0, (2, 3) => 1.5, (2, 4) => -1.25, (3, 4) => 2.0);
+        domain=:spin, sense=:min,
+    )
+    ws_paw = Workspace(m_paw; rules=:elimination)
+    @test eliminate_low_degree!(ws_paw; max_degree=0).deductions == 0
+    @test eliminate_low_degree!(ws_paw; max_degree=1).deductions == 1
+    @test eliminate_low_degree!(ws_paw; max_degree=2).deductions == 3
+    @test verify_certificate(ws_paw, export_certificate(ws_paw)).valid
+
     # 2. Local work does not scan untouched high-degree graph:
     # Build a 3-vertex chain (degrees 1, 2, 1) plus a disjoint 4-regular circulant graph of size K (all degrees == 4 > 3).
     function chain_plus_4regular(k_reg::Int)

@@ -48,16 +48,46 @@ function _pop_queue!(ws::Workspace)
     return nothing
 end
 
-function _pop_elim_queue!(ws::Workspace)
+function _pop_elim_queue!(ws::Workspace, cutoff::Int8=Int8(4); defer::Bool=false)
     st = ws._state
     st.serial == typemax(UInt64) && throw(ArgumentError("trail serial exhausted; reset workspace"))
     i = st.elim_queue[st.elim_head]
-    entry = _UndoQueue(st.serial+1,length(st.fixes),i,st.elim_head,st.elim_queued[i],true)
-    _reserve!(st.trail,length(st.trail)+1)
-    push!(st.trail,entry)
+    add_def = defer && !st.elim_in_deferred[i]
+    entry = _UndoQueue(
+        st.serial + 1, length(st.fixes), i, st.elim_head,
+        st.elim_queued[i], true, st.elim_deferred_cutoff[i], add_def,
+    )
+    _reserve!(st.trail, length(st.trail) + 1)
+    push!(st.trail, entry)
     st.serial += 1
     st.elim_queued[i] = false
     st.elim_head += 1
+    st.elim_deferred_cutoff[i] = cutoff
+    if add_def
+        push!(st.elim_deferred, i)
+        st.elim_in_deferred[i] = true
+    end
+    return nothing
+end
+
+function _requeue_deferred_elim!(ws::Workspace, max_degree::Int)
+    st = ws._state
+    for u in st.elim_deferred
+        if st.fixed[u] == 2 && !st.elim_queued[u] &&
+           st.degrees[u] <= max_degree && max_degree > st.elim_deferred_cutoff[u]
+            st.serial == typemax(UInt64) && throw(ArgumentError("trail serial exhausted; reset workspace"))
+            entry = _UndoQueue(
+                st.serial + 1, length(st.fixes), u, 0,
+                false, true, st.elim_deferred_cutoff[u], false,
+            )
+            _reserve!(st.trail, length(st.trail) + 1)
+            push!(st.trail, entry)
+            st.serial += 1
+            push!(st.elim_queue, u)
+            st.elim_queued[u] = true
+            st.elim_deferred_cutoff[u] = Int8(4)
+        end
+    end
     return nothing
 end
 
@@ -325,6 +355,7 @@ function eliminate_low_degree!(
         st.rules in (:dominance, :elimination) ||
             throw(ArgumentError("cascade_dominance requires Workspace(model; rules=:dominance) or rules=:elimination"))
     end
+    _requeue_deferred_elim!(ws, Int(max_degree))
     candidates, edges, deductions, exact = 0, 0, 0, 0
     pending_count() = (length(st.elim_queue) - st.elim_head + 1) +
                       (cascade_dominance ? (length(st.queue) - st.head + 1) : 0)
@@ -352,7 +383,8 @@ function eliminate_low_degree!(
         u = st.elim_queue[st.elim_head]
         if st.fixed[u] != 2 || direction == 0 || st.degrees[u] > max_degree
             candidates += 1
-            _pop_elim_queue!(ws)
+            defer = st.fixed[u] == 2 && direction != 0 && st.degrees[u] <= 3
+            _pop_elim_queue!(ws, Int8(max_degree); defer)
             continue
         end
         d_u = st.degrees[u]
@@ -392,7 +424,7 @@ function eliminate_low_degree!(
         exact += 1 + 3 * length(step.neighbors)
         rep.stop_reason === :applied || return finish(rep.stop_reason)
         deductions += 1
-        _pop_elim_queue!(ws)
+        _pop_elim_queue!(ws, Int8(max_degree))
     end
     return finish(:quiescent)
 end

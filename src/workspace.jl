@@ -53,7 +53,8 @@ function _incremental(s::_Snapshot;rules=:identity)
                         adjacency, adj_pos, fields, _Exact(s.offset), fill(Int8(2), n),
                         queue, queued, _UndoEntry[], 0, uuid4(),rules,lower,upper,1,
                         Int[],Int[],zeros(Int,n),0,0,0,0,0,0,dual_fields,dual_constant,
-                        degrees, initial_degrees, elim_queue, elim_queued, 1)
+                        degrees, initial_degrees, elim_queue, elim_queued, 1,
+                        Int[], falses(n), fill(Int8(4), n))
 end
 
 """
@@ -549,8 +550,17 @@ function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
         undo = pop!(st.trail)
         if undo isa _UndoQueue
             if undo.is_elim
-                st.elim_head = undo.head
-                st.elim_queued[undo.index] = undo.queued
+                if undo.head == 0
+                    st.elim_queued[pop!(st.elim_queue)] = false
+                    st.elim_deferred_cutoff[undo.index] = undo.old_cutoff
+                else
+                    if undo.added_deferred
+                        st.elim_in_deferred[pop!(st.elim_deferred)] = false
+                    end
+                    st.elim_deferred_cutoff[undo.index] = undo.old_cutoff
+                    st.elim_head = undo.head
+                    st.elim_queued[undo.index] = undo.queued
+                end
             else
                 st.head = undo.head
                 st.queued[undo.index] = undo.queued
