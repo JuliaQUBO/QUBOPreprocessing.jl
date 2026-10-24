@@ -36,6 +36,9 @@ export propagate!, PropagationReport, ProbingReport, RoofDualityReport, Submodul
        eliminate_variable!, eliminate_low_degree!, apply_weak_batch!,
        SchedulePassSummary, ScheduleReport, schedule_reductions!,
        PhaseAccounting, PipelineAccounting, audit_pipeline!
+export CompressionCandidate, CompressionMetrics, CompressionAuditReport,
+       compression_metrics, qubolite_compression_candidates,
+       audit_compression, compression_counterexamples
 export sample_preprocessed, SolverResult
 
 include("trail.jl")
@@ -46,5 +49,6 @@ include("flow.jl")
 include("maxcut.jl")
 include("certificates.jl")
 include("propagation.jl")
+include("compression.jl")
 include("consumer.jl")
 end
