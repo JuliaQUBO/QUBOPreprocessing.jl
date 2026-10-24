@@ -64,16 +64,76 @@ function _pop_elim_queue!(ws::Workspace, b::Int)
     return nothing
 end
 
-function _pop_rel_queue!(ws::Workspace)
+function _pop_rel_queue!(ws::Workspace, blocked_fill::Int=typemax(Int), checked_weak::Bool=true)
     st = ws._state
     st.serial == typemax(UInt64) && throw(ArgumentError("trail serial exhausted; reset workspace"))
     u = st.rel_queue[st.rel_head]
-    entry = _UndoQueue(st.serial + 1, length(st.fixes), u, st.rel_head, st.rel_queued[u], Int8(-1))
+    entry = _UndoQueue(
+        st.serial + 1, length(st.fixes), u, st.rel_head, st.rel_queued[u],
+        Int8(-1), st.rel_blocked_fill[u], st.rel_checked_weak[u],
+    )
     _reserve!(st.trail, length(st.trail) + 1)
     push!(st.trail, entry)
     st.serial += 1
     st.rel_queued[u] = false
+    st.rel_blocked_fill[u] = blocked_fill
+    st.rel_checked_weak[u] = checked_weak
     st.rel_head += 1
+    return nothing
+end
+
+function _deferred_rel_eligible(st::_Incremental, u::Int, mf::Int, allow_weak::Bool)
+    return st.fixed[u] == 2 && st.degrees[u] >= 1 && !st.rel_queued[u] &&
+           ((st.rel_blocked_fill[u] < typemax(Int) && mf >= st.rel_blocked_fill[u]) ||
+            (allow_weak && !st.rel_checked_weak[u]))
+end
+
+function _next_deferred_rel(st::_Incremental, mf::Int, allow_weak::Bool)
+    @inbounds for idx in 1:(st.rel_head - 1)
+        u = st.rel_queue[idx]
+        _deferred_rel_eligible(st, u, mf, allow_weak) && return u
+    end
+    return 0
+end
+
+function _count_deferred_rel(st::_Incremental, mf::Int, allow_weak::Bool)
+    cnt = 0
+    limit = st.rel_head - 1
+    @inbounds for idx in 1:limit
+        u = st.rel_queue[idx]
+        if _deferred_rel_eligible(st, u, mf, allow_weak)
+            dup = false
+            for prev in 1:(idx - 1)
+                if st.rel_queue[prev] == u
+                    dup = true
+                    break
+                end
+            end
+            !dup && (cnt += 1)
+        end
+    end
+    return cnt
+end
+
+function _requeue_deferred_rel!(ws::Workspace, mf::Int, allow_weak::Bool)
+    st = ws._state
+    limit = st.rel_head - 1
+    @inbounds for idx in 1:limit
+        u = st.rel_queue[idx]
+        if _deferred_rel_eligible(st, u, mf, allow_weak)
+            st.serial == typemax(UInt64) && throw(ArgumentError("trail serial exhausted; reset workspace"))
+            entry = _UndoQueue(
+                st.serial + 1, length(st.fixes), u, st.rel_head, false,
+                Int8(-2), st.rel_blocked_fill[u], st.rel_checked_weak[u],
+            )
+            _reserve!(st.trail, length(st.trail) + 1)
+            _reserve!(st.rel_queue, length(st.rel_queue) + 1)
+            push!(st.trail, entry)
+            st.serial += 1
+            push!(st.rel_queue, u)
+            st.rel_queued[u] = true
+        end
+    end
     return nothing
 end
 
@@ -524,13 +584,14 @@ function contract_relations!(
     candidates, edges, deductions, exact = 0, 0, 0, 0
     function pending_count()
         p = cascade_dominance ? (length(st.queue) - st.head + 1) : 0
-        p += length(st.rel_queue) - st.rel_head + 1
+        p += (length(st.rel_queue) - st.rel_head + 1) + _count_deferred_rel(st, mf, allow_weak)
         return p
     end
     finish(reason) = _propagation_report!(ws, reason, candidates, edges, deductions, exact;
                                           pending=pending_count())
     direction = _direction(ws._snapshot)
-    while st.rel_head <= length(st.rel_queue) || (cascade_dominance && st.head <= length(st.queue))
+    while st.rel_head <= length(st.rel_queue) || _next_deferred_rel(st, mf, allow_weak) != 0 ||
+          (cascade_dominance && st.head <= length(st.queue))
         if cascade_dominance && st.head <= length(st.queue)
             _expired(deadline_ns) && return finish(:deadline)
             deductions < max_deductions || return finish(:deduction_limit)
@@ -548,6 +609,9 @@ function contract_relations!(
         _expired(deadline_ns) && return finish(:deadline)
         deductions < max_deductions || return finish(:deduction_limit)
         candidates + edges < max_work || return finish(:work_limit)
+        if st.rel_head > length(st.rel_queue)
+            _requeue_deferred_rel!(ws, mf, allow_weak)
+        end
         u = st.rel_queue[st.rel_head]
         if st.fixed[u] != 2 || direction == 0 || st.degrees[u] == 0
             candidates += 1
@@ -569,8 +633,10 @@ function contract_relations!(
         u_exact = 0
         called_witness = false
         contracted = false
+        min_blocked = typemax(Int)
         for v in nbrs
-            if _contraction_fill(st, u, v) <= mf
+            f_uv = _contraction_fill(st, u, v)
+            if f_uv <= mf
                 called_witness = true
                 status, dv, dx = _try_contract_pair!(
                     ws, u, v, map, allow_weak,
@@ -593,11 +659,15 @@ function contract_relations!(
                     exact += u_exact
                     return finish(status)
                 end
+            else
+                min_blocked = min(min_blocked, f_uv)
             end
         end
         if !contracted
             for v in nbrs
-                if _contraction_fill(st, v, u) <= mf && (_contraction_fill(st, u, v) > mf || !st.rel_queued[v])
+                f_uv = _contraction_fill(st, u, v)
+                f_vu = _contraction_fill(st, v, u)
+                if f_vu <= mf && (f_uv > mf || !st.rel_queued[v])
                     called_witness = true
                     status, dv, dx = _try_contract_pair!(
                         ws, v, u, map, allow_weak,
@@ -619,13 +689,15 @@ function contract_relations!(
                         exact += u_exact
                         return finish(status)
                     end
+                elseif f_vu > mf
+                    min_blocked = min(min_blocked, f_vu)
                 end
             end
         end
         if !contracted
             edges += called_witness ? u_visits : adj_u_len
             exact += u_exact
-            _pop_rel_queue!(ws)
+            _pop_rel_queue!(ws, min_blocked, allow_weak)
         end
     end
     return finish(:quiescent)

@@ -37,6 +37,49 @@ reverse the sign; positive scale magnitude does not alter optima. Zero scale
 and equality yield no fixing. The binary/spin rules are equivalent under
 `x=(s+1)/2`, rather than independent strengthening methods.
 
+## Certified pair relations and Glover–Lewis–Kochenberger rules
+
+For two free variables ``u \ne v`` and candidate parity ``\sigma \in \{-1, +1\}``
+(representing ``t_u = \sigma t_v`` in normalized gauged spin coordinates, or
+``x_u = x_v`` for ``\sigma_{\text{orig}} = +1`` and ``x_u = 1 - x_v`` for
+``\sigma_{\text{orig}} = -1`` in binary coordinates), the two violating spin
+configurations are ``V_1 = (t_u = -\sigma, t_v = +1)`` and
+``V_2 = (t_u = +\sigma, t_v = -1)``. Let ``\tilde{h}_i`` and ``\tilde{J}_{ij}``
+denote the direction-normalized spin fields and couplings, and let
+``R_u = \sum_{w \notin \{u, v\}} |\tilde{J}_{uw}|`` and
+``R_v = \sum_{w \notin \{u, v\}} |\tilde{J}_{vw}|``.
+
+1. **Single-endpoint coupling dominance (`:interval`, `:exact`):** generalizes
+   Boettcher–Davidheiser (2020) Section II Rule VI to arbitrary local fields by
+   requiring flips of ``t_u`` alone to improve both ``V_1`` and ``V_2``:
+   ``-\sigma \tilde{J}_{uv} - |\tilde{h}_u| - R_u > 0`` (`:strong`) or ``\ge 0``
+   (`:weak` with `allow_weak=true`).
+2. **Glover–Lewis–Kochenberger (2018) Section 3 Theorems 3.1–3.4 cross-endpoint
+   pair rule (`:glk_pair`):** translated from GLK's maximization of
+   ``\sum_i c_i x_i + \sum_{i \ne j} Q_{ij} x_i x_j`` (with symmetric off-diagonal
+   ``Q_{ij} = Q_{ji} = q_{ij}/2``) to normalized minimization in spin coordinates,
+   and requiring a favoring coupling ``\text{center} = -\sigma \tilde{J}_{uv} > 0``:
+   - **Branch A** rules out ``V_1`` by flipping ``t_u \to +\sigma``
+     (half-margin ``m_u(V_1) = -\sigma \tilde{J}_{uv} - \sigma \tilde{h}_u - R_u``)
+     and ``V_2`` by flipping ``t_v \to +1``
+     (half-margin ``m_v(V_2) = -\sigma \tilde{J}_{uv} - \tilde{h}_v - R_v``),
+     mapping both violating states directly to ``(+\sigma, +1)`` in one flip.
+   - **Branch B** rules out ``V_1`` by flipping ``t_v \to -1``
+     (half-margin ``m_v(V_1) = -\sigma \tilde{J}_{uv} + \tilde{h}_v - R_v``)
+     and ``V_2`` by flipping ``t_u \to -\sigma``
+     (half-margin ``m_u(V_2) = -\sigma \tilde{J}_{uv} + \sigma \tilde{h}_u - R_u``),
+     mapping both violating states directly to ``(-\sigma, -1)`` in one flip.
+   Taking the branch with the larger lower bound ``\text{lo}_{\text{glk}}``,
+   ``\text{lo}_{\text{glk}} > 0`` certifies `:strong` persistency and
+   ``\text{lo}_{\text{glk}} == 0`` (when `allow_weak=true` and ``\text{center} > 0``)
+   certifies `:weak` persistency.
+3. **Explicitly deferred GLK rules:** single-branch inequality implications
+   (``x_u + x_v \ge 1``, ``x_u + x_v \le 1``, ``x_u \le x_v`` when only one of
+   ``V_1, V_2`` is ruled out) do not induce an unconstrained parity substitution
+   ``s_u = \pm s_v`` without auxiliary slack variables or penalty terms, and GLK
+   Section 4 multi-neighbor matrix rules require higher-order neighborhood scans;
+   both are explicitly deferred outside unconstrained quadratic pair contraction.
+
 ```@example dominance
 using QUBOPreprocessing
 import QUBOTools as QT

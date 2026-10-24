@@ -56,7 +56,7 @@ function _incremental(s::_Snapshot;rules=:identity)
                         queue, queued, _UndoEntry[], 0, uuid4(),rules,lower,upper,1,
                         Int[],Int[],zeros(Int,n),0,0,0,0,0,0,dual_fields,dual_constant,
                         degrees, initial_degrees, elim_queues, elim_queued, [1, 1, 1, 1],
-                        rel_queue, rel_queued, 1)
+                        rel_queue, rel_queued, 1, fill(typemax(Int), n), falses(n))
 end
 
 """
@@ -577,6 +577,13 @@ function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
             elseif b == -1
                 st.rel_head = undo.head
                 st.rel_queued[undo.index] = undo.queued
+                st.rel_blocked_fill[undo.index] = undo.blocked_fill
+                st.rel_checked_weak[undo.index] = undo.checked_weak
+            elseif b == -2
+                pop!(st.rel_queue)
+                st.rel_queued[undo.index] = undo.queued
+                st.rel_blocked_fill[undo.index] = undo.blocked_fill
+                st.rel_checked_weak[undo.index] = undo.checked_weak
             else
                 st.elim_heads[b] = undo.head
                 st.elim_queued[b][undo.index] = undo.queued
@@ -726,7 +733,7 @@ function unfix!(ws::Workspace, label; max_work=typemax(Int), deadline_ns=nothing
     for p in st.callers
         e = st.trail[p]
         e.index == i && continue
-        degree = length(st.adjacency[e.index])
+        degree = st.initial_degrees[e.index]
         degree <= max_work - work || return UpdateReport(:work_limit, 0, 0)
         work += degree
     end

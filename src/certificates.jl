@@ -588,7 +588,7 @@ function _relation_witness(ws::Workspace, u::Int, v::Int;
         return (step, :proved, :exact, visits, 1, exact_work)
     end
     best_u = center_exact + abs(h_u) - rad_u_other
-    if !iszero(q_uv) && !iszero(h_u) && (best_u > 0 || (allow_weak && best_u >= 0))
+    if center_exact > 0 && !iszero(h_u) && (best_u > 0 || (allow_weak && best_u >= 0))
         deg_v = length(st.adjacency[v])
         deg_v <= max_work - visits || return (nothing, :work_limit, :glk_pair, visits, 1, exact_work)
         1 + deg_v <= max_exact_work - exact_work || return (nothing, :verification_limit, :glk_pair, visits, 1, exact_work)
@@ -1423,7 +1423,7 @@ function _verify_relation_step(
         end
     end
     if step.method === :glk_pair
-        (!iszero(center) && !iszero(h_u)) || return (false, :invalid_bound, cost)
+        (center > 0 && !iszero(h_u)) || return (false, :invalid_bound, cost)
         g_v = active_map === nothing ? 1 : active_map.gauge[v]
         h_v = direction * g_v * p.h_spin[v]
         rad_v_other = _Exact(0)

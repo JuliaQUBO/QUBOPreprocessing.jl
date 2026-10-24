@@ -83,7 +83,9 @@
                 @test prove_dominance(ws, lbl; allow_weak=false).stop_reason === :not_strict
             end
 
-            # 2. Prove relation via :glk_pair:
+            # 2. Prove relation via :glk_pair (and verify wrong sign is rejected):
+            @test prove_relation(ws, :u, :v; sign=-σ_target, allow_weak=true).stop_reason === :not_strict
+            @test contract_relation!(ws, :u, :v; sign=-σ_target, allow_weak=true).stop_reason === :not_strict
             att = prove_relation(ws, :u, :v)
             @test att.stop_reason === :proved
             @test att.method === :glk_pair
@@ -261,9 +263,42 @@
         rep0 = contract_relations!(ws0; max_fill=0)
         @test rep0.stop_reason === :quiescent
         @test rep0.deductions == 0
+        @test rep0.pending == 0
 
-        # 2. With max_fill=1, when :h is popped first from rel_queue, :h -> :l is skipped (fill 3 > 1),
-        #    and Pass 2 contracts :l -> :h (fill 1 <= 1)!
+        # 2. Progressive max_fill increase on the SAME workspace ws0:
+        #    First check that max_work=0 and expired deadline_ns do NOT mutate trail or drop deferred vertices:
+        cp_after_0 = checkpoint(ws0)
+        rep_w0 = contract_relations!(ws0; max_fill=1, max_work=0)
+        @test rep_w0.stop_reason === :work_limit && rep_w0.candidates == 0 && rep_w0.pending == 8
+        @test checkpoint(ws0) == cp_after_0
+        rep_dl = contract_relations!(ws0; max_fill=1, deadline_ns=UInt64(1))
+        @test rep_dl.stop_reason === :deadline && rep_dl.candidates == 0 && rep_dl.pending == 8
+        @test checkpoint(ws0) == cp_after_0
+        #    Now run max_fill=1 on ws0: re-queues deferred vertices and contracts :l -> :h!
+        rep_prog = contract_relations!(ws0; max_fill=1, max_deductions=1)
+        @test rep_prog.stop_reason === :deduction_limit
+        @test rep_prog.deductions == 1
+        @test relation_map(ws0, :l) == (:h => 1)
+        @test verify_certificate(ws0, export_certificate(ws0)).valid
+        #    Rollback to cp_after_0 undoes both the contraction and the deferred re-queue,
+        #    and calling contract_relations!(ws0; max_fill=1) again succeeds identically!
+        rollback!(ws0, cp_after_0)
+        @test relation_map(ws0, :l) == (:l => 1)
+        @test contract_relations!(ws0; max_fill=0).deductions == 0
+        rep_prog2 = contract_relations!(ws0; max_fill=1, max_deductions=1)
+        @test rep_prog2.deductions == 1 && relation_map(ws0, :l) == (:h => 1)
+        rollback!(ws0, cp_after_0)
+
+        #    Also test duplicate entries in rel_queue[1:(rel_head - 1)] (vertex popped, dirtied/requeued, popped again):
+        cp_dup = checkpoint(ws0)
+        assume!(ws0, :a, 1) # dirties and re-queues :h, :b, :c
+        @test contract_relations!(ws0; max_fill=0).deductions == 0 # pops :h, :b, :c a second time with blocked_fill=1
+        @test contract_relations!(ws0; max_fill=1, max_work=0).pending == 7 # deduplicates :h, :b, :c in _count_deferred_rel
+        @test contract_relations!(ws0; max_fill=1, max_deductions=1).deductions == 1
+        rollback!(ws0, cp_dup)
+
+        # 2b. Fresh workspace with max_fill=1: when :h is popped first from rel_queue, :h -> :l is skipped (fill 3 > 1),
+        #     and Pass 2 contracts :l -> :h (fill 1 <= 1)!
         ws1 = Workspace(model; rules=:relations)
         rep1 = contract_relations!(ws1; max_fill=1, max_deductions=1)
         @test rep1.stop_reason === :deduction_limit
@@ -280,7 +315,7 @@
         # Tight max_work / max_exact_work during witness and application (both Pass 1 and max_fill Pass 2):
         @test contract_relations!(ws_b; max_work=3).stop_reason === :work_limit
         @test contract_relations!(ws_b; max_exact_work=2).stop_reason === :verification_limit
-        @test contract_relations!(Workspace(model; rules=:relations); max_fill=1, max_exact_work=2).stop_reason === :verification_limit
+        @test contract_relations!(Workspace(model; rules=:relations); max_fill=1, max_exact_work=29).stop_reason === :verification_limit
         # Enough exact work for witness (1 + 4 + 1 + 2 = 8), but not enough for apply (1 + 3*4 = 13):
         ws_apply_lim = Workspace(model; rules=:relations)
         @test contract_relations!(ws_apply_lim; max_exact_work=9).stop_reason === :verification_limit
@@ -383,6 +418,81 @@
         forged_glk = RelationStep(1, 2, 1, 1, 3 // 1, 3 // 1, 0 // 1, 0, :glk_pair, 0, :strong)
         vr2 = verify_certificate(ws_zero_h, DominanceCertificate(generation(ws_zero_h), checkpoint(ws_zero_h), (), (forged_glk,), ws_zero_h._snapshot))
         @test !vr2.valid && vr2.stop_reason === :invalid_bound
+
+        # Wrong-sign :glk_pair when endpoints have strong unary fields (center_exact < 0):
+        # Here J_uv = +1 (anti-ferromagnetic, favors s_u = -s_v), while h_u = -10, h_v = -10
+        # independently push s_u = +1 and s_v = +1. Requesting sign=+1 has center = -1 < 0 and MUST be refused!
+        ws_unary_pair = Workspace(rel_fixture([:u, :v], [-10.0, -10.0], [0.0 1.0; 0.0 0.0]; domain=:spin))
+        @test prove_relation(ws_unary_pair, :u, :v; sign=1, allow_weak=true).stop_reason === :not_strict
+        @test contract_relation!(ws_unary_pair, :u, :v; sign=1, allow_weak=true).stop_reason === :not_strict
+        forged_neg_center = RelationStep(1, 2, 1, 1, 9 // 1, 9 // 1, 0 // 1, 0, :glk_pair, 0, :strong)
+        vr3 = verify_certificate(ws_unary_pair, DominanceCertificate(generation(ws_unary_pair), checkpoint(ws_unary_pair), (), (forged_neg_center,), ws_unary_pair._snapshot))
+        @test !vr3.valid && vr3.stop_reason === :invalid_bound
+    end
+
+    @testset "GLK equality ties, allow_weak transition, non-zero parallel-edge merge, disconnected components and unfix!" begin
+        # 1. GLK equality tie (lo_glk == 0):
+        # h_u = 1, h_v = 1, J_uv = -2, J_uw = 3, J_vw = 3 => center = 2, m_u(V_2) = 2 + 1 - 3 = 0, m_v(V_1) = 2 + 1 - 3 = 0!
+        m_tie = rel_fixture(
+            [:u, :v, :w],
+            [1.0, 1.0, 0.0],
+            [0.0 -2.0 3.0; 0.0 0.0 3.0; 0.0 0.0 0.0];
+            domain=:spin,
+        )
+        ws_tie = Workspace(m_tie; rules=:relations)
+        @test prove_relation(ws_tie, :u, :v; allow_weak=false).stop_reason === :not_strict
+        att_weak = prove_relation(ws_tie, :u, :v; allow_weak=true)
+        @test att_weak.stop_reason === :proved && att_weak.method === :glk_pair
+        @test persistency(only(att_weak.certificate.steps)) === :weak
+        @test verify_certificate(ws_tie, att_weak.certificate).valid
+        # Progressive allow_weak=false -> allow_weak=true on the same workspace:
+        @test contract_relations!(ws_tie; allow_weak=false).deductions == 0
+        rep_w = contract_relations!(ws_tie; allow_weak=true, max_deductions=1)
+        @test rep_w.deductions == 1
+        @test relation_map(ws_tie, :u) == (:v => 1)
+        # Non-zero parallel-edge merge: J'_{vw} = J_{vw} + (+1)*J_{uw} = 3 + 3 = 6 != 0!
+        @test Dict(incident_couplings(ws_tie, :v))[:w] == 6 // 1
+
+        # 2. Disconnected components and LIFO + non-LIFO unfix! restoration:
+        # Component 1: [:a1, :a2, :a3], Component 2: [:b1, :b2]
+        m_disc = rel_fixture(
+            [:a1, :a2, :a3, :b1, :b2],
+            [0.0, 0.0, 0.0, 0.0, 0.0],
+            [
+                0.0 4.0 4.0  0.0 0.0;
+                0.0 0.0 -4.0 0.0 0.0;
+                0.0 0.0 0.0  0.0 0.0;
+                0.0 0.0 0.0  0.0 4.0;
+                0.0 0.0 0.0  0.0 0.0
+            ];
+            domain=:spin,
+        )
+        ws_disc = Workspace(m_disc; rules=:relations)
+        # Initially :b1 == -:b2 contracts in Component 2, while Component 1 has |J| <= R:
+        @test contract_relations!(ws_disc).deductions == 1
+        @test relation_map(ws_disc, :b1) == (:b2 => -1)
+        @test relation_map(ws_disc, :a2) == (:a2 => 1)
+
+        # Now assume :a1 = 1 and :b2 = 1, then contract :a2 -> :a3:
+        @test assume!(ws_disc, :a1, 1).stop_reason === :applied
+        @test assume!(ws_disc, :b2, 1).stop_reason === :applied
+        @test contract_relations!(ws_disc).deductions == 1
+        @test relation_map(ws_disc, :a2) == (:a3 => 1)
+
+        # LIFO unfix! of :b2 rolls back locally (undoing later deduction :a2 -> :a3 and :b2 assumption):
+        @test unfix!(ws_disc, :b2).stop_reason === :applied
+        @test assumptions(ws_disc) == [:a1 => 1]
+        @test relation_map(ws_disc, :a2) == (:a2 => 1)
+
+        # Re-apply :b2 = 1 and contract, then non-LIFO unfix! of :a1 rebuilds and replays only retained caller :b2 = 1:
+        @test assume!(ws_disc, :b2, 1).stop_reason === :applied
+        @test contract_relations!(ws_disc).deductions == 1
+        @test relation_map(ws_disc, :a2) == (:a3 => 1)
+        @test unfix!(ws_disc, :a1; max_work=0).stop_reason === :work_limit
+        @test unfix!(ws_disc, :a1).stop_reason === :applied
+        @test assumptions(ws_disc) == [:b2 => 1]
+        @test relation_map(ws_disc) == [:a1 => 1, :a2 => 1, :a3 => 1, :b1 => 1, :b2 => 1]
+        @test degree(ws_disc, :a2) == 2 && degree(ws_disc, :a3) == 2
     end
 end
 
