@@ -1361,7 +1361,6 @@ function audit_pipeline!(
         if exercise_rollback_replay && isempty(ws._state.fixes) && length(ws._snapshot.labels) >= 2
             l1, l2 = ws._snapshot.labels[1], ws._snapshot.labels[2]
             low = ws._snapshot.domain === QT.BoolDomain ? 0 : -1
-            cp0 = checkpoint(ws)
             for (op, lbl) in ((:assume, l1), (:assume, l2), (:unfix, l1), (:unfix, l2))
                 r_op = op === :assume ?
                     assume!(ws, lbl, low; max_work=max(0, rem_work - rr_units), deadline_ns) :
@@ -1369,7 +1368,7 @@ function audit_pipeline!(
                 rr_units += r_op.edge_visits + 1
                 if r_op.stop_reason !== :applied
                     rr_reason = r_op.stop_reason
-                    rollback!(ws, cp0)
+                    rollback!(ws, _checkpoint_at(ws, 0))
                     break
                 end
             end
@@ -1377,6 +1376,18 @@ function audit_pipeline!(
     end
     rr_ns = time_ns() - t_rr0
     rem_work = max(0, rem_work - rr_units)
+    if rr_reason !== :applied
+        n_init = length(ws._snapshot.labels)
+        n_res = n_init - length(ws._state.fixes)
+        rr_ph = PhaseAccounting(:rollback_replay, rr_reason, rr_units, 0, 0, rr_bytes, rr_ns)
+        return ws, PipelineAccounting(
+            generation(ws), ws._state.rules, rr_reason,
+            n_init, n_res, ws._state.initial_edges, ws._state.active_edges, 0,
+            conv_ph, zero_phase(:discovery), zero_phase(:arithmetic_fallback),
+            zero_phase(:verification), zero_phase(:export), zero_phase(:reconstruction),
+            rr_ph, nothing, false,
+        )
+    end
 
     # 3. Discovery & arithmetic fallback phases
     t_d0 = time_ns()
@@ -1483,8 +1494,7 @@ function audit_pipeline!(
 
     n_init = length(ws._snapshot.labels)
     n_res = n_init - length(ws._state.fixes)
-    overall_reason = rr_reason !== :applied ? rr_reason :
-                     !ver_valid ? ver_reason :
+    overall_reason = !ver_valid ? ver_reason :
                      exp_reason !== :certified ? exp_reason :
                      !(rec_reason in (:reconstructed, :not_run)) ? rec_reason :
                      rep.stop_reason

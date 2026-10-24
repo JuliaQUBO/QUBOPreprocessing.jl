@@ -43,21 +43,22 @@ function child(model)
 end
 
 function build_sparse_mixed_cascade_10()
-    # 10-vertex sparse model:
-    # - 1, 2: strongly dominated leaves fixing into 3, 4
-    # - 5, 6: degree-2 chain vertices eliminated by :elimination
-    # - 7, 8: strongly coupled pair (J = -6.0) contracted by :relations
-    # - 9, 10: residual core coupled to 3, 4, 8
+    # 10-vertex sparse model exercising all four passes across the 6 ablation modes:
+    # - 1, 2: strongly dominated leaves (h_1 = +5, h_2 = -5) fixing into 3, 5
+    # - 3, 4, 5: degree-2/1 bridge vertices eliminated by :elimination once 1, 2 are fixed
+    # - 6, 7: strongly coupled pair (J_{6,7} = -6.0) with degree 3 after 3..5 peel -> contracted by :relations
+    # - 8: drops from degree 4 to degree 3 with h_8 == 0 after (6, 7) contracts -> eliminated by :star_triangle
+    # - 7, 9, 10: remaining triangle cascades via degree-2/1/0 :elimination to 0 variables!
     L = Dict(
-        1 => 5.0, 2 => -5.0, 3 => 0.5, 4 => -0.5,
-        5 => 0.25, 6 => -0.25, 7 => 0.0, 8 => 0.25,
-        9 => 0.5, 10 => -0.75,
+        1 => 5.0, 2 => -5.0, 3 => 0.5, 4 => 0.0, 5 => -0.5,
+        6 => 0.25, 7 => -0.25, 8 => 0.0, 9 => 0.25, 10 => -0.5,
     )
     Q = Dict(
-        (1, 3) => 1.0, (2, 4) => -1.0,
-        (3, 5) => 1.25, (5, 6) => -1.5, (6, 7) => 1.0,
-        (7, 8) => -6.0, (7, 9) => 0.5, (8, 9) => 0.5,
-        (4, 8) => -1.0, (8, 10) => 1.25, (9, 10) => -0.75,
+        (1, 3) => 1.0, (2, 5) => -1.0,
+        (3, 4) => -0.5, (4, 5) => 0.5, (3, 6) => -0.5, (5, 6) => 0.5,
+        (6, 7) => -6.0, (6, 8) => 0.5, (6, 9) => 0.5,
+        (7, 8) => 0.5, (7, 9) => 0.5, (7, 10) => 1.0,
+        (8, 9) => -1.0, (8, 10) => 1.0, (9, 10) => -1.0,
     )
     return QT.Model{Int,Float64,Int}(L, Q; domain=:spin, sense=:min)
 end
@@ -94,7 +95,8 @@ function build_zero_field_star_gadget_10()
 end
 
 function build_nonzero_field_relations_10()
-    # 10-vertex model with nonzero fields, 3 strong signed relations (5~1, 6~2, 7~3) and 2 degree-2 whiskers (9, 10):
+    # 10-vertex model with nonzero fields, 3 degree-3 strong signed relations (5~1, 6~2, 7~3)
+    # and 2 degree-2 whiskers (9, 10):
     L = Dict(
         1 => 0.5, 2 => -0.75, 3 => 0.25, 4 => -0.5,
         5 => 0.25, 6 => -0.25, 7 => 0.5, 8 => -0.5,
@@ -105,9 +107,9 @@ function build_nonzero_field_relations_10()
         Q[(i, j)] = (i + j) % 2 == 0 ? 1.0 : -1.25
     end
     Q[(1, 8)] = 1.0; Q[(2, 8)] = -1.0; Q[(3, 8)] = 1.0; Q[(4, 8)] = -1.0
-    Q[(1, 5)] = -6.0; Q[(2, 5)] = 0.5
-    Q[(2, 6)] = 6.0;  Q[(3, 6)] = -0.5
-    Q[(3, 7)] = -6.0; Q[(4, 7)] = 0.5
+    Q[(1, 5)] = -6.0; Q[(2, 5)] = 0.5; Q[(3, 5)] = -0.5
+    Q[(2, 6)] = 6.0;  Q[(3, 6)] = -0.5; Q[(4, 6)] = 0.5
+    Q[(3, 7)] = -6.0; Q[(4, 7)] = 0.5; Q[(1, 7)] = -0.5
     Q[(1, 9)] = 1.5;  Q[(2, 9)] = -1.0
     Q[(3, 10)] = -1.5; Q[(4, 10)] = 1.0
     return QT.Model{Int,Float64,Int}(L, Q; domain=:spin, sense=:min)

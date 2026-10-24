@@ -316,7 +316,7 @@ stop reasons (`:quiescent`, `:work_limit`, `:verification_limit`,
 with `PhaseAccounting` across all seven lifecycle boundaries
 (`conversion_import`, `discovery`, `arithmetic_fallback`, `verification`,
 `export_phase`, `reconstruction`, `rollback_replay`). Run `examples/scheduler.jl`
-for the resumable mixed schedule and `scripts/scheduler_pilot.jl` for the 5-policy
-paired ablation study (`off`, `dominance_only`, `cheap_dom_elim`, `mixed_default`,
-`mixed_star_triangle`), retained in `docs/evidence/scheduler-pilot.md` and
+for the resumable mixed schedule and `scripts/scheduler_pilot.jl` for the 6-mode
+paired ablation study (`off`, `dominance`, `elimination`, `relations`,
+`mixed_cheap`, `mixed_star`), retained in `docs/evidence/scheduler-pilot.md` and
 `docs/evidence/scheduler-pilot.tsv`.
