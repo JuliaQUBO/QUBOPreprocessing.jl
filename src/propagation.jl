@@ -190,14 +190,7 @@ function _count_deferred_elim(st::_Incremental, md::Int, mf::Int)
         for idx in 1:limit
             u = q[idx]
             if _deferred_elim_eligible(st, b, u, mf)
-                dup = false
-                for prev in 1:(idx - 1)
-                    if q[prev] == u
-                        dup = true
-                        break
-                    end
-                end
-                !dup && (cnt += 1)
+                !(u in view(q, 1:(idx - 1))) && (cnt += 1)
             end
         end
     end

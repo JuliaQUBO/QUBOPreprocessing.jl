@@ -507,6 +507,9 @@ end
         # Exact edge cancellation: for J1=J2=J3=-1 (min, scale>0), ΔJ_ab = -(3 - 1 - 1 + 1)/4 = -1/2,
         # so setting J12_old = +1/2 cancels edge (w1, w2) completely!
         (:exact_edge_cancellation, R[-1//1, -1//1, -1//1], R[1//2, -1//4, 0//1], R[1//2, 0//1, 0//1]),
+        # Deterministic pseudo-random bounded dyadic rational draws (including zeros and ties):
+        (:seeded_draw_1, R[-3//4, 5//4, -1//2], R[0//1, -3//4, 5//4], R[-1//4, 0//1, 3//4]),
+        (:seeded_draw_2, R[3//2, -3//4, -3//4], R[-1//4, 0//1, 1//2], R[0//1, -1//2, 1//4]),
     ]
     for (cname, J_u, h_w, J_tri) in star_cases,
         domain in (:spin, :bool),
