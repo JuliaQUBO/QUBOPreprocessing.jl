@@ -15,18 +15,20 @@ export Workspace, Generation, generation, reset!, materialize, ExportResult,
 export Checkpoint, checkpoint, assume!, rollback!, unfix!, changes, assumptions,
        UpdateReport, RollbackReport, ConditionedExport
 
-export DominanceStep, RelationStep, EliminationStep, ProbingStep,
+export DominanceStep, RelationStep, EliminationStep, ProbingStep, RoofDualityStep,
        DominanceCertificate, ReductionCertificate,
-       DominanceAttempt, RelationAttempt, EliminationAttempt, ProbingAttempt, VerificationResult,
-       prove_dominance, prove_relation, prove_elimination, prove_probing,
+       DominanceAttempt, RelationAttempt, EliminationAttempt, ProbingAttempt, RoofDualityAttempt,
+       VerificationResult,
+       prove_dominance, prove_relation, prove_elimination, prove_probing, prove_roof_duality,
        verify_certificate, transport_certificate,
        step_guarantee, certificate_guarantee, persistency
 
 export DomainGaugeMap, domain_map, map_value, lift_value, map_state, lift_state,
        degree, effective_field, incident_couplings, conditioned_constant
 
-export propagate!, PropagationReport, ProbingReport, deductions, reductions, export_certificate,
-       apply_dominance!, apply_probing!, probe_variables!,
+export propagate!, PropagationReport, ProbingReport, RoofDualityReport,
+       deductions, reductions, export_certificate,
+       apply_dominance!, apply_probing!, probe_variables!, apply_roof_duality!,
        contract_relation!, contract_relations!, relation_map,
        eliminate_variable!, eliminate_low_degree!, apply_weak_batch!,
        SchedulePassSummary, ScheduleReport, schedule_reductions!,
@@ -37,6 +39,7 @@ include("trail.jl")
 include("identity.jl")
 include("domain.jl")
 include("workspace.jl")
+include("flow.jl")
 include("certificates.jl")
 include("propagation.jl")
 include("consumer.jl")

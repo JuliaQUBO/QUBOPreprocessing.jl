@@ -570,6 +570,115 @@ function probe_variables!(
 end
 
 """
+    RoofDualityReport{V,S}
+
+Summary of an optional certified [`apply_roof_duality!`](@ref) pass, recording
+`stop_reason`, exact normalized `lower_bound`, scaled model `objective_bound`,
+implication-network `max_flow`, `fixed_count`, committed `fixings`, and
+phase-separated work counters (`graph_work`, `flow_work`, `verification_work`,
+`materialization_work`, `edge_visits`, `exact_work`).
+"""
+struct RoofDualityReport{V,S}
+    stop_reason::Symbol
+    lower_bound::Union{Nothing,_Exact}
+    objective_bound::Union{Nothing,_Exact}
+    max_flow::Union{Nothing,_Exact}
+    fixed_count::Int
+    fixings::Vector{Pair{V,S}}
+    graph_work::Int
+    flow_work::Int
+    verification_work::Int
+    materialization_work::Int
+    edge_visits::Int
+    exact_work::Int
+end
+
+"""
+    apply_roof_duality!(ws; candidates=nothing, map=nothing,
+                        max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing)
+
+Run an optional certified roof-duality (posiform / implication-network) pass on
+`ws`, extracting and transactionally committing strongly persistent variable
+assignments in `candidates` (defaulting to all free variables in original order)
+as [`RoofDualityStep`](@ref) records on the reversible trail. If committing the
+batch is interrupted by `max_work` or `deadline_ns`, the pass rolls back cleanly
+to the pre-pass checkpoint.
+"""
+function apply_roof_duality!(
+    ws::Workspace;
+    candidates=nothing,
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+    max_work=typemax(Int),
+    max_exact_work=typemax(Int),
+    deadline_ns=nothing,
+)
+    _limits(max_work, deadline_ns)
+    _limits(max_exact_work, deadline_ns)
+    map === nothing || _validate_domain_map(ws, map)
+    s = ws._snapshot
+    st = ws._state
+    V = s.label_type
+    S = s.state_type
+    cand_indices = _resolve_roof_candidates(ws, candidates)
+    batch_pairs, flow_edges, L_roof, obj_bound, total_flow,
+        stop, _, graph_work, flow_work, ver_work, total_visits, exact_work = _roof_duality_pass(
+        ws, cand_indices;
+        max_work=max_work, max_exact_work=max_exact_work, deadline_ns=deadline_ns,
+    )
+    if isempty(batch_pairs)
+        return RoofDualityReport{V,S}(
+            stop, L_roof, obj_bound, total_flow, 0, Pair{V,S}[],
+            graph_work, flow_work, ver_work, 0, total_visits, exact_work,
+        )
+    end
+    scope_len = length(st.callers)
+    base_preds = st.proof_count
+    batch_tuple = Tuple(batch_pairs)
+    cp = checkpoint(ws)
+    saved_star_hint = st.star_hint
+    saved_rel_hint = st.rel_hint
+    mat_visits = 0
+    for (r, (u, orig_val)) in enumerate(batch_pairs)
+        if _expired(deadline_ns)
+            rollback!(ws, cp)
+            st.star_hint = saved_star_hint
+            st.rel_hint = saved_rel_hint
+            return RoofDualityReport{V,S}(
+                :deadline, L_roof, obj_bound, total_flow, 0, Pair{V,S}[],
+                graph_work, flow_work, ver_work, mat_visits, total_visits + mat_visits, exact_work,
+            )
+        end
+        c_before = deepcopy(st.constant)
+        step_r = RoofDualityStep(
+            u, orig_val,
+            deepcopy(L_roof), deepcopy(total_flow),
+            flow_edges, batch_tuple, r,
+            c_before, base_preds + r - 1,
+            :exact, scope_len, :strong,
+        )
+        rep = _fix!(ws, u, orig_val; proof=step_r, max_work=max_work - total_visits - mat_visits, deadline_ns=deadline_ns)
+        mat_visits += rep.edge_visits
+        if rep.stop_reason !== :applied
+            rollback!(ws, cp)
+            st.star_hint = saved_star_hint
+            st.rel_hint = saved_rel_hint
+            return RoofDualityReport{V,S}(
+                rep.stop_reason, L_roof, obj_bound, total_flow, 0, Pair{V,S}[],
+                graph_work, flow_work, ver_work, mat_visits, total_visits + mat_visits, exact_work,
+            )
+        end
+    end
+    fixings = Pair{V,S}[
+        deepcopy(s.labels[u]) => S(map === nothing ? orig_val : _map_index_value(map, u, orig_val))
+        for (u, orig_val) in batch_pairs
+    ]
+    return RoofDualityReport{V,S}(
+        :applied, L_roof, obj_bound, total_flow, length(fixings), fixings,
+        graph_work, flow_work, ver_work, mat_visits, total_visits + mat_visits, exact_work,
+    )
+end
+
+"""
     contract_relation!(ws, eliminated, representative; sign=nothing, map=nothing,
                        allow_weak=false, max_work=typemax(Int),
                        max_exact_work=typemax(Int), deadline_ns=nothing)

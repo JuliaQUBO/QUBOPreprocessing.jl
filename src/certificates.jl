@@ -122,13 +122,39 @@ ProbingStep(i, v, pv, blo, wup, ws, bs, c, p, m, sc) =
     ProbingStep(i, v, pv, blo, wup, ws, bs, c, p, m, sc, :strong)
 
 """
+    RoofDualityStep
+
+Recorded strongly persistent variable-fixing proof step derived from the exact
+rational implication-network (posiform / roof-duality) relaxation on the
+active residual model.
+"""
+struct RoofDualityStep <: _ProofRecord
+    variable::Int
+    value::Int
+    roof_lower::_Exact
+    max_flow::_Exact
+    flow_edges::Tuple{Vararg{Tuple{Int,Int,_Exact}}}
+    batch_fixings::Tuple{Vararg{Pair{Int,Int}}}
+    batch_index::Int
+    constant::_Exact
+    predecessors::Int
+    method::Symbol
+    scope_length::Int
+    persistency::Symbol
+end
+RoofDualityStep(i, v, rlo, mf, fe, bf, bi, c, p, m) =
+    RoofDualityStep(i, v, rlo, mf, fe, bf, bi, c, p, m, -1, :strong)
+RoofDualityStep(i, v, rlo, mf, fe, bf, bi, c, p, m, sc) =
+    RoofDualityStep(i, v, rlo, mf, fe, bf, bi, c, p, m, sc, :strong)
+
+"""
     DominanceCertificate
 
 Owned source/generation, explicit caller scope and ordered reduction steps
 ([`DominanceStep`](@ref), [`RelationStep`](@ref), [`EliminationStep`](@ref),
-[`ProbingStep`](@ref)). Every step retains all scoped optima (`:strong`) or at
-least one scoped optimum of the evolving residual (`:weak` / non-unique argmin).
-Also aliased as [`ReductionCertificate`](@ref).
+[`ProbingStep`](@ref), [`RoofDualityStep`](@ref)). Every step retains all scoped
+optima (`:strong`) or at least one scoped optimum of the evolving residual
+(`:weak` / non-unique argmin). Also aliased as [`ReductionCertificate`](@ref).
 """
 struct DominanceCertificate
     generation::Generation
@@ -156,11 +182,11 @@ const ReductionCertificate = DominanceCertificate
 Return the algebraic guarantee class of a preprocessing step or coordinate map:
 - `:energy_identity` for [`DomainGaugeMap`](@ref),
 - `:exact_elimination` for [`EliminationStep`](@ref),
-- `:optimum_preserving_restriction` for [`DominanceStep`](@ref), [`RelationStep`](@ref), and [`ProbingStep`](@ref).
+- `:optimum_preserving_restriction` for [`DominanceStep`](@ref), [`RelationStep`](@ref), [`ProbingStep`](@ref), and [`RoofDualityStep`](@ref).
 """
 step_guarantee(::DomainGaugeMap) = :energy_identity
 step_guarantee(::EliminationStep) = :exact_elimination
-step_guarantee(::Union{DominanceStep,RelationStep,ProbingStep}) = :optimum_preserving_restriction
+step_guarantee(::Union{DominanceStep,RelationStep,ProbingStep,RoofDualityStep}) = :optimum_preserving_restriction
 
 """
     persistency(step_or_certificate)
@@ -169,7 +195,7 @@ Return `:strong` when a step, map, or certificate preserves all optima on its
 scope, or `:weak` when any step relies on tie-breaking / weak persistency.
 """
 persistency(::DomainGaugeMap) = :strong
-persistency(step::Union{DominanceStep,RelationStep,ProbingStep}) = step.persistency
+persistency(step::Union{DominanceStep,RelationStep,ProbingStep,RoofDualityStep}) = step.persistency
 persistency(step::EliminationStep) = step.unique_argmin ? :strong : :weak
 persistency(cert::DominanceCertificate) =
     any(s -> persistency(s) === :weak, cert.steps) ? :weak : :strong
@@ -180,7 +206,7 @@ persistency(cert::DominanceCertificate) =
 Return the overall guarantee class of `cert`:
 - `:energy_identity` when `cert.steps` is empty,
 - `:exact_elimination` when every step in `cert.steps` is an [`EliminationStep`](@ref),
-- `:optimum_preserving_restriction` when `cert.steps` contains any [`DominanceStep`](@ref), [`RelationStep`](@ref), or [`ProbingStep`](@ref).
+- `:optimum_preserving_restriction` when `cert.steps` contains any [`DominanceStep`](@ref), [`RelationStep`](@ref), [`ProbingStep`](@ref), or [`RoofDualityStep`](@ref).
 """
 function certificate_guarantee(cert::DominanceCertificate)
     isempty(cert.steps) && return :energy_identity
@@ -228,6 +254,24 @@ struct ProbingAttempt
     method::Symbol
     edge_visits::Int
     exact_fallbacks::Int
+    exact_work::Int
+end
+
+"""Certified roof-duality proof attempt with optional `certificate`, `stop_reason`,
+`method`, exact normalized `lower_bound`, scaled `objective_bound`, implication-network
+`max_flow`, strongly persistent `fixings`, and phase-separated work counters."""
+struct RoofDualityAttempt{V,S}
+    certificate::Union{Nothing,DominanceCertificate}
+    stop_reason::Symbol
+    method::Symbol
+    lower_bound::Union{Nothing,_Exact}
+    objective_bound::Union{Nothing,_Exact}
+    max_flow::Union{Nothing,_Exact}
+    fixings::Vector{Pair{V,S}}
+    graph_work::Int
+    flow_work::Int
+    verification_work::Int
+    edge_visits::Int
     exact_work::Int
 end
 
@@ -840,7 +884,7 @@ function _extract_witness_state(ws::Workspace, witness, map::Union{Nothing,Domai
         entry = st.trail[pos]
         entry.proof === nothing && continue
         pstep = entry.proof
-        if pstep isa Union{DominanceStep,ProbingStep}
+        if pstep isa Union{DominanceStep,ProbingStep,RoofDualityStep}
             w[pstep.variable] == pstep.value ||
                 throw(ArgumentError("witness violates committed workspace reduction"))
         elseif pstep isa RelationStep
@@ -1459,6 +1503,17 @@ function _transport_one_step(
         )
         _poly_fix!(p, pstep.variable, pstep.value)
         return out
+    elseif step isa RoofDualityStep
+        rstep = step::RoofDualityStep
+        out = RoofDualityStep(
+            rstep.variable, rstep.value,
+            deepcopy(rstep.roof_lower), deepcopy(rstep.max_flow),
+            rstep.flow_edges, rstep.batch_fixings, rstep.batch_index,
+            deepcopy(c_to), rstep.predecessors, rstep.method,
+            rstep.scope_length, rstep.persistency,
+        )
+        _poly_fix!(p, rstep.variable, rstep.value)
+        return out
     else
         estep = step::EliminationStep
         out = EliminationStep(
@@ -1638,6 +1693,265 @@ function prove_probing(
     certificate = _build_proof_certificate(ws, step, map, deadline_ns)
     certificate === nothing && return ProbingAttempt(nothing, :deadline, method, visits, fallbacks, exact_work)
     return ProbingAttempt(certificate, reason, method, visits, fallbacks, exact_work)
+end
+
+function _resolve_roof_candidates(ws::Workspace, candidates)
+    n = length(ws._snapshot.labels)
+    candidates === nothing && return collect(1:n)
+    seen = Set{Int}()
+    out = Int[]
+    for label in candidates
+        i = _variable(ws, label)
+        if !(i in seen)
+            push!(out, i)
+            push!(seen, i)
+        end
+    end
+    return out
+end
+
+function _roof_duality_pass(
+    ws::Workspace,
+    cand_indices::Vector{Int};
+    value_filter::Union{Nothing,Int}=nothing,
+    max_work::Int=typemax(Int),
+    max_exact_work::Int=typemax(Int),
+    deadline_ns=nothing,
+)
+    s = ws._snapshot
+    st = ws._state
+    direction = _direction(s)
+    direction != 0 ||
+        return (Pair{Int,Int}[], (), nothing, nothing, nothing, :zero_scale, :none, 0, 0, 0, 0, 0)
+    ok, reason, net, C_base, graph_work, exact_work = _build_implication_network(
+        ws; max_work=max_work, max_exact_work=max_exact_work, deadline_ns=deadline_ns,
+    )
+    ok || return (
+        Pair{Int,Int}[], (), nothing, nothing, nothing,
+        reason, :exact, graph_work, 0, 0, graph_work, exact_work,
+    )
+    ok_flow, flow_reason, total_flow, flow_work, flow_exact = _dinic_max_flow!(
+        net;
+        max_work=max_work - graph_work,
+        max_exact_work=max_exact_work - exact_work,
+        deadline_ns=deadline_ns,
+    )
+    exact_work += flow_exact
+    total_visits = graph_work + flow_work
+    ok_flow || return (
+        Pair{Int,Int}[], (), nothing, nothing, nothing,
+        flow_reason, :exact, graph_work, flow_work, 0, total_visits, exact_work,
+    )
+    R_S, R_T, ver_work = _residual_reachability(net)
+    if _expired(deadline_ns)
+        return (
+            Pair{Int,Int}[], (), nothing, nothing, nothing,
+            :deadline, :exact, graph_work, flow_work, ver_work, total_visits + ver_work, exact_work,
+        )
+    end
+    if total_visits + ver_work > max_work
+        return (
+            Pair{Int,Int}[], (), nothing, nothing, nothing,
+            :work_limit, :exact, graph_work, flow_work, max_work - total_visits, max_work, exact_work,
+        )
+    end
+    total_visits += ver_work
+    flow_edges = _extract_flow_edges(net)
+    L_roof = C_base + total_flow
+    obj_bound = _Exact(s.scale) * direction * L_roof
+    low_orig = s.domain === QT.BoolDomain ? 0 : -1
+    batch_pairs = Pair{Int,Int}[]
+    for u in cand_indices
+        st.fixed[u] == 2 || continue
+        if R_S[2 * u - 1] && R_T[2 * u]
+            orig_val = 1
+            (value_filter === nothing || orig_val == value_filter) && push!(batch_pairs, u => orig_val)
+        elseif R_S[2 * u] && R_T[2 * u - 1]
+            orig_val = low_orig
+            (value_filter === nothing || orig_val == value_filter) && push!(batch_pairs, u => orig_val)
+        end
+    end
+    stop = isempty(batch_pairs) ? (value_filter === nothing ? :no_persistency : :not_strict) : :proved
+    return (
+        batch_pairs, flow_edges, L_roof, obj_bound, total_flow,
+        stop, :exact, graph_work, flow_work, ver_work, total_visits, exact_work,
+    )
+end
+
+function _build_roof_certificate(
+    ws::Workspace,
+    batch_pairs::Vector{Pair{Int,Int}},
+    flow_edges::Tuple{Vararg{Tuple{Int,Int,_Exact}}},
+    L_roof::_Exact,
+    total_flow::_Exact,
+    map::Union{Nothing,DomainGaugeMap},
+    max_work::Int,
+    deadline_ns,
+)
+    st = ws._state
+    scope_len = length(st.callers)
+    base_preds = st.proof_count
+    batch_tuple = Tuple(batch_pairs)
+    raw_steps = Vector{RoofDualityStep}(undef, length(batch_pairs))
+    cp = checkpoint(ws)
+    saved_star_hint = st.star_hint
+    saved_rel_hint = st.rel_hint
+    mat_visits = 0
+    try
+        for (r, (u, orig_val)) in enumerate(batch_pairs)
+            _expired(deadline_ns) && return (nothing, :deadline, mat_visits)
+            c_before = deepcopy(st.constant)
+            step_r = RoofDualityStep(
+                u, orig_val,
+                deepcopy(L_roof), deepcopy(total_flow),
+                flow_edges, batch_tuple, r,
+                c_before, base_preds + r - 1,
+                :exact, scope_len, :strong,
+            )
+            raw_steps[r] = step_r
+            rep = _fix!(ws, u, orig_val; proof=step_r, max_work=max_work - mat_visits, deadline_ns=deadline_ns)
+            mat_visits += rep.edge_visits
+            rep.stop_reason === :applied || return (nothing, rep.stop_reason, mat_visits)
+        end
+    finally
+        if length(st.trail) > cp._depth
+            rollback!(ws, cp)
+        end
+        st.star_hint = saved_star_hint
+        st.rel_hint = saved_rel_hint
+    end
+    source = deepcopy(ws._snapshot)
+    _validate_label_copy(ws._snapshot.labels, source.labels)
+    owned_map = map === nothing ? nothing : deepcopy(map)
+    raw_prefix = Tuple(deepcopy(st.trail[p].proof) for p in st.fixes if st.trail[p].proof !== nothing)
+    raw_all = (raw_prefix..., raw_steps...)
+    steps = owned_map === nothing ? raw_all :
+        _transport_steps(ws, _caller_scope(ws), raw_all, nothing, owned_map)
+    _expired(deadline_ns) && return (nothing, :deadline, mat_visits)
+    cert = DominanceCertificate(generation(ws), checkpoint(ws), _caller_scope(ws), steps, source, owned_map)
+    return (cert, :proved, mat_visits)
+end
+
+"""
+    prove_roof_duality(ws; candidates=nothing, map=nothing,
+                       max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing)
+    prove_roof_duality(ws, label; map=nothing, value=nothing,
+                       max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing)
+
+Compute the exact rational implication-network (posiform / roof-duality) lower
+bound and extract strongly persistent variable assignments without mutating `ws`.
+Returns a [`RoofDualityAttempt`](@ref) containing the exact normalized
+`lower_bound`, scaled model `objective_bound`, maximum `S`-`T` flow `max_flow`,
+strongly persistent `fixings`, phase-separated work counters, and (when at least
+one candidate is strongly fixed) a locally verifiable [`DominanceCertificate`](@ref)
+carrying [`RoofDualityStep`](@ref) witnesses.
+"""
+function prove_roof_duality(
+    ws::Workspace;
+    candidates=nothing,
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+    max_work=typemax(Int),
+    max_exact_work=typemax(Int),
+    deadline_ns=nothing,
+)
+    _limits(max_work, deadline_ns)
+    _limits(max_exact_work, deadline_ns)
+    map === nothing || _validate_domain_map(ws, map; full=true)
+    s = ws._snapshot
+    V = s.label_type
+    S = s.state_type
+    cand_indices = _resolve_roof_candidates(ws, candidates)
+    batch_pairs, flow_edges, L_roof, obj_bound, total_flow,
+        stop, method, graph_work, flow_work, ver_work, total_visits, exact_work = _roof_duality_pass(
+        ws, cand_indices;
+        max_work=max_work, max_exact_work=max_exact_work, deadline_ns=deadline_ns,
+    )
+    if isempty(batch_pairs)
+        return RoofDualityAttempt{V,S}(
+            nothing, stop, method, L_roof, obj_bound, total_flow,
+            Pair{V,S}[], graph_work, flow_work, ver_work, total_visits, exact_work,
+        )
+    end
+    cert, cert_reason, mat_visits = _build_roof_certificate(
+        ws, batch_pairs, flow_edges, L_roof, total_flow,
+        map, max_work - total_visits, deadline_ns,
+    )
+    total_visits += mat_visits
+    if cert === nothing
+        return RoofDualityAttempt{V,S}(
+            nothing, cert_reason, method, L_roof, obj_bound, total_flow,
+            Pair{V,S}[], graph_work, flow_work, ver_work, total_visits, exact_work,
+        )
+    end
+    fixings = Pair{V,S}[
+        deepcopy(s.labels[u]) => S(map === nothing ? orig_val : _map_index_value(map, u, orig_val))
+        for (u, orig_val) in batch_pairs
+    ]
+    return RoofDualityAttempt{V,S}(
+        cert, :proved, method, L_roof, obj_bound, total_flow,
+        fixings, graph_work, flow_work, ver_work, total_visits, exact_work,
+    )
+end
+
+function prove_roof_duality(
+    ws::Workspace,
+    label;
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+    value=nothing,
+    max_work=typemax(Int),
+    max_exact_work=typemax(Int),
+    deadline_ns=nothing,
+)
+    _limits(max_work, deadline_ns)
+    _limits(max_exact_work, deadline_ns)
+    map === nothing || _validate_domain_map(ws, map; full=true)
+    s = ws._snapshot
+    V = s.label_type
+    S = s.state_type
+    i = _variable(ws, label)
+    req_orig = if value === nothing
+        nothing
+    elseif map === nothing
+        _assignment(ws, value)
+    else
+        _lift_index_value(map, i, _check_domain_scalar(value, map.target_domain))
+    end
+    if ws._state.fixed[i] != 2
+        return RoofDualityAttempt{V,S}(
+            nothing, :already_fixed, :none, nothing, nothing, nothing,
+            Pair{V,S}[], 0, 0, 0, 0, 0,
+        )
+    end
+    batch_pairs, flow_edges, L_roof, obj_bound, total_flow,
+        stop, method, graph_work, flow_work, ver_work, total_visits, exact_work = _roof_duality_pass(
+        ws, [i];
+        value_filter=req_orig, max_work=max_work, max_exact_work=max_exact_work, deadline_ns=deadline_ns,
+    )
+    if isempty(batch_pairs)
+        return RoofDualityAttempt{V,S}(
+            nothing, stop, method, L_roof, obj_bound, total_flow,
+            Pair{V,S}[], graph_work, flow_work, ver_work, total_visits, exact_work,
+        )
+    end
+    cert, cert_reason, mat_visits = _build_roof_certificate(
+        ws, batch_pairs, flow_edges, L_roof, total_flow,
+        map, max_work - total_visits, deadline_ns,
+    )
+    total_visits += mat_visits
+    if cert === nothing
+        return RoofDualityAttempt{V,S}(
+            nothing, cert_reason, method, L_roof, obj_bound, total_flow,
+            Pair{V,S}[], graph_work, flow_work, ver_work, total_visits, exact_work,
+        )
+    end
+    fixings = Pair{V,S}[
+        deepcopy(s.labels[u]) => S(map === nothing ? orig_val : _map_index_value(map, u, orig_val))
+        for (u, orig_val) in batch_pairs
+    ]
+    return RoofDualityAttempt{V,S}(
+        cert, :proved, method, L_roof, obj_bound, total_flow,
+        fixings, graph_work, flow_work, ver_work, total_visits, exact_work,
+    )
 end
 
 """
@@ -2002,7 +2316,7 @@ function _verify_probing_step(
         w[idx] == val || return (false, :invalid_witness, cost)
     end
     for pstep in prefix_steps
-        if pstep isa Union{DominanceStep,ProbingStep}
+        if pstep isa Union{DominanceStep,ProbingStep,RoofDualityStep}
             w[pstep.variable] == pstep.value || return (false, :invalid_witness, cost)
         elseif pstep isa RelationStep
             s_elim = is_bool ? (2 * w[pstep.eliminated] - 1) : w[pstep.eliminated]
@@ -2047,14 +2361,90 @@ function _verify_probing_step(
     return (true, :verified, cost)
 end
 
+function _verify_roof_duality_step(
+    p::_PolyState,
+    step::RoofDualityStep,
+    active_map::Union{Nothing,DomainGaugeMap},
+    prefix_steps,
+    all_steps,
+    step_idx::Int,
+    later_assumptions,
+    cost::Int,
+    deadline,
+)
+    u = step.variable
+    1 <= u <= p.n && p.active[u] || return (false, :invalid_step, 0)
+    is_bool = p.domain === QT.BoolDomain
+    low_orig = is_bool ? 0 : -1
+    step.value in (low_orig, 1) || return (false, :invalid_value, 0)
+    step.method === :exact && step.persistency === :strong ||
+        return (false, :invalid_method, 0)
+    isempty(later_assumptions) || return (false, :invalid_scope, cost)
+    direction = _direction_poly(p)
+    direction != 0 || return (false, :zero_scale, 0)
+    c_expected = _poly_mapped_constant(p, active_map)
+    _expired(deadline) && return (false, :deadline, cost)
+    c_expected == step.constant || return (false, :invalid_constant, cost)
+    m = length(step.batch_fixings)
+    (1 <= step.batch_index <= m && step.batch_fixings[step.batch_index] == (u => step.value)) ||
+        return (false, :invalid_step, cost)
+    if step.batch_index == 1
+        step_idx + m - 1 <= length(all_steps) || return (false, :invalid_step, cost)
+        for r in 1:m
+            s_r = all_steps[step_idx + r - 1]
+            (s_r isa RoofDualityStep &&
+             s_r.batch_index == r &&
+             s_r.batch_fixings == step.batch_fixings &&
+             s_r.roof_lower == step.roof_lower &&
+             s_r.max_flow == step.max_flow &&
+             s_r.flow_edges == step.flow_edges &&
+             s_r.scope_length == step.scope_length) ||
+                return (false, :invalid_step, cost)
+        end
+        seen_batch = Set{Int}()
+        for (v_idx, v_val) in step.batch_fixings
+            (1 <= v_idx <= p.n && p.active[v_idx] && !(v_idx in seen_batch) && v_val in (low_orig, 1)) ||
+                return (false, :invalid_step, cost)
+            push!(seen_batch, v_idx)
+        end
+        built = _build_poly_implication_network(p, deadline)
+        built === nothing && return (false, :deadline, cost)
+        net, C_base, _ = built
+        ok_flow, flow_reason, _, R_S, R_T = _verify_flow_and_reachability!(
+            net, step.flow_edges, step.max_flow, deadline,
+        )
+        ok_flow || return (false, flow_reason, cost)
+        step.roof_lower == C_base + step.max_flow || return (false, :invalid_bound, cost)
+        for (v_idx, v_val) in step.batch_fixings
+            s_val = is_bool ? (2 * v_val - 1) : v_val
+            pers_ok = s_val == 1 ? (R_S[2 * v_idx - 1] && R_T[2 * v_idx]) :
+                                   (R_S[2 * v_idx] && R_T[2 * v_idx - 1])
+            pers_ok || return (false, :invalid_bound, cost)
+        end
+    else
+        !isempty(prefix_steps) || return (false, :invalid_step, cost)
+        prev = prefix_steps[end]
+        (prev isa RoofDualityStep &&
+         prev.batch_index == step.batch_index - 1 &&
+         prev.batch_fixings == step.batch_fixings &&
+         prev.roof_lower == step.roof_lower &&
+         prev.max_flow == step.max_flow &&
+         prev.flow_edges == step.flow_edges &&
+         prev.scope_length == step.scope_length) ||
+            return (false, :invalid_step, cost)
+    end
+    _poly_fix!(p, u, step.value)
+    return (true, :verified, cost)
+end
+
 """
     verify_certificate(ws, certificate; map=nothing, max_work=typemax(Int), deadline_ns=nothing)
 
 Independently recheck source identity, current caller scope, optional
 [`DomainGaugeMap`](@ref) provenance and the complete ordered reduction chain
 ([`DominanceStep`](@ref), [`RelationStep`](@ref), [`EliminationStep`](@ref),
-[`ProbingStep`](@ref)) using exact original-coefficient evolution and
-domain/gauge conversion. Never trust cached workspace fields or an
+[`ProbingStep`](@ref), [`RoofDualityStep`](@ref)) using exact original-coefficient
+evolution and domain/gauge conversion. Never trust cached workspace fields or an
 authenticated identifier alone.
 """
 function verify_certificate(ws::Workspace, cert::DominanceCertificate;
@@ -2112,7 +2502,7 @@ function verify_certificate(ws::Workspace, cert::DominanceCertificate;
     base_step_cost = length(s.linear.values) + length(s.quadratic.values)
     introduced = 0
     for (k,step) in enumerate(cert.steps)
-        step isa Union{DominanceStep,RelationStep,EliminationStep,ProbingStep} && step.predecessors == k-1 ||
+        step isa Union{DominanceStep,RelationStep,EliminationStep,ProbingStep,RoofDualityStep} && step.predecessors == k-1 ||
             return VerificationResult(false,:invalid_predecessors,cost)
         count = step.scope_length == -1 ? length(cert.assumptions) : step.scope_length
         introduced <= count <= length(cert.assumptions) ||
@@ -2136,6 +2526,13 @@ function verify_certificate(ws::Workspace, cert::DominanceCertificate;
             _verify_probing_step(
                 p, step, active_map,
                 cert.assumptions[1:count], cert.steps[1:(k - 1)], later,
+                step_cost, deadline_ns,
+            )
+        elseif step isa RoofDualityStep
+            later = cert.assumptions[(count + 1):end]
+            _verify_roof_duality_step(
+                p, step, active_map,
+                cert.steps[1:(k - 1)], cert.steps, k, later,
                 step_cost, deadline_ns,
             )
         else
