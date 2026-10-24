@@ -47,14 +47,13 @@ function _incremental(s::_Snapshot;rules=:identity)
     end
     queue = rules in (:dominance, :elimination) ? collect(1:n) : Int[]
     queued = rules in (:dominance, :elimination) ? trues(n) : falses(n)
-    elim_queue = Int[i for i in 1:n if degrees[i] <= 3]
-    elim_queued = BitVector(degrees[i] <= 3 for i in 1:n)
+    elim_queues = ntuple(b -> Int[i for i in 1:n if degrees[i] == b - 1], 4)
+    elim_queued = ntuple(b -> BitVector(degrees[i] == b - 1 for i in 1:n), 4)
     return _Incremental(Dict{Any,Int}(v=>i for (i,v) in enumerate(s.labels)),
                         adjacency, adj_pos, fields, _Exact(s.offset), fill(Int8(2), n),
                         queue, queued, _UndoEntry[], 0, uuid4(),rules,lower,upper,1,
                         Int[],Int[],zeros(Int,n),0,0,0,0,0,0,dual_fields,dual_constant,
-                        degrees, initial_degrees, elim_queue, elim_queued, 1,
-                        Int[], falses(n), fill(Int8(4), n))
+                        degrees, initial_degrees, elim_queues, elim_queued, [1, 1, 1, 1])
 end
 
 """
@@ -232,11 +231,14 @@ function _fix!(ws::Workspace,i::Int,v::Int;proof=nothing,max_work=typemax(Int),d
     st.serial == typemax(UInt64) && throw(ArgumentError("trail serial exhausted; reset workspace"))
     # Complete allocation before committing field, queue and trail changes.
     _reserve!(st.queue, length(st.queue) + length(updated))
-    _reserve!(st.elim_queue, length(st.elim_queue) + length(updated))
+    for b in 1:4
+        _reserve!(st.elim_queues[b], length(st.elim_queues[b]) + length(updated))
+    end
     _reserve!(st.trail, length(st.trail) + 1)
     _reserve!(st.fixes, length(st.fixes) + 1)
     proof === nothing && _reserve!(st.callers, length(st.callers) + 1)
-    entry = _UndoFix(st.serial + 1,length(st.fixes)+1,i,v,st.constant,old,length(st.queue),proof,st.dual_constant,old_dual,length(st.elim_queue))
+    elim_lens = ntuple(b -> length(st.elim_queues[b]), 4)
+    entry = _UndoFix(st.serial + 1,length(st.fixes)+1,i,v,st.constant,old,length(st.queue),proof,st.dual_constant,old_dual,elim_lens)
     push!(st.trail, entry)
     push!(st.fixes,length(st.trail))
     if proof === nothing
@@ -255,9 +257,10 @@ function _fix!(ws::Workspace,i::Int,v::Int;proof=nothing,max_work=typemax(Int),d
     for (j, df) in updated_dual
         st.dual_fields[j] = df
         st.degrees[j] -= 1
-        if st.degrees[j] <= 3 && !st.elim_queued[j]
-            push!(st.elim_queue, j)
-            st.elim_queued[j] = true
+        d_j = st.degrees[j]
+        if d_j <= 3 && !st.elim_queued[d_j + 1][j]
+            push!(st.elim_queues[d_j + 1], j)
+            st.elim_queued[d_j + 1][j] = true
         end
     end
     for (j,field,lower,upper) in updated
@@ -434,7 +437,9 @@ function _apply_reduction!(
     _expired(deadline_ns) && return UpdateReport(:deadline, visits, 0)
     st.serial == typemax(UInt64) && throw(ArgumentError("trail serial exhausted; reset workspace"))
     _reserve!(st.queue, length(st.queue) + length(touched))
-    _reserve!(st.elim_queue, length(st.elim_queue) + length(touched))
+    for b in 1:4
+        _reserve!(st.elim_queues[b], length(st.elim_queues[b]) + length(touched))
+    end
     _reserve!(st.trail, length(st.trail) + 1)
     _reserve!(st.fixes, length(st.fixes) + 1)
     for w in touched
@@ -452,6 +457,7 @@ function _apply_reduction!(
         _adj_set!(st, adj_edits, j, k, q_new)
         _adj_set!(st, adj_edits, k, j, q_new)
     end
+    elim_lens = ntuple(b -> length(st.elim_queues[b]), 4)
     entry = _UndoReduction(
         st.serial + 1,
         length(st.fixes) + 1,
@@ -467,7 +473,7 @@ function _apply_reduction!(
         spin_const_delta,
         spin_field_deltas,
         spin_coupling_deltas,
-        length(st.elim_queue),
+        elim_lens,
     )
     push!(st.trail, entry)
     push!(st.fixes, length(st.trail))
@@ -492,9 +498,10 @@ function _apply_reduction!(
             push!(st.queue, w)
             st.queued[w] = true
         end
-        if st.degrees[w] <= 3 && !st.elim_queued[w]
-            push!(st.elim_queue, w)
-            st.elim_queued[w] = true
+        d_w = st.degrees[w]
+        if d_w <= 3 && !st.elim_queued[d_w + 1][w]
+            push!(st.elim_queues[d_w + 1], w)
+            st.elim_queued[d_w + 1][w] = true
         end
     end
     return UpdateReport(:applied, visits, 1)
@@ -549,21 +556,13 @@ function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
     while length(st.trail) > cp._depth
         undo = pop!(st.trail)
         if undo isa _UndoQueue
-            if undo.is_elim
-                if undo.head == 0
-                    st.elim_queued[pop!(st.elim_queue)] = false
-                    st.elim_deferred_cutoff[undo.index] = undo.old_cutoff
-                else
-                    if undo.added_deferred
-                        st.elim_in_deferred[pop!(st.elim_deferred)] = false
-                    end
-                    st.elim_deferred_cutoff[undo.index] = undo.old_cutoff
-                    st.elim_head = undo.head
-                    st.elim_queued[undo.index] = undo.queued
-                end
-            else
+            b = Int(undo.bucket)
+            if b == 0
                 st.head = undo.head
                 st.queued[undo.index] = undo.queued
+            else
+                st.elim_heads[b] = undo.head
+                st.elim_queued[b][undo.index] = undo.queued
             end
         elseif undo isa _UndoReduction
             for r in length(undo.adj_edits):-1:1
@@ -598,8 +597,10 @@ function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
             while length(st.queue) > undo.queue_length
                 st.queued[pop!(st.queue)] = false
             end
-            while length(st.elim_queue) > undo.elim_queue_length
-                st.elim_queued[pop!(st.elim_queue)] = false
+            for b in 1:4
+                while length(st.elim_queues[b]) > undo.elim_queue_lengths[b]
+                    st.elim_queued[b][pop!(st.elim_queues[b])] = false
+                end
             end
             st.fixed[undo.index] = 2
             st.entries[undo.index] = 0
@@ -622,8 +623,10 @@ function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
             while length(st.queue) > undo.queue_length
                 st.queued[pop!(st.queue)] = false
             end
-            while length(st.elim_queue) > undo.elim_queue_length
-                st.elim_queued[pop!(st.elim_queue)] = false
+            for b in 1:4
+                while length(st.elim_queues[b]) > undo.elim_queue_lengths[b]
+                    st.elim_queued[b][pop!(st.elim_queues[b])] = false
+                end
             end
             st.fixed[undo.index] = 2
             st.degrees[undo.index] = length(undo.fields)

@@ -39,7 +39,7 @@ function _pop_queue!(ws::Workspace)
     st = ws._state
     st.serial == typemax(UInt64) && throw(ArgumentError("trail serial exhausted; reset workspace"))
     i = st.queue[st.head]
-    entry = _UndoQueue(st.serial+1,length(st.fixes),i,st.head,st.queued[i],false)
+    entry = _UndoQueue(st.serial+1,length(st.fixes),i,st.head,st.queued[i],Int8(0))
     _reserve!(st.trail,length(st.trail)+1)
     push!(st.trail,entry)
     st.serial += 1
@@ -48,47 +48,27 @@ function _pop_queue!(ws::Workspace)
     return nothing
 end
 
-function _pop_elim_queue!(ws::Workspace, cutoff::Int8=Int8(4); defer::Bool=false)
+function _pop_elim_queue!(ws::Workspace, b::Int)
     st = ws._state
     st.serial == typemax(UInt64) && throw(ArgumentError("trail serial exhausted; reset workspace"))
-    i = st.elim_queue[st.elim_head]
-    add_def = defer && !st.elim_in_deferred[i]
-    entry = _UndoQueue(
-        st.serial + 1, length(st.fixes), i, st.elim_head,
-        st.elim_queued[i], true, st.elim_deferred_cutoff[i], add_def,
-    )
+    q = st.elim_queues[b]
+    qd = st.elim_queued[b]
+    h = st.elim_heads[b]
+    i = q[h]
+    entry = _UndoQueue(st.serial + 1, length(st.fixes), i, h, qd[i], Int8(b))
     _reserve!(st.trail, length(st.trail) + 1)
     push!(st.trail, entry)
     st.serial += 1
-    st.elim_queued[i] = false
-    st.elim_head += 1
-    st.elim_deferred_cutoff[i] = cutoff
-    if add_def
-        push!(st.elim_deferred, i)
-        st.elim_in_deferred[i] = true
-    end
+    qd[i] = false
+    st.elim_heads[b] = h + 1
     return nothing
 end
 
-function _requeue_deferred_elim!(ws::Workspace, max_degree::Int)
-    st = ws._state
-    for u in st.elim_deferred
-        if st.fixed[u] == 2 && !st.elim_queued[u] &&
-           st.degrees[u] <= max_degree && max_degree > st.elim_deferred_cutoff[u]
-            st.serial == typemax(UInt64) && throw(ArgumentError("trail serial exhausted; reset workspace"))
-            entry = _UndoQueue(
-                st.serial + 1, length(st.fixes), u, 0,
-                false, true, st.elim_deferred_cutoff[u], false,
-            )
-            _reserve!(st.trail, length(st.trail) + 1)
-            push!(st.trail, entry)
-            st.serial += 1
-            push!(st.elim_queue, u)
-            st.elim_queued[u] = true
-            st.elim_deferred_cutoff[u] = Int8(4)
-        end
+function _next_elim_bucket(st::_Incremental, max_degree::Int)
+    @inbounds for b in 1:(max_degree + 1)
+        st.elim_heads[b] <= length(st.elim_queues[b]) && return b
     end
-    return nothing
+    return 0
 end
 
 function _cached_step(ws::Workspace,i::Int,direction::Int;allow_weak::Bool=false)
@@ -355,14 +335,19 @@ function eliminate_low_degree!(
         st.rules in (:dominance, :elimination) ||
             throw(ArgumentError("cascade_dominance requires Workspace(model; rules=:dominance) or rules=:elimination"))
     end
-    _requeue_deferred_elim!(ws, Int(max_degree))
+    md = Int(max_degree)
     candidates, edges, deductions, exact = 0, 0, 0, 0
-    pending_count() = (length(st.elim_queue) - st.elim_head + 1) +
-                      (cascade_dominance ? (length(st.queue) - st.head + 1) : 0)
+    function pending_count()
+        p = cascade_dominance ? (length(st.queue) - st.head + 1) : 0
+        @inbounds for b in 1:(md + 1)
+            p += length(st.elim_queues[b]) - st.elim_heads[b] + 1
+        end
+        return p
+    end
     finish(reason) = _propagation_report!(ws, reason, candidates, edges, deductions, exact;
                                           pending=pending_count())
     direction = _direction(ws._snapshot)
-    while st.elim_head <= length(st.elim_queue) || (cascade_dominance && st.head <= length(st.queue))
+    while _next_elim_bucket(st, md) != 0 || (cascade_dominance && st.head <= length(st.queue))
         if cascade_dominance && st.head <= length(st.queue)
             _expired(deadline_ns) && return finish(:deadline)
             deductions < max_deductions || return finish(:deduction_limit)
@@ -380,11 +365,11 @@ function eliminate_low_degree!(
         _expired(deadline_ns) && return finish(:deadline)
         deductions < max_deductions || return finish(:deduction_limit)
         candidates + edges < max_work || return finish(:work_limit)
-        u = st.elim_queue[st.elim_head]
-        if st.fixed[u] != 2 || direction == 0 || st.degrees[u] > max_degree
+        b = _next_elim_bucket(st, md)
+        u = st.elim_queues[b][st.elim_heads[b]]
+        if st.fixed[u] != 2 || direction == 0 || st.degrees[u] != b - 1
             candidates += 1
-            defer = st.fixed[u] == 2 && direction != 0 && st.degrees[u] <= 3
-            _pop_elim_queue!(ws, Int8(max_degree); defer)
+            _pop_elim_queue!(ws, b)
             continue
         end
         d_u = st.degrees[u]
@@ -397,7 +382,7 @@ function eliminate_low_degree!(
         total_exact_need <= max_exact_work - exact || return finish(:verification_limit)
         candidates += 1
         raw_step, w_reason, _, w_visits, w_exact = _elimination_witness(
-            ws, u; map, tie_break, max_degree,
+            ws, u; map, tie_break, max_degree=md,
             max_work=max_work - candidates - edges,
             max_exact_work=max_exact_work - exact,
             deadline_ns,
@@ -424,7 +409,7 @@ function eliminate_low_degree!(
         exact += 1 + 3 * length(step.neighbors)
         rep.stop_reason === :applied || return finish(rep.stop_reason)
         deductions += 1
-        _pop_elim_queue!(ws, Int8(max_degree))
+        _pop_elim_queue!(ws, b)
     end
     return finish(:quiescent)
 end

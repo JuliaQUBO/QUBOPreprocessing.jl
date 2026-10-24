@@ -1,7 +1,7 @@
 # Bounded CPU pilot for degree-0/1/2 local elimination (issue #15), not an
 # ecosystem adoption envelope (owned by QUBOBenchmarks #30).
 # Run from a clean producing commit, with one Julia/OpenBLAS thread:
-# OPENBLAS_NUM_THREADS=1 julia --startup-file=no --threads=1 --project=. scripts/elimination_pilot.jl > docs/evidence/elimination-pilot.tsv
+# OPENBLAS_NUM_THREADS=1 julia --startup-file=no --threads=1 --project=. scripts/elimination_pilot.jl > /tmp/elimination-pilot.tsv && cp /tmp/elimination-pilot.tsv docs/evidence/elimination-pilot.tsv
 using QUBOPreprocessing
 import QUBOTools as QT
 

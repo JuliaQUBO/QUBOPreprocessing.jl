@@ -8,7 +8,7 @@ const _NeighborRecord = Tuple{Int,_Exact,_Exact,_Exact}
 const _DualDegreeRecord = Tuple{Int,_Exact,Int}
 const _AdjacencyEdit = Tuple{Symbol,Int,Int,Pair{Int,_Exact}}
 
-_reserve!(a::Vector, sz::Int) = @static VERSION >= v"1.11.0-DEV" ? sizehint!(a, sz; shrink=false) : sizehint!(a, sz)
+_reserve!(a::Vector, sz::Int) = @static VERSION >= v"1.11.0-DEV" ? sizehint!(a, sz; shrink=false) : sizehint!(a, nextpow(2, max(16, sz)))
 
 struct _UndoFix
     serial::UInt64
@@ -21,7 +21,7 @@ struct _UndoFix
     proof::Union{Nothing,_ProofRecord}
     dual_constant::_Exact
     dual_fields::Vector{Pair{Int,_Exact}}
-    elim_queue_length::Int
+    elim_queue_lengths::NTuple{4,Int}
 end
 
 struct _UndoReduction
@@ -39,7 +39,7 @@ struct _UndoReduction
     spin_const_delta::_Exact
     spin_field_deltas::Vector{Pair{Int,_Exact}}
     spin_coupling_deltas::Vector{Tuple{Int,Int,_Exact}}
-    elim_queue_length::Int
+    elim_queue_lengths::NTuple{4,Int}
 end
 
 struct _UndoQueue
@@ -48,12 +48,10 @@ struct _UndoQueue
     index::Int
     head::Int
     queued::Bool
-    is_elim::Bool
-    old_cutoff::Int8
-    added_deferred::Bool
+    bucket::Int8 # 0 for dominance queue, 1..4 for degree-(bucket-1) elim_queues
 end
-_UndoQueue(serial::UInt64, fix_depth::Int, index::Int, head::Int, queued::Bool, is_elim::Bool=false) =
-    _UndoQueue(serial, fix_depth, index, head, queued, is_elim, Int8(4), false)
+_UndoQueue(serial::UInt64, fix_depth::Int, index::Int, head::Int, queued::Bool) =
+    _UndoQueue(serial, fix_depth, index, head, queued, Int8(0))
 const _UndoEntry = Union{_UndoFix,_UndoReduction,_UndoQueue}
 
 # Topology-changing reductions (relation contractions and bounded local
@@ -89,10 +87,7 @@ mutable struct _Incremental
     dual_constant::_Exact
     degrees::Vector{Int}
     initial_degrees::Vector{Int}
-    elim_queue::Vector{Int}
-    elim_queued::BitVector
-    elim_head::Int
-    elim_deferred::Vector{Int}
-    elim_in_deferred::BitVector
-    elim_deferred_cutoff::Vector{Int8}
+    elim_queues::NTuple{4,Vector{Int}}
+    elim_queued::NTuple{4,BitVector}
+    elim_heads::Vector{Int}
 end

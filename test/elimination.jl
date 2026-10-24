@@ -197,7 +197,7 @@ end
     rep_casc = eliminate_low_degree!(ws_casc; cascade_dominance=true)
     @test rep_casc.stop_reason === :quiescent
     @test rep_casc.deductions == 5
-    @test deductions(ws_casc) == [:hub => -1, :t2 => 1, :t3 => 1]
+    @test deductions(ws_casc) == [:hub => -1, :t2 => 1, :t1 => 1]
     @test length(reductions(ws_casc)) == 5
     cert_casc = export_certificate(ws_casc)
     @test [typeof(s) for s in cert_casc.steps] ==
@@ -290,9 +290,9 @@ end
         # Rollback to root cp0 and verify complete restoration
         rollback!(ws, cp0)
         @test isempty(reductions(ws))
-        @test ws._state.elim_head == 1
-        @test length(ws._state.elim_queue) == 4
-        @test all(ws._state.elim_queued)
+        @test ws._state.elim_heads == [1, 1, 1, 1]
+        @test sum(length, ws._state.elim_queues) == 4
+        @test all(i -> any(b -> ws._state.elim_queued[b][i], 1:4), 1:4)
     end
 
     ws_dl = Workspace(m4; rules=:elimination)
@@ -309,16 +309,16 @@ end
         Q_k4_leaf[i, j] = 1.0
     end
     ws_k4_leaf = Workspace(fixture([:x1, :x2, :x3, :x4, :x5], zeros(5), Q_k4_leaf); rules=:elimination)
-    @test !ws_k4_leaf._state.elim_queued[2] # initially degree 4
+    @test !any(b -> ws_k4_leaf._state.elim_queued[b][2], 1:4) # initially degree 4
     cp_k4 = checkpoint(ws_k4_leaf)
     @test eliminate_variable!(ws_k4_leaf, :x1).stop_reason === :applied
-    @test ws_k4_leaf._state.elim_queued[2] # lowered to degree 3 and queued
+    @test ws_k4_leaf._state.elim_queued[4][2] # lowered to degree 3 and queued in bucket 4
     rollback!(ws_k4_leaf, cp_k4)
-    @test !ws_k4_leaf._state.elim_queued[2]
+    @test !any(b -> ws_k4_leaf._state.elim_queued[b][2], 1:4)
 
     # Direct cancellation-to-queue regression: eliminating degree-2 :x1 cancels
     # existing edge (:x2, :x3), dropping :x2 and :x3 from degree 4 to degree 2,
-    # removing the edge from adjacency/adj_pos, and queuing both in elim_queue.
+    # removing the edge from adjacency/adj_pos, and queuing both in elim_queues[3].
     # For x1 in {0, 1}, -2*x1*x2 + 2*x1*x3 with L[1] = 1 gives min_{x1}(x1*(1 - 2*x2 + 2*x3)):
     # (x2,x3)=(0,0)->0, (1,0)->-1, (0,1)->0, (1,1)->0 => delta_Q_{23} = 0 - (-1) - 0 + 0 = +1,
     # cancelling Q[2, 3] = -1.0!
@@ -334,8 +334,8 @@ end
     ws_canc = Workspace(fixture([:x1, :x2, :x3, :x4, :x5, :x6], L_canc, Q_canc); rules=:elimination)
     @test degree(ws_canc, :x2) == 4
     @test degree(ws_canc, :x3) == 4
-    @test !ws_canc._state.elim_queued[2]
-    @test !ws_canc._state.elim_queued[3]
+    @test !any(b -> ws_canc._state.elim_queued[b][2], 1:4)
+    @test !any(b -> ws_canc._state.elim_queued[b][3], 1:4)
     @test haskey(ws_canc._state.adj_pos[2], 3)
     cp_canc = checkpoint(ws_canc)
     @test eliminate_variable!(ws_canc, :x1).stop_reason === :applied
@@ -344,17 +344,18 @@ end
     @test !haskey(ws_canc._state.adj_pos[2], 3)
     @test !haskey(ws_canc._state.adj_pos[3], 2)
     @test all(first(p) != 3 for p in ws_canc._state.adjacency[2])
-    @test ws_canc._state.elim_queued[2]
-    @test ws_canc._state.elim_queued[3]
+    @test ws_canc._state.elim_queued[3][2]
+    @test ws_canc._state.elim_queued[3][3]
     rollback!(ws_canc, cp_canc)
     @test degree(ws_canc, :x2) == 4
     @test degree(ws_canc, :x3) == 4
     @test haskey(ws_canc._state.adj_pos[2], 3)
     @test haskey(ws_canc._state.adj_pos[3], 2)
-    @test !ws_canc._state.elim_queued[2]
-    @test !ws_canc._state.elim_queued[3]
+    @test !any(b -> ws_canc._state.elim_queued[b][2], 1:4)
+    @test !any(b -> ws_canc._state.elim_queued[b][3], 1:4)
 
-    # Progressive max_degree cutoff increases (0 -> 1 -> 2 and 1 -> 2) with checkpoints/rollback:
+    # Progressive max_degree cutoff increases (0 -> 1 -> 2 and 1 -> 2) with checkpoints/rollback
+    # and strict zero-work / expired-deadline guards:
     m_tri = QT.Model{Int,Float64,Int}(
         Dict(i => 0.25 * i for i in 1:3),
         Dict((1, 2) => 1.0, (1, 3) => -1.5, (2, 3) => 2.0);
@@ -365,14 +366,18 @@ end
     r_cut0 = eliminate_low_degree!(ws_tri; max_degree=0)
     @test r_cut0.stop_reason === :quiescent
     @test r_cut0.deductions == 0
+    @test r_cut0.candidates == 0
     @test r_cut0.pending == 0
-    # Repeated call at same cutoff does not re-scan deferred vertices
+    @test isempty(ws_tri._state.trail)
+    # Repeated call at same cutoff does not scan or mutate trail
     @test eliminate_low_degree!(ws_tri; max_degree=0).candidates == 0
+    @test isempty(ws_tri._state.trail)
     cp_tri1 = checkpoint(ws_tri)
     r_cut1 = eliminate_low_degree!(ws_tri; max_degree=1)
     @test r_cut1.stop_reason === :quiescent
     @test r_cut1.deductions == 0
-    @test r_cut1.candidates == 0 # degree-2 vertices remain deferred without re-popping at max_degree=1
+    @test r_cut1.candidates == 0
+    @test isempty(ws_tri._state.trail)
     cp_tri2 = checkpoint(ws_tri)
     r_cut2 = eliminate_low_degree!(ws_tri; max_degree=2)
     @test r_cut2.stop_reason === :quiescent
@@ -388,9 +393,39 @@ end
     @test eliminate_low_degree!(ws_tri; max_degree=2).deductions == 3
     # Rollback to root cp_tri0
     rollback!(ws_tri, cp_tri0)
-    @test isempty(ws_tri._state.elim_deferred)
-    @test !any(ws_tri._state.elim_in_deferred)
-    @test all(==(Int8(4)), ws_tri._state.elim_deferred_cutoff)
+    @test ws_tri._state.elim_heads == [1, 1, 1, 1]
+
+    # 24-vertex spin cycle: max_degree=0 followed by max_degree=2 with max_work=0 or
+    # expired deadline performs 0 queue/trail mutations and 0 candidate scans:
+    m_c24 = QT.Model{Int,Float64,Int}(
+        Dict(i => (isodd(i) ? 0.25 : -0.5) for i in 1:24),
+        Dict((min(i, i == 24 ? 1 : i + 1), max(i, i == 24 ? 1 : i + 1)) => 1.0 for i in 1:24);
+        domain=:spin, sense=:min,
+    )
+    ws_c24 = Workspace(m_c24; rules=:elimination)
+    @test eliminate_low_degree!(ws_c24; max_degree=0).stop_reason === :quiescent
+    @test isempty(ws_c24._state.trail)
+    @test length(ws_c24._state.elim_queues[3]) == 24
+    r_c24_w0 = eliminate_low_degree!(ws_c24; max_degree=2, max_work=0)
+    @test r_c24_w0.stop_reason === :work_limit
+    @test r_c24_w0.candidates == 0
+    @test r_c24_w0.pending == 24
+    @test isempty(ws_c24._state.trail)
+    @test length(ws_c24._state.elim_queues[3]) == 24
+    r_c24_dl = eliminate_low_degree!(ws_c24; max_degree=2, deadline_ns=UInt64(0))
+    @test r_c24_dl.stop_reason === :deadline
+    @test r_c24_dl.candidates == 0
+    @test r_c24_dl.pending == 24
+    @test isempty(ws_c24._state.trail)
+    @test length(ws_c24._state.elim_queues[3]) == 24
+    # Budgeted partial step, checkpoint, rollback, and full resumption:
+    cp_c24 = checkpoint(ws_c24)
+    r_c24_step = eliminate_low_degree!(ws_c24; max_degree=2, max_deductions=2)
+    @test r_c24_step.stop_reason === :deduction_limit
+    @test r_c24_step.deductions == 2
+    rollback!(ws_c24, cp_c24)
+    @test isempty(ws_c24._state.trail)
+    @test eliminate_low_degree!(ws_c24; max_degree=2).deductions == 24
 
     # Paw graph (leaf 1 attached to triangle 2-3-4) stepping 0 -> 1 -> 2:
     m_paw = QT.Model{Int,Float64,Int}(
@@ -446,7 +481,7 @@ end
     rep_s = elim_cycle!(ws_small, cp_s)
     rep_l = elim_cycle!(ws_large, cp_l)
     # Neither workspace ever queues or visits any vertex of the 4-regular component!
-    @test rep_s.candidates == rep_l.candidates == 3
+    @test rep_s.candidates == rep_l.candidates == 5
     @test rep_s.edge_visits == rep_l.edge_visits
     @test rep_s.deductions == rep_l.deductions == 3
     @test rep_s.exact_work == rep_l.exact_work
