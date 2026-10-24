@@ -256,7 +256,8 @@ function _fix!(ws::Workspace,i::Int,v::Int;proof=nothing,max_work=typemax(Int),d
     else
         st.proof_count == 0 && (st.first_proof_pos = length(st.trail))
         st.proof_count += 1
-        hasproperty(proof, :method) && proof.method === :marginal && (st.marginal_count += 1)
+        (proof isa ProbingStep || (hasproperty(proof, :method) && proof.method === :marginal)) &&
+            (st.marginal_count += 1)
     end
     st.entries[i] = length(st.trail)
     st.serial += 1
@@ -695,7 +696,9 @@ function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
             else
                 st.proof_count -= 1
                 st.proof_count == 0 && (st.first_proof_pos = 0)
-                hasproperty(undo.proof, :method) && undo.proof.method === :marginal && (st.marginal_count -= 1)
+                (undo.proof isa ProbingStep ||
+                 (hasproperty(undo.proof, :method) && undo.proof.method === :marginal)) &&
+                    (st.marginal_count -= 1)
             end
             st.constant = undo.constant
             st.dual_constant = undo.dual_constant
@@ -892,7 +895,7 @@ function _lift_state(r::ConditionedExport, y::AbstractVector)
     steps = r.certificate.reduction_chain
     for k in length(steps):-1:1
         step = steps[k]
-        if step isa DominanceStep
+        if step isa Union{DominanceStep,ProbingStep}
             state[step.variable] = step.value
         elseif step isa RelationStep
             rep_val = state[step.representative]

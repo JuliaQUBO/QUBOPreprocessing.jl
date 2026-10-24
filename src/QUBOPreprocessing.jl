@@ -15,18 +15,19 @@ export Workspace, Generation, generation, reset!, materialize, ExportResult,
 export Checkpoint, checkpoint, assume!, rollback!, unfix!, changes, assumptions,
        UpdateReport, RollbackReport, ConditionedExport
 
-export DominanceStep, RelationStep, EliminationStep,
+export DominanceStep, RelationStep, EliminationStep, ProbingStep,
        DominanceCertificate, ReductionCertificate,
-       DominanceAttempt, RelationAttempt, EliminationAttempt, VerificationResult,
-       prove_dominance, prove_relation, prove_elimination,
+       DominanceAttempt, RelationAttempt, EliminationAttempt, ProbingAttempt, VerificationResult,
+       prove_dominance, prove_relation, prove_elimination, prove_probing,
        verify_certificate, transport_certificate,
        step_guarantee, certificate_guarantee, persistency
 
 export DomainGaugeMap, domain_map, map_value, lift_value, map_state, lift_state,
        degree, effective_field, incident_couplings, conditioned_constant
 
-export propagate!, PropagationReport, deductions, reductions, export_certificate,
-       apply_dominance!, contract_relation!, contract_relations!, relation_map,
+export propagate!, PropagationReport, ProbingReport, deductions, reductions, export_certificate,
+       apply_dominance!, apply_probing!, probe_variables!,
+       contract_relation!, contract_relations!, relation_map,
        eliminate_variable!, eliminate_low_degree!, apply_weak_batch!,
        SchedulePassSummary, ScheduleReport, schedule_reductions!,
        PhaseAccounting, PipelineAccounting, audit_pipeline!

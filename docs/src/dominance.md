@@ -320,3 +320,43 @@ for the resumable mixed schedule and `scripts/scheduler_pilot.jl` for the 6-mode
 paired ablation study (`off`, `dominance`, `elimination`, `relations`,
 `mixed_cheap`, `mixed_star`), retained in `docs/evidence/scheduler-pilot.md` and
 `docs/evidence/scheduler-pilot.tsv`.
+
+## Optional certified probing with reversible branch bounds and feasible witnesses
+
+When cheap unary dominance is quiescent on a frustrated instance, optional
+trial-branch probing (`prove_probing`, `apply_probing!`, `probe_variables!`)
+can certify additional strong constant fixings using the existing reversible
+checkpoint/rollback trail and a verified parent-scope feasible witness:
+
+1. **Witness validation (`witness_upper = U`):** validates a complete
+   parent-scope assignment (original-order `AbstractVector`, label `AbstractDict`,
+   or [`Reconstruction`](@ref)) for domain membership and compatibility with all
+   active caller assumptions and committed workspace reductions, then evaluates
+   its exact direction-normalized objective ``U = d \cdot E(w)``.
+2. **Reversible trial conditioning and bounded cascade (`branch_steps`):**
+   takes a constant-size checkpoint, temporarily conditions on the opposite
+   branch ``x_i = \bar{w}_i``, and propagates up to `max_rounds` (and
+   `max_trial_fixes`) of certified strict unary dominance steps on the trial
+   branch.
+3. **Conservative canonical branch lower bound (`branch_lower = L`):** evaluates
+   the canonical spin and positive/negative-gauge Boolean coefficient lower
+   bounds (`:interval` outward-rounded `Float64` first, falling back to `:exact`
+   `Rational{BigInt}` under `max_exact_work`) on the propagated trial residual.
+   Because the bound is defined on the canonical spin representation
+   ``(c_{\text{spin}}, h_{\text{spin}}, J_{\text{spin}})``, it is invariant
+   under QUBO↔Ising domain conversion and `DomainGaugeMap` transformations.
+4. **Strict exclusion contract (`L > U`):** only when ``L > U`` is the opposite
+   branch refuted and ``x_i = w_i`` certified with `:strong` persistency in a
+   [`ProbingStep`](@ref) (after rolling back all trial mutations to the exact
+   pre-probe checkpoint). Equal bounds (``L = U``), inconclusive bounds
+   (``L < U``), poor witnesses, or budget/deadline interruptions (`max_candidates`,
+   `max_work`, `max_exact_work`, `deadline_ns`) abstain and restore the workspace
+   to its pre-probe checkpoint while charging executed work in [`ProbingAttempt`](@ref)
+   or [`ProbingReport`](@ref).
+
+Probing is disabled in default `preprocess` and `schedule_reductions!` passes so
+callers who do not invoke `probe_variables!` or `apply_probing!` pay zero overhead.
+Because each candidate probe visits the active graph to evaluate ``L``, probing
+only pays off when a strong primal witness is already available and cheap
+dominance is blocked by local frustration on a small candidate set (`candidates`,
+`max_candidates`, `max_rounds=1`).
