@@ -49,6 +49,7 @@ function _incremental(s::_Snapshot;rules=:identity)
     queued = rules in (:dominance, :elimination, :relations) ? trues(n) : falses(n)
     elim_queues = ntuple(b -> Int[i for i in 1:n if degrees[i] == b - 1], 4)
     elim_queued = ntuple(b -> BitVector(degrees[i] == b - 1 for i in 1:n), 4)
+    elim_blocked_fill = ntuple(_ -> fill(typemax(Int), n), 4)
     rel_queue = Int[i for i in 1:n if degrees[i] >= 1]
     rel_queued = BitVector(degrees[i] >= 1 for i in 1:n)
     return _Incremental(Dict{Any,Int}(v=>i for (i,v) in enumerate(s.labels)),
@@ -56,6 +57,7 @@ function _incremental(s::_Snapshot;rules=:identity)
                         queue, queued, _UndoEntry[], 0, uuid4(),rules,lower,upper,1,
                         Int[],Int[],zeros(Int,n),0,0,0,0,0,0,dual_fields,dual_constant,
                         degrees, initial_degrees, elim_queues, elim_queued, [1, 1, 1, 1],
+                        elim_blocked_fill,
                         rel_queue, rel_queued, 1, fill(typemax(Int), n), falses(n))
 end
 
@@ -584,9 +586,15 @@ function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
                 st.rel_queued[undo.index] = undo.queued
                 st.rel_blocked_fill[undo.index] = undo.blocked_fill
                 st.rel_checked_weak[undo.index] = undo.checked_weak
-            else
+            elseif 1 <= b <= 4
                 st.elim_heads[b] = undo.head
                 st.elim_queued[b][undo.index] = undo.queued
+                st.elim_blocked_fill[b][undo.index] = undo.blocked_fill
+            else
+                eb = b - 4
+                pop!(st.elim_queues[eb])
+                st.elim_queued[eb][undo.index] = undo.queued
+                st.elim_blocked_fill[eb][undo.index] = undo.blocked_fill
             end
         elseif undo isa _UndoReduction
             for r in length(undo.adj_edits):-1:1

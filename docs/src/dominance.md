@@ -80,6 +80,47 @@ denote the direction-normalized spin fields and couplings, and let
    Section 4 multi-neighbor matrix rules require higher-order neighborhood scans;
    both are explicitly deferred outside unconstrained quadratic pair contraction.
 
+## Guarded zero-field degree-3 Ising star–triangle reduction
+
+Eliminating a degree-three vertex ``s_u \in \{-1, +1\}`` with neighbors
+``s_1, s_2, s_3 \in \{-1, +1\}`` generally introduces a cubic term
+``J_{123} s_1 s_2 s_3``. When the current effective Ising field of the center is
+rigorously zero (``h_u = 0``), spin-flip symmetry implies that the local optimal
+contribution (for minimization with positive scale, ``\operatorname{dir} = +1``;
+negated when ``\operatorname{dir} = -1``),
+```math
+\phi(s_1, s_2, s_3) = -\operatorname{dir} \cdot |J_1 s_1 + J_2 s_2 + J_3 s_3|,
+```
+is an even function ``\phi(-s_1, -s_2, -s_3) = \phi(s_1, s_2, s_3)`` of the three
+neighbors. Consequently, both its linear Fourier terms and its cubic Fourier term
+vanish identically, yielding the pure constant + pairwise triangle representation
+of Boettcher–Davidheiser (2008), Section II Rule V Eq. (4) (translated from the
+paper's leading-minus Hamiltonian ``H = -\sum J_{ij} \sigma_i \sigma_j`` to this
+package's ``\min_s (s^T J s + h^T s + c)`` convention):
+```math
+\begin{aligned}
+\varepsilon_0 &= |J_1 + J_2 + J_3|, \quad
+\varepsilon_1 = |-J_1 + J_2 + J_3|, \quad
+\varepsilon_2 = |J_1 - J_2 + J_3|, \quad
+\varepsilon_3 = |J_1 + J_2 - J_3|, \\
+\Delta c_{\text{spin}} &= -\operatorname{dir} \cdot \frac{\varepsilon_0 + \varepsilon_1 + \varepsilon_2 + \varepsilon_3}{4}, \\
+\Delta J_{12} &= -\operatorname{dir} \cdot \frac{\varepsilon_0 - \varepsilon_1 - \varepsilon_2 + \varepsilon_3}{4}, \quad
+\Delta J_{13} = -\operatorname{dir} \cdot \frac{\varepsilon_0 - \varepsilon_1 + \varepsilon_2 - \varepsilon_3}{4}, \quad
+\Delta J_{23} = -\operatorname{dir} \cdot \frac{\varepsilon_0 + \varepsilon_1 - \varepsilon_2 - \varepsilon_3}{4}.
+\end{aligned}
+```
+Neighbor fields ``h_1, h_2, h_3`` may be arbitrary (`spin_field_deltas` on
+``w_1, w_2, w_3`` are zero); the zero-field precondition is strictly local to the
+eliminated center ``u`` at the moment of application. Conditioning a fourth
+neighbor can induce a nonzero field ``h'_u \ne 0`` (which invalidates degree-3
+eligibility in ``O(1)`` via the cached exact Ising field) or cancel an existing
+field to ``h'_u = 0`` (which unlocks degree-3 eligibility). Small floating-point
+fields are converted to exact `Rational{BigInt}` without rounding to zero.
+When `max_degree=3` is requested in `eliminate_low_degree!`, `max_fill` bounds
+the number of new triangle edges introduced per step and defers blocked vertices
+reversibly on the trail so progressive `max_fill` increases reconsider them
+without rescanning the graph.
+
 ```@example dominance
 using QUBOPreprocessing
 import QUBOTools as QT
@@ -209,3 +250,30 @@ calls with a larger `max_degree` without any rescan:
   states, `29738.92 -> 2094.45 µs`, median paired `−18940.16 µs`, `13622.6 -> 502.2 KiB`),
   and solving `cycle_8` completely where strict dominance removes 0 variables
   (`256 -> 1` state, `2920.62 -> 1436.53 µs`, median paired `−1518.64 µs`).
+
+For guarded zero-field degree-3 Ising star–triangle reduction (`max_degree=3`,
+`scripts/star_triangle_pilot.jl`, and retained artifact
+`docs/evidence/star-triangle-pilot.md` with raw rows in
+`docs/evidence/star-triangle-pilot.tsv`), `max_degree=2` remains the default
+policy and `max_degree=3` is opt-in:
+- **Zero-field instances (`zero_field_k4`, `zero_field_wheel_w6`, `zero_field_subdivided_10`):**
+  on `zero_field_k4` (`n = 4`), `deg3` solves the graph completely (`16 -> 1`
+  state, `10/20/37` candidate/edge/exact work), but on 16 states the 8-state
+  `Rational{BigInt}` table certification costs more than direct enumeration
+  (`+1707.74 µs` vs `off`, `+667.38 µs` vs `deg2`). On `zero_field_wheel_w6`
+  (`n = 6`, `64 -> 16` states, `−552.97 µs` vs `deg2`) and
+  `zero_field_subdivided_10` (`n = 10`, `1024 -> 256` states under `deg2` vs
+  `1024 -> 32` states under `deg3`, `10192.32 -> 2173.07 µs`, median paired
+  `−7903.97 µs` vs `deg2` and `−133860.71 µs` vs `off`), eliminating zero-field
+  degree-3 stars pays off.
+- **Conditioned-field instances (`conditioned_invalidated_8`, `conditioned_unlocked_8`):**
+  when a leaf fixing drops a degree-4 hub to degree 3 while inducing a nonzero
+  center field (`conditioned_invalidated_8`), `deg3` rejects the hub in `O(1)`
+  with `0` additional edge visits and `0` additional exact table work (`12/1/13`
+  vs `10/1/13`); when the induced shift cancels the center field to `0`
+  (`conditioned_unlocked_8`), `deg3` unlocks star–triangle reduction and cascades
+  (`128 -> 16` states, `4635.77 -> 1958.97 µs`, median paired `−2799.52 µs` vs `deg2`).
+- **No-benefit nonzero-field control (`no_benefit_cubic_8`):** on a 3-regular
+  cube where all 8 degree-3 vertices have nonzero fields, `deg3` rejects all 8
+  candidates in `O(1)` with `0` edge visits and `0` exact table work (`8/0/0`
+  work vs `0/0/0` under `deg2`, `+926.23 µs` vs `deg2`).

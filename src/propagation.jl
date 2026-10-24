@@ -48,18 +48,22 @@ function _pop_queue!(ws::Workspace)
     return nothing
 end
 
-function _pop_elim_queue!(ws::Workspace, b::Int)
+function _pop_elim_queue!(ws::Workspace, b::Int, blocked_fill::Int=typemax(Int))
     st = ws._state
     st.serial == typemax(UInt64) && throw(ArgumentError("trail serial exhausted; reset workspace"))
     q = st.elim_queues[b]
     qd = st.elim_queued[b]
     h = st.elim_heads[b]
     i = q[h]
-    entry = _UndoQueue(st.serial + 1, length(st.fixes), i, h, qd[i], Int8(b))
+    entry = _UndoQueue(
+        st.serial + 1, length(st.fixes), i, h, qd[i],
+        Int8(b), st.elim_blocked_fill[b][i], false,
+    )
     _reserve!(st.trail, length(st.trail) + 1)
     push!(st.trail, entry)
     st.serial += 1
     qd[i] = false
+    st.elim_blocked_fill[b][i] = blocked_fill
     st.elim_heads[b] = h + 1
     return nothing
 end
@@ -151,6 +155,71 @@ function _next_elim_bucket(st::_Incremental, max_degree::Int)
         st.elim_heads[b] <= length(st.elim_queues[b]) && return b
     end
     return 0
+end
+
+function _elimination_fill(st::_Incremental, quad_deltas)
+    fill = 0
+    for (a, b, dq) in quad_deltas
+        iszero(dq) && continue
+        pos = get(st.adj_pos[a], b, 0)
+        (pos == 0 || iszero(st.adjacency[a][pos].second)) && (fill += 1)
+    end
+    return fill
+end
+
+function _deferred_elim_eligible(st::_Incremental, b::Int, u::Int, mf::Int)
+    return st.fixed[u] == 2 && st.degrees[u] == b - 1 && !st.elim_queued[b][u] &&
+           st.elim_blocked_fill[b][u] < typemax(Int) && mf >= st.elim_blocked_fill[b][u]
+end
+
+function _next_deferred_elim(st::_Incremental, md::Int, mf::Int)
+    @inbounds for b in 1:(md + 1)
+        for idx in 1:(st.elim_heads[b] - 1)
+            u = st.elim_queues[b][idx]
+            _deferred_elim_eligible(st, b, u, mf) && return b
+        end
+    end
+    return 0
+end
+
+function _count_deferred_elim(st::_Incremental, md::Int, mf::Int)
+    cnt = 0
+    @inbounds for b in 1:(md + 1)
+        limit = st.elim_heads[b] - 1
+        q = st.elim_queues[b]
+        for idx in 1:limit
+            u = q[idx]
+            if _deferred_elim_eligible(st, b, u, mf)
+                !(u in view(q, 1:(idx - 1))) && (cnt += 1)
+            end
+        end
+    end
+    return cnt
+end
+
+function _requeue_deferred_elim!(ws::Workspace, md::Int, mf::Int)
+    st = ws._state
+    @inbounds for b in 1:(md + 1)
+        limit = st.elim_heads[b] - 1
+        q = st.elim_queues[b]
+        for idx in 1:limit
+            u = q[idx]
+            if _deferred_elim_eligible(st, b, u, mf)
+                st.serial == typemax(UInt64) && throw(ArgumentError("trail serial exhausted; reset workspace"))
+                entry = _UndoQueue(
+                    st.serial + 1, length(st.fixes), u, st.elim_heads[b], false,
+                    Int8(b + 4), st.elim_blocked_fill[b][u], false,
+                )
+                _reserve!(st.trail, length(st.trail) + 1)
+                _reserve!(q, length(q) + 1)
+                push!(st.trail, entry)
+                st.serial += 1
+                push!(q, u)
+                st.elim_queued[b][u] = true
+            end
+        end
+    end
+    return nothing
 end
 
 function _cached_step(ws::Workspace,i::Int,direction::Int;allow_weak::Bool=false)
@@ -379,24 +448,28 @@ function eliminate_variable!(ws::Workspace, label;
 end
 
 """
-    eliminate_low_degree!(ws; map=nothing, max_degree=2, tie_break=:low,
-                          cascade_dominance=false, allow_weak_dominance=false,
-                          max_work=typemax(Int), max_deductions=typemax(Int),
-                          max_exact_work=typemax(Int), deadline_ns=nothing)
+    eliminate_low_degree!(ws; map=nothing, max_degree=2, max_fill=typemax(Int),
+                          tie_break=:low, cascade_dominance=false,
+                          allow_weak_dominance=false, max_work=typemax(Int),
+                          max_deductions=typemax(Int), max_exact_work=typemax(Int),
+                          deadline_ns=nothing)
 
 Run queue-driven exact local elimination for free vertices of active degree
-`0 <= degree(ws, label) <= max_degree` (default `max_degree=2`) without scanning
-the whole graph per elimination. When `cascade_dominance=true` (requiring
-`Workspace(model; rules=:dominance)` or `rules=:elimination`), dirty dominance
-candidates are interleaved with low-degree eliminations so dominance fixings that
-drop neighbor degrees to `<= max_degree` and local eliminations that strengthen
-neighbor derivative bounds cascade automatically. Returns a
-[`PropagationReport`](@ref).
+`0 <= degree(ws, label) <= max_degree` (default `max_degree=2`; `max_degree=3`
+enables guarded zero-field degree-three Ising star–triangle reduction) without
+scanning the whole graph per elimination. Eliminations that would introduce more
+than `max_fill` new fill edges are skipped and deferred. When
+`cascade_dominance=true` (requiring `Workspace(model; rules=:dominance)`,
+`rules=:elimination` or `rules=:relations`), dirty dominance candidates are
+interleaved with low-degree eliminations so dominance fixings that drop neighbor
+degrees to `<= max_degree` and local eliminations that strengthen neighbor
+derivative bounds cascade automatically. Returns a [`PropagationReport`](@ref).
 """
 function eliminate_low_degree!(
     ws::Workspace;
     map::Union{Nothing,DomainGaugeMap}=nothing,
     max_degree=2,
+    max_fill=typemax(Int),
     tie_break::Symbol=:low,
     cascade_dominance::Bool=false,
     allow_weak_dominance::Bool=false,
@@ -408,8 +481,10 @@ function eliminate_low_degree!(
     _limits(max_work, deadline_ns)
     _limits(max_deductions, deadline_ns)
     _limits(max_exact_work, deadline_ns)
-    max_degree isa Integer && !(max_degree isa Bool) && 0 <= max_degree <= 2 ||
-        throw(ArgumentError("eliminate_low_degree! supports max_degree in 0..2"))
+    max_degree isa Integer && !(max_degree isa Bool) && 0 <= max_degree <= 3 ||
+        throw(ArgumentError("eliminate_low_degree! supports max_degree in 0..3"))
+    max_fill isa Integer && !(max_fill isa Bool) && 0 <= max_fill <= typemax(Int) ||
+        throw(ArgumentError("max_fill must be a nonnegative machine-sized integer"))
     tie_break in (:low, :high) || throw(ArgumentError("tie_break must be :low or :high"))
     map === nothing || _validate_domain_map(ws, map)
     st = ws._state
@@ -418,18 +493,20 @@ function eliminate_low_degree!(
             throw(ArgumentError("cascade_dominance requires Workspace(model; rules=:dominance), rules=:elimination or rules=:relations"))
     end
     md = Int(max_degree)
+    mf = Int(max_fill)
     candidates, edges, deductions, exact = 0, 0, 0, 0
     function pending_count()
         p = cascade_dominance ? (length(st.queue) - st.head + 1) : 0
         @inbounds for b in 1:(md + 1)
             p += length(st.elim_queues[b]) - st.elim_heads[b] + 1
         end
+        p += _count_deferred_elim(st, md, mf)
         return p
     end
     finish(reason) = _propagation_report!(ws, reason, candidates, edges, deductions, exact;
                                           pending=pending_count())
     direction = _direction(ws._snapshot)
-    while _next_elim_bucket(st, md) != 0 || (cascade_dominance && st.head <= length(st.queue))
+    while _next_elim_bucket(st, md) != 0 || _next_deferred_elim(st, md, mf) != 0 || (cascade_dominance && st.head <= length(st.queue))
         if cascade_dominance && st.head <= length(st.queue)
             _expired(deadline_ns) && return finish(:deadline)
             deductions < max_deductions || return finish(:deduction_limit)
@@ -447,9 +524,12 @@ function eliminate_low_degree!(
         _expired(deadline_ns) && return finish(:deadline)
         deductions < max_deductions || return finish(:deduction_limit)
         candidates + edges < max_work || return finish(:work_limit)
+        if _next_elim_bucket(st, md) == 0
+            _requeue_deferred_elim!(ws, md, mf)
+        end
         b = _next_elim_bucket(st, md)
         u = st.elim_queues[b][st.elim_heads[b]]
-        if st.fixed[u] != 2 || direction == 0 || st.degrees[u] != b - 1
+        if st.fixed[u] != 2 || direction == 0 || st.degrees[u] != b - 1 || (b == 4 && !iszero(_spin_field(ws, u)))
             candidates += 1
             _pop_elim_queue!(ws, b)
             continue
@@ -457,7 +537,7 @@ function eliminate_low_degree!(
         d_u = st.degrees[u]
         adj_len = length(st.adjacency[u])
         num_states = 1 << d_u
-        max_quad_deltas = d_u == 2 ? 1 : 0
+        max_quad_deltas = (d_u * (d_u - 1)) >> 1
         total_edge_need = 2 * adj_len + 2 * max_quad_deltas
         total_exact_need = num_states + 1 + 3 * d_u
         total_edge_need <= max_work - (candidates + 1) - edges || return finish(:work_limit)
@@ -474,6 +554,11 @@ function eliminate_low_degree!(
         edges += w_visits
         exact += w_exact
         raw_step === nothing && return finish(w_reason)
+        actual_fill = _elimination_fill(st, raw_step.quadratic_deltas)
+        if actual_fill > mf
+            _pop_elim_queue!(ws, b, actual_fill)
+            continue
+        end
         step = map === nothing ? raw_step :
             EliminationStep(u, raw_step.neighbors, raw_step.table,
                             deepcopy(raw_step.constant_delta), deepcopy(raw_step.linear_deltas),

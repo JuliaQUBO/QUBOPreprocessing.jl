@@ -254,10 +254,9 @@ end
     @test rec.state == [0, 0, 1]
     @test reference(L, Q, 1.0, 0.0, rec.state, R) == -1//1
 
-    # Degree-3 variable with alpha_123 == 0 (quadratic exact marginal):
-    # If u has strong field f_u = 10 and couplings q_{u,1} = -1, q_{u,2} = -1, q_{u,3} = -1,
-    # then L_u(z) > 0 for all 8 boundary states, so phi(z) is linear/constant (alpha_123 == 0).
-    L3 = [10.0, 1.0, -1.0, 2.0]
+    # Degree-3 variable with zero effective Ising field (h_u == 0 => alpha_123 == 0):
+    # For Q_{u,1} = Q_{u,2} = Q_{u,3} = -1.0 in Boolean domain, h_u = L_u/2 + (-1 - 1 - 1)/4 = 0 when L_u = 1.5.
+    L3 = [1.5, 1.0, -1.0, 2.0]
     Q3 = [0.0 -1.0 -1.0 -1.0; 0.0 0.0 0.5 0.0; 0.0 0.0 0.0 -0.5; 0.0 0.0 0.0 0.0]
     ws3 = Workspace(fixture([:u, :w1, :w2, :w3], L3, Q3))
     @test degree(ws3, :u) == 3
@@ -266,6 +265,12 @@ end
     @test att3.stop_reason === :proved
     @test verify_certificate(ws3, att3.certificate).valid
     @test eliminate_variable!(ws3, :u; max_degree=3).stop_reason === :applied
+
+    # Degree-3 variable with nonzero effective Ising field (even if unary-dominated so alpha_123 == 0)
+    # is refused with :nonzero_field:
+    ws3_nz = Workspace(fixture([:u, :w1, :w2, :w3], [10.0, 1.0, -1.0, 2.0], Q3))
+    @test prove_elimination(ws3_nz, :u; max_degree=3).stop_reason === :nonzero_field
+    @test eliminate_variable!(ws3_nz, :u; max_degree=3).stop_reason === :nonzero_field
 
     # Degree-3 variable with nonzero cubic term alpha_123 != 0 is refused with :nonquadratic_elimination:
     # For u in {0, 1} with f_u = -1.0 and couplings +2.0 to w1, w2, w3:
