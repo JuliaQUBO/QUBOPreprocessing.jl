@@ -22,6 +22,7 @@ struct _UndoFix
     dual_constant::_Exact
     dual_fields::Vector{Pair{Int,_Exact}}
     elim_queue_lengths::NTuple{4,Int}
+    rel_queue_length::Int
 end
 
 struct _UndoReduction
@@ -40,6 +41,7 @@ struct _UndoReduction
     spin_field_deltas::Vector{Pair{Int,_Exact}}
     spin_coupling_deltas::Vector{Tuple{Int,Int,_Exact}}
     elim_queue_lengths::NTuple{4,Int}
+    rel_queue_length::Int
 end
 
 struct _UndoQueue
@@ -48,10 +50,12 @@ struct _UndoQueue
     index::Int
     head::Int
     queued::Bool
-    bucket::Int8 # 0 for dominance queue, 1..4 for degree-(bucket-1) elim_queues
+    bucket::Int8 # 0 for dominance queue, 1..4 for degree-(bucket-1) elim_queues, -1 for rel_queue pop, -2 for rel_queue requeue
+    blocked_fill::Int
+    checked_weak::Bool
 end
-_UndoQueue(serial::UInt64, fix_depth::Int, index::Int, head::Int, queued::Bool) =
-    _UndoQueue(serial, fix_depth, index, head, queued, Int8(0))
+_UndoQueue(serial::UInt64, fix_depth::Int, index::Int, head::Int, queued::Bool, bucket::Int8=Int8(0)) =
+    _UndoQueue(serial, fix_depth, index, head, queued, bucket, typemax(Int), false)
 const _UndoEntry = Union{_UndoFix,_UndoReduction,_UndoQueue}
 
 # Topology-changing reductions (relation contractions and bounded local
@@ -90,4 +94,9 @@ mutable struct _Incremental
     elim_queues::NTuple{4,Vector{Int}}
     elim_queued::NTuple{4,BitVector}
     elim_heads::Vector{Int}
+    rel_queue::Vector{Int}
+    rel_queued::BitVector
+    rel_head::Int
+    rel_blocked_fill::Vector{Int}
+    rel_checked_weak::BitVector
 end

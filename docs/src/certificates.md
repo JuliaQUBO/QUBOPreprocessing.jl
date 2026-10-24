@@ -80,7 +80,10 @@ tag (`:strong` or `:weak`) queried with `persistency`:
   variables are skipped/refused (`:degree_too_high`) with no higher-order truncation.
 - **`:optimum_preserving_restriction` (`DominanceStep`, `RelationStep`):**
   unary value fixing (`DominanceStep`) or signed pair contraction
-  ``s_u = \sigma_{\text{orig}} s_v`` (`RelationStep`). Tagged `:strong` when
+  ``s_u = \sigma_{\text{orig}} s_v`` (`RelationStep`, proved via single-endpoint
+  `:interval` / `:exact` coupling dominance or Glover–Lewis–Kochenberger (2018)
+  Theorems 3.1–3.4 cross-endpoint `:glk_pair` implication bounds with favoring
+  coupling ``-\sigma \tilde{J}_{uv} > 0``). Tagged `:strong` when
   every optimum of the current residual satisfies the restriction, or `:weak`
   when at least one optimum of the current residual satisfies the restriction.
 

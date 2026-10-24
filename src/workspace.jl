@@ -38,22 +38,25 @@ function _incremental(s::_Snapshot;rules=:identity)
         (_Exact(s.offset) + field_sum // 2 + quad_sum // 4) :
         (_Exact(s.offset) - field_sum + quad_sum)
     lower,upper = nothing,nothing
-    if rules in (:dominance, :elimination)
+    if rules in (:dominance, :elimination, :relations)
         lower,upper = copy(fields),copy(fields)
         for i in 1:n, (_,q) in adjacency[i]
             lower[i] += s.domain === QT.BoolDomain ? min(0,q) : -abs(q)
             upper[i] += s.domain === QT.BoolDomain ? max(0,q) : abs(q)
         end
     end
-    queue = rules in (:dominance, :elimination) ? collect(1:n) : Int[]
-    queued = rules in (:dominance, :elimination) ? trues(n) : falses(n)
+    queue = rules in (:dominance, :elimination, :relations) ? collect(1:n) : Int[]
+    queued = rules in (:dominance, :elimination, :relations) ? trues(n) : falses(n)
     elim_queues = ntuple(b -> Int[i for i in 1:n if degrees[i] == b - 1], 4)
     elim_queued = ntuple(b -> BitVector(degrees[i] == b - 1 for i in 1:n), 4)
+    rel_queue = Int[i for i in 1:n if degrees[i] >= 1]
+    rel_queued = BitVector(degrees[i] >= 1 for i in 1:n)
     return _Incremental(Dict{Any,Int}(v=>i for (i,v) in enumerate(s.labels)),
                         adjacency, adj_pos, fields, _Exact(s.offset), fill(Int8(2), n),
                         queue, queued, _UndoEntry[], 0, uuid4(),rules,lower,upper,1,
                         Int[],Int[],zeros(Int,n),0,0,0,0,0,0,dual_fields,dual_constant,
-                        degrees, initial_degrees, elim_queues, elim_queued, [1, 1, 1, 1])
+                        degrees, initial_degrees, elim_queues, elim_queued, [1, 1, 1, 1],
+                        rel_queue, rel_queued, 1, fill(typemax(Int), n), falses(n))
 end
 
 """
@@ -234,11 +237,12 @@ function _fix!(ws::Workspace,i::Int,v::Int;proof=nothing,max_work=typemax(Int),d
     for b in 1:4
         _reserve!(st.elim_queues[b], length(st.elim_queues[b]) + length(updated))
     end
+    _reserve!(st.rel_queue, length(st.rel_queue) + length(updated))
     _reserve!(st.trail, length(st.trail) + 1)
     _reserve!(st.fixes, length(st.fixes) + 1)
     proof === nothing && _reserve!(st.callers, length(st.callers) + 1)
     elim_lens = ntuple(b -> length(st.elim_queues[b]), 4)
-    entry = _UndoFix(st.serial + 1,length(st.fixes)+1,i,v,st.constant,old,length(st.queue),proof,st.dual_constant,old_dual,elim_lens)
+    entry = _UndoFix(st.serial + 1,length(st.fixes)+1,i,v,st.constant,old,length(st.queue),proof,st.dual_constant,old_dual,elim_lens,length(st.rel_queue))
     push!(st.trail, entry)
     push!(st.fixes,length(st.trail))
     if proof === nothing
@@ -261,6 +265,10 @@ function _fix!(ws::Workspace,i::Int,v::Int;proof=nothing,max_work=typemax(Int),d
         if d_j <= 3 && !st.elim_queued[d_j + 1][j]
             push!(st.elim_queues[d_j + 1], j)
             st.elim_queued[d_j + 1][j] = true
+        end
+        if d_j >= 1 && !st.rel_queued[j]
+            push!(st.rel_queue, j)
+            st.rel_queued[j] = true
         end
     end
     for (j,field,lower,upper) in updated
@@ -440,6 +448,7 @@ function _apply_reduction!(
     for b in 1:4
         _reserve!(st.elim_queues[b], length(st.elim_queues[b]) + length(touched))
     end
+    _reserve!(st.rel_queue, length(st.rel_queue) + length(touched))
     _reserve!(st.trail, length(st.trail) + 1)
     _reserve!(st.fixes, length(st.fixes) + 1)
     for w in touched
@@ -474,6 +483,7 @@ function _apply_reduction!(
         spin_field_deltas,
         spin_coupling_deltas,
         elim_lens,
+        length(st.rel_queue),
     )
     push!(st.trail, entry)
     push!(st.fixes, length(st.trail))
@@ -502,6 +512,10 @@ function _apply_reduction!(
         if d_w <= 3 && !st.elim_queued[d_w + 1][w]
             push!(st.elim_queues[d_w + 1], w)
             st.elim_queued[d_w + 1][w] = true
+        end
+        if d_w >= 1 && !st.rel_queued[w]
+            push!(st.rel_queue, w)
+            st.rel_queued[w] = true
         end
     end
     return UpdateReport(:applied, visits, 1)
@@ -560,6 +574,16 @@ function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
             if b == 0
                 st.head = undo.head
                 st.queued[undo.index] = undo.queued
+            elseif b == -1
+                st.rel_head = undo.head
+                st.rel_queued[undo.index] = undo.queued
+                st.rel_blocked_fill[undo.index] = undo.blocked_fill
+                st.rel_checked_weak[undo.index] = undo.checked_weak
+            elseif b == -2
+                pop!(st.rel_queue)
+                st.rel_queued[undo.index] = undo.queued
+                st.rel_blocked_fill[undo.index] = undo.blocked_fill
+                st.rel_checked_weak[undo.index] = undo.checked_weak
             else
                 st.elim_heads[b] = undo.head
                 st.elim_queued[b][undo.index] = undo.queued
@@ -602,6 +626,9 @@ function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
                     st.elim_queued[b][pop!(st.elim_queues[b])] = false
                 end
             end
+            while length(st.rel_queue) > undo.rel_queue_length
+                st.rel_queued[pop!(st.rel_queue)] = false
+            end
             st.fixed[undo.index] = 2
             st.entries[undo.index] = 0
             pop!(st.fixes)
@@ -627,6 +654,9 @@ function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
                 while length(st.elim_queues[b]) > undo.elim_queue_lengths[b]
                     st.elim_queued[b][pop!(st.elim_queues[b])] = false
                 end
+            end
+            while length(st.rel_queue) > undo.rel_queue_length
+                st.rel_queued[pop!(st.rel_queue)] = false
             end
             st.fixed[undo.index] = 2
             st.degrees[undo.index] = length(undo.fields)
@@ -703,7 +733,7 @@ function unfix!(ws::Workspace, label; max_work=typemax(Int), deadline_ns=nothing
     for p in st.callers
         e = st.trail[p]
         e.index == i && continue
-        degree = length(st.adjacency[e.index])
+        degree = st.initial_degrees[e.index]
         degree <= max_work - work || return UpdateReport(:work_limit, 0, 0)
         work += degree
     end

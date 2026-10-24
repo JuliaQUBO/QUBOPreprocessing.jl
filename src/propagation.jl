@@ -64,6 +64,88 @@ function _pop_elim_queue!(ws::Workspace, b::Int)
     return nothing
 end
 
+function _pop_rel_queue!(ws::Workspace, blocked_fill::Int=typemax(Int), checked_weak::Bool=true)
+    st = ws._state
+    st.serial == typemax(UInt64) && throw(ArgumentError("trail serial exhausted; reset workspace"))
+    u = st.rel_queue[st.rel_head]
+    entry = _UndoQueue(
+        st.serial + 1, length(st.fixes), u, st.rel_head, st.rel_queued[u],
+        Int8(-1), st.rel_blocked_fill[u], st.rel_checked_weak[u],
+    )
+    _reserve!(st.trail, length(st.trail) + 1)
+    push!(st.trail, entry)
+    st.serial += 1
+    st.rel_queued[u] = false
+    st.rel_blocked_fill[u] = blocked_fill
+    st.rel_checked_weak[u] = checked_weak
+    st.rel_head += 1
+    return nothing
+end
+
+function _deferred_rel_eligible(st::_Incremental, u::Int, mf::Int, allow_weak::Bool)
+    return st.fixed[u] == 2 && st.degrees[u] >= 1 && !st.rel_queued[u] &&
+           ((st.rel_blocked_fill[u] < typemax(Int) && mf >= st.rel_blocked_fill[u]) ||
+            (allow_weak && !st.rel_checked_weak[u]))
+end
+
+function _next_deferred_rel(st::_Incremental, mf::Int, allow_weak::Bool)
+    @inbounds for idx in 1:(st.rel_head - 1)
+        u = st.rel_queue[idx]
+        _deferred_rel_eligible(st, u, mf, allow_weak) && return u
+    end
+    return 0
+end
+
+function _count_deferred_rel(st::_Incremental, mf::Int, allow_weak::Bool)
+    cnt = 0
+    limit = st.rel_head - 1
+    @inbounds for idx in 1:limit
+        u = st.rel_queue[idx]
+        if _deferred_rel_eligible(st, u, mf, allow_weak)
+            dup = false
+            for prev in 1:(idx - 1)
+                if st.rel_queue[prev] == u
+                    dup = true
+                    break
+                end
+            end
+            !dup && (cnt += 1)
+        end
+    end
+    return cnt
+end
+
+function _requeue_deferred_rel!(ws::Workspace, mf::Int, allow_weak::Bool)
+    st = ws._state
+    limit = st.rel_head - 1
+    @inbounds for idx in 1:limit
+        u = st.rel_queue[idx]
+        if _deferred_rel_eligible(st, u, mf, allow_weak)
+            st.serial == typemax(UInt64) && throw(ArgumentError("trail serial exhausted; reset workspace"))
+            entry = _UndoQueue(
+                st.serial + 1, length(st.fixes), u, st.rel_head, false,
+                Int8(-2), st.rel_blocked_fill[u], st.rel_checked_weak[u],
+            )
+            _reserve!(st.trail, length(st.trail) + 1)
+            _reserve!(st.rel_queue, length(st.rel_queue) + 1)
+            push!(st.trail, entry)
+            st.serial += 1
+            push!(st.rel_queue, u)
+            st.rel_queued[u] = true
+        end
+    end
+    return nothing
+end
+
+function _contraction_fill(st::_Incremental, elim::Int, rep::Int)
+    fill = 0
+    for (w, q) in st.adjacency[elim]
+        (w != rep && st.fixed[w] == 2 && !iszero(q)) || continue
+        haskey(st.adj_pos[rep], w) || (fill += 1)
+    end
+    return fill
+end
+
 function _next_elim_bucket(st::_Incremental, max_degree::Int)
     @inbounds for b in 1:(max_degree + 1)
         st.elim_heads[b] <= length(st.elim_queues[b]) && return b
@@ -332,8 +414,8 @@ function eliminate_low_degree!(
     map === nothing || _validate_domain_map(ws, map)
     st = ws._state
     if cascade_dominance
-        st.rules in (:dominance, :elimination) ||
-            throw(ArgumentError("cascade_dominance requires Workspace(model; rules=:dominance) or rules=:elimination"))
+        st.rules in (:dominance, :elimination, :relations) ||
+            throw(ArgumentError("cascade_dominance requires Workspace(model; rules=:dominance), rules=:elimination or rules=:relations"))
     end
     md = Int(max_degree)
     candidates, edges, deductions, exact = 0, 0, 0, 0
@@ -412,6 +494,264 @@ function eliminate_low_degree!(
         _pop_elim_queue!(ws, b)
     end
     return finish(:quiescent)
+end
+
+function _try_contract_pair!(
+    ws::Workspace,
+    elim::Int,
+    rep::Int,
+    map::Union{Nothing,DomainGaugeMap},
+    allow_weak::Bool,
+    rem_work::Int,
+    rem_exact::Int,
+    deadline_ns;
+    reserve_pop::Bool=false,
+)
+    st = ws._state
+    raw_step, w_reason, _, w_visits, _, w_exact = _relation_witness(
+        ws, elim, rep;
+        map, allow_weak,
+        max_work=rem_work,
+        max_exact_work=rem_exact,
+        deadline_ns,
+        predecessors=st.proof_count,
+        scope_length=length(st.callers),
+    )
+    raw_step === nothing && return (w_reason, w_visits, w_exact)
+    d_elim = st.degrees[elim]
+    adj_elim_len = length(st.adjacency[elim])
+    apply_edge_need = adj_elim_len + 2 * max(0, d_elim - 1)
+    apply_exact_need = 1 + 3 * d_elim
+    apply_edge_need <= rem_work - w_visits || return (:work_limit, w_visits, w_exact)
+    apply_exact_need <= rem_exact - w_exact || return (:verification_limit, w_visits, w_exact)
+    step = map === nothing ? raw_step :
+        RelationStep(elim, rep, raw_step.orig_sign, raw_step.orig_sign,
+                     deepcopy(raw_step.lower), deepcopy(raw_step.upper), deepcopy(st.constant),
+                     raw_step.predecessors, raw_step.method, raw_step.scope_length, raw_step.persistency)
+    const_delta, field_deltas, quad_deltas = _relation_deltas(ws, elim, rep, step.orig_sign)
+    trail_extra = reserve_pop ? 2 : 1
+    st.serial <= typemax(UInt64) - UInt64(trail_extra) ||
+        throw(ArgumentError("trail serial exhausted; reset workspace"))
+    _reserve!(st.trail, length(st.trail) + trail_extra)
+    rep_apply = _apply_reduction!(
+        ws, elim, Int8(3), step, const_delta, field_deltas, quad_deltas;
+        max_work=rem_work - w_visits, deadline_ns, precharged_visits=0,
+    )
+    return (rep_apply.stop_reason, w_visits + rep_apply.edge_visits, w_exact + apply_exact_need)
+end
+
+"""
+    contract_relations!(ws; map=nothing, allow_weak=false,
+                        cascade_dominance=false, allow_weak_dominance=false,
+                        max_fill=typemax(Int), max_work=typemax(Int),
+                        max_deductions=typemax(Int), max_exact_work=typemax(Int),
+                        deadline_ns=nothing)
+
+Run queue-driven certified pair relation detection and signed contraction on `ws`
+without scanning all vertex pairs globally. Candidate active vertices are popped
+from an incremental relation queue and their active incident edges are tested for
+certified pair equivalences or implications (`:interval`, `:exact` or `:glk_pair`).
+Contractions that would introduce more than `max_fill` new fill edges on the
+representative are skipped. When `cascade_dominance=true` (requiring
+`Workspace(model; rules=:dominance)`, `rules=:elimination` or `rules=:relations`),
+dirty unary dominance candidates are interleaved with relation contractions.
+Returns a [`PropagationReport`](@ref).
+"""
+function contract_relations!(
+    ws::Workspace;
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+    allow_weak::Bool=false,
+    cascade_dominance::Bool=false,
+    allow_weak_dominance::Bool=false,
+    max_fill=typemax(Int),
+    max_work=typemax(Int),
+    max_deductions=typemax(Int),
+    max_exact_work=typemax(Int),
+    deadline_ns=nothing,
+)
+    _limits(max_work, deadline_ns)
+    _limits(max_deductions, deadline_ns)
+    _limits(max_exact_work, deadline_ns)
+    max_fill isa Integer && !(max_fill isa Bool) && 0 <= max_fill <= typemax(Int) ||
+        throw(ArgumentError("max_fill must be a nonnegative machine-sized integer"))
+    map === nothing || _validate_domain_map(ws, map)
+    st = ws._state
+    if cascade_dominance
+        st.rules in (:dominance, :elimination, :relations) ||
+            throw(ArgumentError("cascade_dominance requires Workspace(model; rules=:dominance), rules=:elimination or rules=:relations"))
+    end
+    mf = Int(max_fill)
+    candidates, edges, deductions, exact = 0, 0, 0, 0
+    function pending_count()
+        p = cascade_dominance ? (length(st.queue) - st.head + 1) : 0
+        p += (length(st.rel_queue) - st.rel_head + 1) + _count_deferred_rel(st, mf, allow_weak)
+        return p
+    end
+    finish(reason) = _propagation_report!(ws, reason, candidates, edges, deductions, exact;
+                                          pending=pending_count())
+    direction = _direction(ws._snapshot)
+    while st.rel_head <= length(st.rel_queue) || _next_deferred_rel(st, mf, allow_weak) != 0 ||
+          (cascade_dominance && st.head <= length(st.queue))
+        if cascade_dominance && st.head <= length(st.queue)
+            _expired(deadline_ns) && return finish(:deadline)
+            deductions < max_deductions || return finish(:deduction_limit)
+            status, dc, de, dd, dx = _step_dominance_queue!(
+                ws, direction, allow_weak_dominance,
+                Int(max_work - candidates - edges), Int(max_exact_work - exact), deadline_ns,
+            )
+            candidates += dc
+            edges += de
+            deductions += dd
+            exact += dx
+            status in (:applied, :continue) || return finish(status)
+            continue
+        end
+        _expired(deadline_ns) && return finish(:deadline)
+        deductions < max_deductions || return finish(:deduction_limit)
+        candidates + edges < max_work || return finish(:work_limit)
+        if st.rel_head > length(st.rel_queue)
+            _requeue_deferred_rel!(ws, mf, allow_weak)
+        end
+        u = st.rel_queue[st.rel_head]
+        if st.fixed[u] != 2 || direction == 0 || st.degrees[u] == 0
+            candidates += 1
+            _pop_rel_queue!(ws)
+            continue
+        end
+        adj_u_len = length(st.adjacency[u])
+        adj_u_len <= max_work - (candidates + 1) - edges || return finish(:work_limit)
+        nbrs = Int[]
+        for (w, q) in st.adjacency[u]
+            _expired(deadline_ns) && return finish(:deadline)
+            if st.fixed[w] == 2 && !iszero(q)
+                push!(nbrs, w)
+            end
+        end
+        sort!(nbrs)
+        candidates += 1
+        u_visits = 0
+        u_exact = 0
+        called_witness = false
+        contracted = false
+        min_blocked = typemax(Int)
+        for v in nbrs
+            f_uv = _contraction_fill(st, u, v)
+            if f_uv <= mf
+                called_witness = true
+                status, dv, dx = _try_contract_pair!(
+                    ws, u, v, map, allow_weak,
+                    Int(max_work - candidates - edges - u_visits),
+                    Int(max_exact_work - exact - u_exact),
+                    deadline_ns;
+                    reserve_pop=true,
+                )
+                u_visits += dv
+                u_exact += dx
+                if status === :applied
+                    edges += u_visits
+                    exact += u_exact
+                    deductions += 1
+                    _pop_rel_queue!(ws)
+                    contracted = true
+                    break
+                elseif status !== :not_strict
+                    edges += u_visits
+                    exact += u_exact
+                    return finish(status)
+                end
+            else
+                min_blocked = min(min_blocked, f_uv)
+            end
+        end
+        if !contracted
+            for v in nbrs
+                f_uv = _contraction_fill(st, u, v)
+                f_vu = _contraction_fill(st, v, u)
+                if f_vu <= mf && (f_uv > mf || !st.rel_queued[v])
+                    called_witness = true
+                    status, dv, dx = _try_contract_pair!(
+                        ws, v, u, map, allow_weak,
+                        Int(max_work - candidates - edges - u_visits),
+                        Int(max_exact_work - exact - u_exact),
+                        deadline_ns;
+                        reserve_pop=false,
+                    )
+                    u_visits += dv
+                    u_exact += dx
+                    if status === :applied
+                        edges += u_visits
+                        exact += u_exact
+                        deductions += 1
+                        contracted = true
+                        break
+                    elseif status !== :not_strict
+                        edges += u_visits
+                        exact += u_exact
+                        return finish(status)
+                    end
+                elseif f_vu > mf
+                    min_blocked = min(min_blocked, f_vu)
+                end
+            end
+        end
+        if !contracted
+            edges += called_witness ? u_visits : adj_u_len
+            exact += u_exact
+            _pop_rel_queue!(ws, min_blocked, allow_weak)
+        end
+    end
+    return finish(:quiescent)
+end
+
+function _resolve_relation_index(st::_Incremental, i::Int)
+    curr = i
+    orig_σ = 1
+    while st.fixed[curr] == 3
+        pos = st.entries[curr]
+        pos > 0 || throw(ArgumentError("missing trail entry for relation-contracted variable"))
+        entry = st.trail[pos]::_UndoReduction
+        step = entry.proof::RelationStep
+        orig_σ *= step.orig_sign
+        curr = step.representative
+    end
+    return curr, orig_σ
+end
+
+"""
+    relation_map(ws; map=nothing)
+    relation_map(ws, label; map=nothing)
+
+Read-only query returning the current representative label and relative parity
+sign (`rep_label => sign` with `sign in (-1, 1)`) induced by active
+[`RelationStep`](@ref) contractions on `ws`, without mutating or path-compressing
+trail state during exploratory branches. With one argument `ws`, returns an
+owned `Vector{Pair{V,Int}}` in original variable order; with `(ws, label)`,
+resolves a single original variable in ``O(\\text{chain depth})`` work. When
+`map::DomainGaugeMap` is supplied, the parity sign is expressed in `map`'s
+gauged coordinate system.
+"""
+function relation_map(ws::Workspace; map::Union{Nothing,DomainGaugeMap}=nothing)
+    map === nothing || _validate_domain_map(ws, map; full=true)
+    s, st = ws._snapshot, ws._state
+    labels = original_variables(ws)
+    V = s.label_type
+    out = Vector{Pair{V,Int}}(undef, length(labels))
+    for i in eachindex(labels)
+        rep, orig_σ = _resolve_relation_index(st, i)
+        σ = map === nothing ? orig_σ : (map.gauge[i] * map.gauge[rep] * orig_σ)
+        out[i] = labels[rep] => σ
+    end
+    return out
+end
+
+function relation_map(ws::Workspace, label; map::Union{Nothing,DomainGaugeMap}=nothing)
+    map === nothing || _validate_domain_map(ws, map)
+    i = _variable(ws, label)
+    s, st = ws._snapshot, ws._state
+    rep, orig_σ = _resolve_relation_index(st, i)
+    σ = map === nothing ? orig_σ : (map.gauge[i] * map.gauge[rep] * orig_σ)
+    rep_label = _owned_labels(s.label_type[s.labels[rep]])[1]
+    return rep_label => σ
 end
 
 """

@@ -123,6 +123,20 @@ function QP.sample_preprocessed(input,child_factory;rules=nothing,max_work=typem
         timings[:propagation] = Float64(time_ns()-t)/1e9
         propagation.stop_reason === :deadline && return finish(:deadline)
         # Every other interruption leaves a sound prefix that can be solved.
+    elseif ws._state.rules === :elimination
+        propagation = QP.eliminate_low_degree!(ws;max_work=budget.remaining,max_deductions,max_exact_work,deadline_ns)
+        used = propagation.candidates+propagation.edge_visits
+        budget.remaining -= used
+        budget.used += used
+        timings[:propagation] = Float64(time_ns()-t)/1e9
+        propagation.stop_reason === :deadline && return finish(:deadline)
+    elseif ws._state.rules === :relations
+        propagation = QP.contract_relations!(ws;max_work=budget.remaining,max_deductions,max_exact_work,deadline_ns)
+        used = propagation.candidates+propagation.edge_visits
+        budget.remaining -= used
+        budget.used += used
+        timings[:propagation] = Float64(time_ns()-t)/1e9
+        propagation.stop_reason === :deadline && return finish(:deadline)
     end
     phase = :materialization
     t = time_ns()

@@ -26,8 +26,8 @@ export DomainGaugeMap, domain_map, map_value, lift_value, map_state, lift_state,
        degree, effective_field, incident_couplings, conditioned_constant
 
 export propagate!, PropagationReport, deductions, reductions, export_certificate,
-       apply_dominance!, contract_relation!, eliminate_variable!, eliminate_low_degree!,
-       apply_weak_batch!
+       apply_dominance!, contract_relation!, contract_relations!, relation_map,
+       eliminate_variable!, eliminate_low_degree!, apply_weak_batch!
 export sample_preprocessed, SolverResult
 
 include("trail.jl")
