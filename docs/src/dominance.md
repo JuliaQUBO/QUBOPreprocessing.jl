@@ -6,11 +6,22 @@ resume a bounded pass. See the [solve walkthrough](guide.md#guide-solve)
 for what to do with its residual and report.
 
 Select `Workspace(model; rules=:dominance)` and call `propagate!` explicitly,
-or use `preprocess(model; rules=:dominance, limits...)`. Identity remains the
+or use `preprocess(model; rules=:dominance, limits...)`. For queue-driven
+degree-0/1/2 exact local elimination (including arbitrary local fields, fill-edge
+merging/cancellation and optional alternating dominance/elimination cascades),
+select `Workspace(model; rules=:elimination)` or call
+`eliminate_low_degree!(ws; cascade_dominance=true, ...)`. Identity remains the
 default. Neither path dispatches a solver or implicitly materializes a residual.
-Only strong unary dominance is enabled: every reported value holds in **all**
-optima within the current caller scope. Pair relations, weak ties, elimination,
-roof duality and heuristic choices are separate methods.
+In pure dominance mode (`propagate!(ws)`), only strong unary dominance is enabled:
+every reported value holds in **all** optima within the current caller scope.
+Local variable elimination (`eliminate_variable!`, `eliminate_low_degree!`)
+records an `EliminationStep` in `reductions(ws)` with its conditional argmin
+reconstruction table rather than reporting the variable in `deductions(ws)` as a
+globally fixed constant; when boundary ties occur (`tie_break=:low` or `:high`),
+`persistency(step)` is `:weak` and preserves the optimal objective value and at
+least one optimal reconstruction without claiming that all original optima or
+their multiplicities are represented by a single tie choice. Pair relations,
+weak ties, roof duality and heuristic choices are separate methods.
 
 For minimization of the normalized objective, a binary derivative has bounds
 `aᵢ + Σ min(0,bᵢⱼ)` and `aᵢ + Σ max(0,bᵢⱼ)` over free neighbors.
@@ -123,3 +134,30 @@ The retained source artifact `docs/evidence/dominance-pilot.md` records the
 producing revision and all paired raw rows. In that tiny warm run, the all-fixed
 case reduced total time, while the cascade and both no-reduction controls were
 slower with preprocessing. Variable reduction alone did not predict payoff.
+
+For degree-0/1/2 local elimination (`eliminate_low_degree!`, `examples/elimination.jl`,
+`scripts/elimination_pilot.jl`, and retained artifact `docs/evidence/elimination-pilot.md`
+with raw rows in `docs/evidence/elimination-pilot.tsv`), the per-degree queues
+`elim_queues[1..4]` track only vertices with active degree `0..3` so calls with
+a smaller `max_degree` cutoff leave higher-degree buckets untouched for subsequent
+calls with a larger `max_degree` without any rescan:
+- **Dense / high-degree no-benefit control (`dense_k5`, 5-vertex `K_5`):**
+  `elim_queues` are initially empty (`0` candidates examined, `0` edge visits, `32 -> 32`
+  states). End-to-end `on` (including workspace construction and residual export)
+  takes `1100.78 µs` (`401.4 KiB`) vs `650.26 µs` (`327.5 KiB`) `off` (median paired
+  `+431.42 µs`).
+- **Tiny sparse instances (`whisker_5`, 4-clique core + 1 leaf, `n = 5 -> 4`):**
+  eliminating 1 degree-`<= 2` vertex halves the exhaustive child search (`32 -> 16`
+  states), but workspace construction, exact `Rational{BigInt}` table certification,
+  proof verification and residual materialization take `481.00 µs` (`255.2 KiB`)
+  vs `287.09 µs` (`257.4 KiB`) `off` (median paired `+199.98 µs`).
+- **Break-even and sparse payoff (`whisker_7`, `whisker_10`, and `cycle_8`):**
+  each eliminated degree-`<= 2` vertex halves the downstream exponential search
+  space at `O(touched)` local cost (`<= 4` boundary evaluations per vertex),
+  crossing end-to-end break-even against the exact-enumeration child at 3
+  eliminated variables (`whisker_7`, `128 -> 16` states, `1824.74 -> 1054.68 µs`,
+  median paired `−754.36 µs`, `1274.6 -> 353.7 KiB`), reaching a ~14x total time
+  and ~27x allocation reduction at 6 eliminated variables (`whisker_10`, `1024 -> 16`
+  states, `29738.92 -> 2094.45 µs`, median paired `−18940.16 µs`, `13622.6 -> 502.2 KiB`),
+  and solving `cycle_8` completely where strict dominance removes 0 variables
+  (`256 -> 1` state, `2920.62 -> 1436.53 µs`, median paired `−1518.64 µs`).

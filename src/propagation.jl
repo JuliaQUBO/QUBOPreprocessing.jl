@@ -24,13 +24,14 @@ struct PropagationReport
 end
 generation(r::PropagationReport) = r.generation
 
-function _propagation_report!(ws,reason,candidates,edges,deductions,exact)
+function _propagation_report!(ws,reason,candidates,edges,deductions,exact;pending=nothing)
     st = ws._state
     st.total_candidates += candidates
     st.total_edges += edges
     st.total_exact += exact
+    pend = pending === nothing ? (length(st.queue)-st.head+1) : pending
     return PropagationReport(generation(ws),checkpoint(ws),reason,candidates,edges,deductions,exact,
-        length(st.queue)-st.head+1,
+        pend,
         (candidates=st.total_candidates,edge_visits=st.total_edges,exact_work=st.total_exact))
 end
 
@@ -38,13 +39,36 @@ function _pop_queue!(ws::Workspace)
     st = ws._state
     st.serial == typemax(UInt64) && throw(ArgumentError("trail serial exhausted; reset workspace"))
     i = st.queue[st.head]
-    entry = _UndoQueue(st.serial+1,length(st.fixes),i,st.head,st.queued[i])
+    entry = _UndoQueue(st.serial+1,length(st.fixes),i,st.head,st.queued[i],Int8(0))
     _reserve!(st.trail,length(st.trail)+1)
     push!(st.trail,entry)
     st.serial += 1
     st.queued[i] = false
     st.head += 1
     return nothing
+end
+
+function _pop_elim_queue!(ws::Workspace, b::Int)
+    st = ws._state
+    st.serial == typemax(UInt64) && throw(ArgumentError("trail serial exhausted; reset workspace"))
+    q = st.elim_queues[b]
+    qd = st.elim_queued[b]
+    h = st.elim_heads[b]
+    i = q[h]
+    entry = _UndoQueue(st.serial + 1, length(st.fixes), i, h, qd[i], Int8(b))
+    _reserve!(st.trail, length(st.trail) + 1)
+    push!(st.trail, entry)
+    st.serial += 1
+    qd[i] = false
+    st.elim_heads[b] = h + 1
+    return nothing
+end
+
+function _next_elim_bucket(st::_Incremental, max_degree::Int)
+    @inbounds for b in 1:(max_degree + 1)
+        st.elim_heads[b] <= length(st.elim_queues[b]) && return b
+    end
+    return 0
 end
 
 function _cached_step(ws::Workspace,i::Int,direction::Int;allow_weak::Bool=false)
@@ -63,6 +87,57 @@ function _cached_step(ws::Workspace,i::Int,direction::Int;allow_weak::Bool=false
                              st.proof_count,:exact,length(st.callers),:weak)
     end
     return nothing
+end
+
+function _step_dominance_queue!(
+    ws::Workspace,
+    direction::Int,
+    allow_weak::Bool,
+    rem_work::Int,
+    rem_exact::Int,
+    deadline_ns,
+)
+    st = ws._state
+    _expired(deadline_ns) && return (:deadline, 0, 0, 0, 0)
+    rem_work > 0 || return (:work_limit, 0, 0, 0, 0)
+    i = st.queue[st.head]
+    if st.fixed[i] == 2 && direction != 0
+        rem_exact > 0 || return (:verification_limit, 0, 0, 0, 0)
+    end
+    if st.fixed[i] != 2 || direction == 0
+        _pop_queue!(ws)
+        return (:continue, 1, 0, 0, 0)
+    end
+    dc, de, dx = 1, 0, 1
+    step = _cached_step(ws, i, direction; allow_weak)
+    if step === nothing && allow_weak
+        m_step, m_reason, _, m_visits, _, m_exact = _marginal_dominance_witness(
+            ws, i, nothing, nothing, direction, 0, 0,
+            rem_work - dc, rem_exact - dx,
+            deadline_ns, st.proof_count, length(st.callers),
+        )
+        de += m_visits
+        dx += m_exact
+        m_reason in (:work_limit, :verification_limit, :deadline) && return (m_reason, dc, de, 0, dx)
+        step = m_step
+    end
+    if step === nothing
+        _pop_queue!(ws)
+        return (:continue, dc, de, 0, dx)
+    end
+    degree = length(st.adjacency[i])
+    degree <= rem_work - dc - de || return (:work_limit, dc, de, 0, dx)
+    remaining = rem_exact - dx
+    remaining >= 1 && degree <= (remaining - 1) ÷ 3 || return (:verification_limit, dc, de, 0, dx)
+    reserved = 1 + 3 * degree
+    st.serial <= typemax(UInt64) - 2 || throw(ArgumentError("trail serial exhausted; reset workspace"))
+    _reserve!(st.trail, length(st.trail) + 2)
+    result = _fix!(ws, i, step.value; proof=step, max_work=rem_work - dc - de, deadline_ns)
+    de += result.edge_visits
+    dx += reserved
+    result.stop_reason === :applied || return (result.stop_reason, dc, de, 0, dx)
+    _pop_queue!(ws)
+    return (:applied, dc, de, 1, dx)
 end
 
 """
@@ -94,46 +169,15 @@ function propagate!(ws::Workspace;map::Union{Nothing,DomainGaugeMap}=nothing,
     while st.head <= length(st.queue)
         _expired(deadline_ns) && return finish(:deadline)
         deductions < max_deductions || return finish(:deduction_limit)
-        candidates+edges < max_work || return finish(:work_limit)
-        i = st.queue[st.head]
-        if st.fixed[i] == 2 && direction != 0
-            exact < max_exact_work || return finish(:verification_limit)
-        end
-        candidates += 1
-        if st.fixed[i] != 2 || direction == 0
-            _pop_queue!(ws)
-            continue
-        end
-        exact += 1
-        step = _cached_step(ws,i,direction;allow_weak)
-        if step === nothing && allow_weak
-            m_step, m_reason, _, m_visits, _, m_exact = _marginal_dominance_witness(
-                ws, i, nothing, nothing, direction, 0, 0,
-                Int(max_work - candidates - edges), Int(max_exact_work - exact),
-                deadline_ns, st.proof_count, length(st.callers),
-            )
-            edges += m_visits
-            exact += m_exact
-            m_reason in (:work_limit, :verification_limit, :deadline) && return finish(m_reason)
-            step = m_step
-        end
-        if step === nothing
-            _pop_queue!(ws)
-            continue
-        end
-        degree = length(st.adjacency[i])
-        degree <= max_work-candidates-edges || return finish(:work_limit)
-        remaining = max_exact_work-exact
-        remaining >= 1 && degree <= (remaining-1)÷3 || return finish(:verification_limit)
-        reserved = 1+3*degree
-        st.serial <= typemax(UInt64)-2 || throw(ArgumentError("trail serial exhausted; reset workspace"))
-        _reserve!(st.trail,length(st.trail)+2)
-        result = _fix!(ws,i,step.value;proof=step,max_work=max_work-candidates-edges,deadline_ns)
-        edges += result.edge_visits
-        exact += reserved
-        result.stop_reason === :applied || return finish(result.stop_reason)
-        deductions += 1
-        _pop_queue!(ws)
+        status, dc, de, dd, dx = _step_dominance_queue!(
+            ws, direction, allow_weak,
+            Int(max_work - candidates - edges), Int(max_exact_work - exact), deadline_ns,
+        )
+        candidates += dc
+        edges += de
+        deductions += dd
+        exact += dx
+        status in (:applied, :continue) || return finish(status)
     end
     return finish(:quiescent)
 end
@@ -213,18 +257,21 @@ function contract_relation!(ws::Workspace, eliminated, representative;
 end
 
 """
-    eliminate_variable!(ws, label; map=nothing, tie_break=:low,
+    eliminate_variable!(ws, label; map=nothing, tie_break=:low, max_degree=2,
                         max_work=typemax(Int), max_exact_work=typemax(Int),
                         deadline_ns=nothing)
 
-Certify and transactionally eliminate a free variable of active degree `0..3`
-from `ws`, recording an [`EliminationStep`](@ref) with its exact argmin
-reconstruction table and updating surviving neighbor fields, fill edges and
-degrees on the reversible trail. Returns an [`UpdateReport`](@ref).
+Certify and transactionally eliminate a free variable of active degree
+`0..max_degree` (default `max_degree=2`) from `ws`, recording an
+[`EliminationStep`](@ref) with its exact argmin reconstruction table and
+updating surviving neighbor fields, fill edges and degrees on the reversible
+trail. Higher-degree variables are refused with `:degree_too_high`. Returns an
+[`UpdateReport`](@ref).
 """
 function eliminate_variable!(ws::Workspace, label;
                              map::Union{Nothing,DomainGaugeMap}=nothing,
                              tie_break::Symbol=:low,
+                             max_degree=2,
                              max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing)
     _limits(max_work, deadline_ns)
     _limits(max_exact_work, deadline_ns)
@@ -232,7 +279,7 @@ function eliminate_variable!(ws::Workspace, label;
     u = _variable(ws, label)
     st = ws._state
     raw_step, reason, _, visits, _ = _elimination_witness(
-        ws, u; map, tie_break, max_work, max_exact_work, deadline_ns,
+        ws, u; map, tie_break, max_degree, max_work, max_exact_work, deadline_ns,
         predecessors=st.proof_count, scope_length=length(st.callers),
     )
     raw_step === nothing && return UpdateReport(reason, visits, 0)
@@ -247,6 +294,124 @@ function eliminate_variable!(ws::Workspace, label;
         ws, u, Int8(4), step, step.constant_delta, field_deltas, quad_deltas;
         max_work, deadline_ns, precharged_visits=visits,
     )
+end
+
+"""
+    eliminate_low_degree!(ws; map=nothing, max_degree=2, tie_break=:low,
+                          cascade_dominance=false, allow_weak_dominance=false,
+                          max_work=typemax(Int), max_deductions=typemax(Int),
+                          max_exact_work=typemax(Int), deadline_ns=nothing)
+
+Run queue-driven exact local elimination for free vertices of active degree
+`0 <= degree(ws, label) <= max_degree` (default `max_degree=2`) without scanning
+the whole graph per elimination. When `cascade_dominance=true` (requiring
+`Workspace(model; rules=:dominance)` or `rules=:elimination`), dirty dominance
+candidates are interleaved with low-degree eliminations so dominance fixings that
+drop neighbor degrees to `<= max_degree` and local eliminations that strengthen
+neighbor derivative bounds cascade automatically. Returns a
+[`PropagationReport`](@ref).
+"""
+function eliminate_low_degree!(
+    ws::Workspace;
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+    max_degree=2,
+    tie_break::Symbol=:low,
+    cascade_dominance::Bool=false,
+    allow_weak_dominance::Bool=false,
+    max_work=typemax(Int),
+    max_deductions=typemax(Int),
+    max_exact_work=typemax(Int),
+    deadline_ns=nothing,
+)
+    _limits(max_work, deadline_ns)
+    _limits(max_deductions, deadline_ns)
+    _limits(max_exact_work, deadline_ns)
+    max_degree isa Integer && !(max_degree isa Bool) && 0 <= max_degree <= 2 ||
+        throw(ArgumentError("eliminate_low_degree! supports max_degree in 0..2"))
+    tie_break in (:low, :high) || throw(ArgumentError("tie_break must be :low or :high"))
+    map === nothing || _validate_domain_map(ws, map)
+    st = ws._state
+    if cascade_dominance
+        st.rules in (:dominance, :elimination) ||
+            throw(ArgumentError("cascade_dominance requires Workspace(model; rules=:dominance) or rules=:elimination"))
+    end
+    md = Int(max_degree)
+    candidates, edges, deductions, exact = 0, 0, 0, 0
+    function pending_count()
+        p = cascade_dominance ? (length(st.queue) - st.head + 1) : 0
+        @inbounds for b in 1:(md + 1)
+            p += length(st.elim_queues[b]) - st.elim_heads[b] + 1
+        end
+        return p
+    end
+    finish(reason) = _propagation_report!(ws, reason, candidates, edges, deductions, exact;
+                                          pending=pending_count())
+    direction = _direction(ws._snapshot)
+    while _next_elim_bucket(st, md) != 0 || (cascade_dominance && st.head <= length(st.queue))
+        if cascade_dominance && st.head <= length(st.queue)
+            _expired(deadline_ns) && return finish(:deadline)
+            deductions < max_deductions || return finish(:deduction_limit)
+            status, dc, de, dd, dx = _step_dominance_queue!(
+                ws, direction, allow_weak_dominance,
+                Int(max_work - candidates - edges), Int(max_exact_work - exact), deadline_ns,
+            )
+            candidates += dc
+            edges += de
+            deductions += dd
+            exact += dx
+            status in (:applied, :continue) || return finish(status)
+            continue
+        end
+        _expired(deadline_ns) && return finish(:deadline)
+        deductions < max_deductions || return finish(:deduction_limit)
+        candidates + edges < max_work || return finish(:work_limit)
+        b = _next_elim_bucket(st, md)
+        u = st.elim_queues[b][st.elim_heads[b]]
+        if st.fixed[u] != 2 || direction == 0 || st.degrees[u] != b - 1
+            candidates += 1
+            _pop_elim_queue!(ws, b)
+            continue
+        end
+        d_u = st.degrees[u]
+        adj_len = length(st.adjacency[u])
+        num_states = 1 << d_u
+        max_quad_deltas = d_u == 2 ? 1 : 0
+        total_edge_need = 2 * adj_len + 2 * max_quad_deltas
+        total_exact_need = num_states + 1 + 3 * d_u
+        total_edge_need <= max_work - (candidates + 1) - edges || return finish(:work_limit)
+        total_exact_need <= max_exact_work - exact || return finish(:verification_limit)
+        candidates += 1
+        raw_step, w_reason, _, w_visits, w_exact = _elimination_witness(
+            ws, u; map, tie_break, max_degree=md,
+            max_work=max_work - candidates - edges,
+            max_exact_work=max_exact_work - exact,
+            deadline_ns,
+            predecessors=st.proof_count,
+            scope_length=length(st.callers),
+        )
+        edges += w_visits
+        exact += w_exact
+        raw_step === nothing && return finish(w_reason)
+        step = map === nothing ? raw_step :
+            EliminationStep(u, raw_step.neighbors, raw_step.table,
+                            deepcopy(raw_step.constant_delta), deepcopy(raw_step.linear_deltas),
+                            deepcopy(raw_step.quadratic_deltas), deepcopy(st.constant),
+                            raw_step.predecessors, raw_step.scope_length, raw_step.unique_argmin)
+        field_deltas = Pair{Int,_Exact}[p for p in step.linear_deltas]
+        quad_deltas = Tuple{Int,Int,_Exact}[t for t in step.quadratic_deltas]
+        st.serial <= typemax(UInt64) - 2 || throw(ArgumentError("trail serial exhausted; reset workspace"))
+        _reserve!(st.trail, length(st.trail) + 2)
+        rep = _apply_reduction!(
+            ws, u, Int8(4), step, step.constant_delta, field_deltas, quad_deltas;
+            max_work=max_work - candidates - edges, deadline_ns, precharged_visits=0,
+        )
+        edges += rep.edge_visits
+        exact += 1 + 3 * length(step.neighbors)
+        rep.stop_reason === :applied || return finish(rep.stop_reason)
+        deductions += 1
+        _pop_elim_queue!(ws, b)
+    end
+    return finish(:quiescent)
 end
 
 """

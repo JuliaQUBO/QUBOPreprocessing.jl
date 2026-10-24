@@ -589,10 +589,13 @@ end
 function _elimination_witness(ws::Workspace, u::Int;
                               map::Union{Nothing,DomainGaugeMap}=nothing,
                               tie_break::Symbol=:low,
+                              max_degree=2,
                               max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing,
                               predecessors=0, scope_length=-1)
     _limits(max_work, deadline_ns)
     _limits(max_exact_work, deadline_ns)
+    max_degree isa Integer && !(max_degree isa Bool) && 0 <= max_degree <= 3 ||
+        throw(ArgumentError("max_degree must be an integer between 0 and 3"))
     map === nothing || _validate_domain_map(ws, map)
     tie_break in (:low, :high) || throw(ArgumentError("tie_break must be :low or :high"))
     st, s = ws._state, ws._snapshot
@@ -611,9 +614,9 @@ function _elimination_witness(ws::Workspace, u::Int;
             push!(free_edges, w => q)
         end
     end
-    sort!(free_edges; by=first)
     d = length(free_edges)
-    d <= 3 || return (nothing, :degree_too_high, :exact, visits, 0)
+    d <= max_degree || return (nothing, :degree_too_high, :exact, visits, 0)
+    sort!(free_edges; by=first)
     num_states = 1 << d
     num_states <= max_exact_work || return (nothing, :verification_limit, :exact, visits, 0)
     is_bool = s.domain === QT.BoolDomain
@@ -824,21 +827,28 @@ end
 
 function _poly_apply_deltas!(p::_PolyState, u::Int, const_delta::_Exact, field_deltas, quad_deltas)
     is_bool = p.domain === QT.BoolDomain
-    u_active_edges = Pair{Int,_Exact}[w => q for (w, q) in p.adj[u] if p.active[w]]
-    touched_set = Set{Int}(w for (w, _) in u_active_edges)
+    u_active_edges = Pair{Int,_Exact}[]
+    touched = Int[]
+    touched_seen = Set{Int}()
+    for (w, q) in p.adj[u]
+        p.active[w] || continue
+        push!(u_active_edges, w => q)
+        _touch!(touched, touched_seen, w)
+    end
     for (w, df) in field_deltas
         iszero(df) && continue
-        push!(touched_set, w)
+        _touch!(touched, touched_seen, w)
     end
     merged_q = Dict{Tuple{Int,Int},_Exact}()
+    merged_order = Tuple{Int,Int}[]
     for (a, b, dq) in quad_deltas
         iszero(dq) && continue
         j, k = min(a, b), max(a, b)
+        !haskey(merged_q, (j, k)) && push!(merged_order, (j, k))
         merged_q[(j, k)] = get(merged_q, (j, k), _Exact(0)) + dq
-        push!(touched_set, j)
-        push!(touched_set, k)
+        _touch!(touched, touched_seen, j)
+        _touch!(touched, touched_seen, k)
     end
-    touched = sort!(collect(touched_set))
     f_map = Dict{Int,_Exact}(w => _Exact(0) for w in touched)
     qsum_map = Dict{Int,_Exact}(w => _Exact(0) for w in touched)
     for (w, q_uw) in u_active_edges
@@ -848,7 +858,8 @@ function _poly_apply_deltas!(p::_PolyState, u::Int, const_delta::_Exact, field_d
         iszero(df) && continue
         f_map[w] += df
     end
-    for ((j, k), dq) in merged_q
+    for (j, k) in merged_order
+        dq = merged_q[(j, k)]
         iszero(dq) && continue
         qsum_map[j] += dq
         qsum_map[k] += dq
@@ -857,7 +868,7 @@ function _poly_apply_deltas!(p::_PolyState, u::Int, const_delta::_Exact, field_d
     old_h_u = p.h_spin[u]
     total_f_delta = -old_f_u + sum(values(f_map); init=_Exact(0))
     total_q_delta = -sum((q for (_, q) in u_active_edges); init=_Exact(0)) +
-                    sum((dq for (_, dq) in merged_q); init=_Exact(0))
+                    sum((merged_q[jk] for jk in merged_order); init=_Exact(0))
     dc_spin = is_bool ? (const_delta + total_f_delta // 2 + total_q_delta // 4) : const_delta
     p.constant += const_delta
     p.c_spin += dc_spin
@@ -872,7 +883,8 @@ function _poly_apply_deltas!(p::_PolyState, u::Int, const_delta::_Exact, field_d
             J_uw = is_bool ? (q_uw // 4) : q_uw
             dc_gb -= (g[u] * g[w]) * J_uw
         end
-        for ((j, k), dq) in merged_q
+        for (j, k) in merged_order
+            dq = merged_q[(j, k)]
             iszero(dq) && continue
             dJ_jk = is_bool ? (dq // 4) : dq
             dc_gb += (g[j] * g[k]) * dJ_jk
@@ -896,7 +908,8 @@ function _poly_apply_deltas!(p::_PolyState, u::Int, const_delta::_Exact, field_d
             delete!(p.adj_pos[w], u)
         end
     end
-    for ((j, k), dq) in merged_q
+    for (j, k) in merged_order
+        dq = merged_q[(j, k)]
         iszero(dq) && continue
         for (a, b) in ((j, k), (k, j))
             pos = get(p.adj_pos[a], b, 0)
@@ -1177,22 +1190,25 @@ function prove_relation(ws::Workspace, eliminated, representative;
 end
 
 """
-    prove_elimination(ws, label; map=nothing, tie_break=:low,
+    prove_elimination(ws, label; map=nothing, tie_break=:low, max_degree=2,
                       max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing)
 
-Prove an exact bounded-degree (`0 <= degree(ws, label) <= 3`) local variable
-elimination without mutating `ws`. Refuses variables with active degree `> 3`
-(`:degree_too_high`) or degree-3 variables whose exact marginal has a nonzero
-cubic interaction (`:nonquadratic_elimination`).
+Prove an exact bounded-degree (`0 <= degree(ws, label) <= max_degree`) local
+variable elimination without mutating `ws`. By default (`max_degree=2`), only
+isolated, leaf and degree-two variables are eligible; higher-degree variables
+are refused with `:degree_too_high`. When `max_degree=3` is explicitly requested,
+degree-3 variables whose exact marginal has a nonzero cubic interaction are
+refused with `:nonquadratic_elimination`.
 """
 function prove_elimination(ws::Workspace, label;
                            map::Union{Nothing,DomainGaugeMap}=nothing,
                            tie_break::Symbol=:low,
+                           max_degree=2,
                            max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing)
     map === nothing || _validate_domain_map(ws, map; full=true)
     u = _variable(ws, label)
     step, reason, method, visits, exact_work = _elimination_witness(
-        ws, u; map, tie_break, max_work, max_exact_work, deadline_ns,
+        ws, u; map, tie_break, max_degree, max_work, max_exact_work, deadline_ns,
         predecessors=ws._state.proof_count, scope_length=length(ws._state.callers),
     )
     if step === nothing
