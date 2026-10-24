@@ -87,7 +87,7 @@ tag (`:strong` or `:weak`) queried with `persistency`:
   refused with `:nonzero_field`. `unique_argmin` records whether the minimizing
   value of ``u`` is strict on all boundary states. Higher-degree variables are
   skipped/refused (`:degree_too_high`) with no higher-order truncation.
-- **`:optimum_preserving_restriction` (`DominanceStep`, `RelationStep`, `ProbingStep`, `RoofDualityStep`):**
+- **`:optimum_preserving_restriction` (`DominanceStep`, `RelationStep`, `ProbingStep`, `RoofDualityStep`, `SubmodularCutStep`):**
   unary value fixing (`DominanceStep`), signed pair contraction
   ``s_u = \sigma_{\text{orig}} s_v`` (`RelationStep`, proved via single-endpoint
   `:interval` / `:exact` coupling dominance or Glover–Lewis–Kochenberger (2018)
@@ -96,14 +96,18 @@ tag (`:strong` or `:weak`) queried with `persistency`:
   (`ProbingStep`, proved via `prove_probing` / `apply_probing!` / `probe_variables!`
   when the trial branch lower bound ``L`` after reversible trial conditioning and
   bounded trial dominance propagation strictly exceeds the verified parent-scope
-  feasible witness upper bound ``U``, ``L > U``), or exact implication-network
+  feasible witness upper bound ``U``, ``L > U``), exact implication-network
   roof-duality strong persistency fixing (`RoofDualityStep`, proved via
   `prove_roof_duality` / `apply_roof_duality!` from an independently verified
   exact rational maximum ``S``–``T`` flow ``f`` and dual minimum cuts
   ``(\mathcal{R}_S, V \setminus \mathcal{R}_S)`` and
   ``(V \setminus \mathcal{R}_T, \mathcal{R}_T)`` where literal ``2u - 1 \in \mathcal{R}_S \land 2u \in \mathcal{R}_T``
   for ``s_u = +1`` or ``2u \in \mathcal{R}_S \land 2u - 1 \in \mathcal{R}_T``
-  for ``s_u = -1``). Tagged `:strong` when
+  for ``s_u = -1``), or direct gauge-submodular component cut fixing
+  (`SubmodularCutStep`, proved via `prove_submodular_cut` / `apply_submodular_cut!`
+  on a closed active residual component ``C`` with verified bipartite spin gauge
+  ``\sigma_a \in \{-1, +1\}`` making all active couplings ``\tilde{J}'_{ab} \le 0``
+  and verified ``(|C| + 2)``-vertex maximum ``S``–``T`` flow and minimum cut). Tagged `:strong` when
   every optimum of the current residual satisfies the restriction, or `:weak`
   when at least one optimum of the current residual satisfies the restriction.
 

@@ -15,20 +15,22 @@ export Workspace, Generation, generation, reset!, materialize, ExportResult,
 export Checkpoint, checkpoint, assume!, rollback!, unfix!, changes, assumptions,
        UpdateReport, RollbackReport, ConditionedExport
 
-export DominanceStep, RelationStep, EliminationStep, ProbingStep, RoofDualityStep,
+export SubmodularComponent,
+       DominanceStep, RelationStep, EliminationStep, ProbingStep, RoofDualityStep, SubmodularCutStep,
        DominanceCertificate, ReductionCertificate,
-       DominanceAttempt, RelationAttempt, EliminationAttempt, ProbingAttempt, RoofDualityAttempt,
+       DominanceAttempt, RelationAttempt, EliminationAttempt, ProbingAttempt, RoofDualityAttempt, SubmodularCutAttempt,
        VerificationResult,
-       prove_dominance, prove_relation, prove_elimination, prove_probing, prove_roof_duality,
+       recognize_submodular_component, recognize_submodular_components,
+       prove_dominance, prove_relation, prove_elimination, prove_probing, prove_roof_duality, prove_submodular_cut,
        verify_certificate, transport_certificate,
        step_guarantee, certificate_guarantee, persistency
 
 export DomainGaugeMap, domain_map, map_value, lift_value, map_state, lift_state,
        degree, effective_field, incident_couplings, conditioned_constant
 
-export propagate!, PropagationReport, ProbingReport, RoofDualityReport,
+export propagate!, PropagationReport, ProbingReport, RoofDualityReport, SubmodularCutReport,
        deductions, reductions, export_certificate,
-       apply_dominance!, apply_probing!, probe_variables!, apply_roof_duality!,
+       apply_dominance!, apply_probing!, probe_variables!, apply_roof_duality!, apply_submodular_cut!,
        contract_relation!, contract_relations!, relation_map,
        eliminate_variable!, eliminate_low_degree!, apply_weak_batch!,
        SchedulePassSummary, ScheduleReport, schedule_reductions!,
