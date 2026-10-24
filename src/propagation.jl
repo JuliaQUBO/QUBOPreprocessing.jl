@@ -389,6 +389,187 @@ function apply_dominance!(ws::Workspace, label;
 end
 
 """
+    ProbingReport
+
+Bounded-call probing result with `generation`, `checkpoint`, `stop_reason`,
+probed `candidates`, `edge_visits`, committed `deductions`, `exact_fallbacks`,
+`exact_work`, remaining `pending` candidate count, and cumulative workspace
+`totals`. Counters measure executed work and are not undone by model rollback.
+"""
+struct ProbingReport
+    generation::Generation
+    checkpoint::Checkpoint
+    stop_reason::Symbol
+    candidates::Int
+    edge_visits::Int
+    deductions::Int
+    exact_fallbacks::Int
+    exact_work::Int
+    pending::Int
+    totals::NamedTuple{(:candidates,:edge_visits,:exact_work),Tuple{Int,Int,Int}}
+end
+generation(r::ProbingReport) = r.generation
+
+function _probing_report!(ws::Workspace, reason::Symbol, candidates::Int, edges::Int,
+                          deductions::Int, fallbacks::Int, exact::Int; pending::Int=0)
+    st = ws._state
+    st.total_candidates += candidates
+    st.total_edges += edges
+    st.total_exact += exact
+    return ProbingReport(
+        generation(ws), checkpoint(ws), reason,
+        candidates, edges, deductions, fallbacks, exact, pending,
+        (candidates=st.total_candidates, edge_visits=st.total_edges, exact_work=st.total_exact),
+    )
+end
+
+"""
+    apply_probing!(ws, label, witness; value=nothing, map=nothing,
+                   max_rounds=1, max_trial_fixes=typemax(Int),
+                   max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing)
+
+Certify and transactionally commit one probing fixing on `ws` by strictly
+refuting the opposite branch (`branch_lower > witness_upper`) against the
+verified parent-scope feasible `witness` (an original-order vector, label
+dictionary, or [`Reconstruction`](@ref)), recording a [`ProbingStep`](@ref) on
+the reversible trail. Interrupted or inconclusive probes leave `ws` at its exact
+pre-probe checkpoint. Returns an [`UpdateReport`](@ref).
+"""
+function apply_probing!(
+    ws::Workspace,
+    label,
+    witness;
+    value=nothing,
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+    max_rounds=1,
+    max_trial_fixes=typemax(Int),
+    max_work=typemax(Int),
+    max_exact_work=typemax(Int),
+    deadline_ns=nothing,
+)
+    _limits(max_work, deadline_ns)
+    _limits(max_exact_work, deadline_ns)
+    _limits(max_rounds, nothing)
+    _limits(max_trial_fixes, nothing)
+    map === nothing || _validate_domain_map(ws, map)
+    i = _variable(ws, label)
+    w_vec = _extract_witness_state(ws, witness, map)
+    req_orig = if value === nothing
+        nothing
+    elseif map === nothing
+        _assignment(ws, value)
+    else
+        _lift_index_value(map, i, _check_domain_scalar(value, map.target_domain))
+    end
+    st = ws._state
+    st.fixed[i] == 2 || return UpdateReport(:already_fixed, 0, 0)
+    _direction(ws._snapshot) != 0 || return UpdateReport(:zero_scale, 0, 0)
+    deg_i = length(st.adjacency[i])
+    deg_i <= max_work || return UpdateReport(:work_limit, 0, 0)
+    raw_step, reason, _, visits, _, _ = _probing_witness(
+        ws, i, w_vec;
+        map=nothing, value=req_orig, max_rounds, max_trial_fixes,
+        max_work=max_work - deg_i, max_exact_work, deadline_ns,
+        predecessors=st.proof_count, scope_length=length(st.callers),
+        _prevalidated_witness=w_vec,
+    )
+    raw_step === nothing && return UpdateReport(reason, visits, 0)
+    rep = _fix!(ws, i, raw_step.value; proof=raw_step, max_work=max_work - visits, deadline_ns)
+    return UpdateReport(rep.stop_reason, visits + rep.edge_visits, rep.changed)
+end
+
+"""
+    probe_variables!(ws, witness; candidates=nothing, map=nothing,
+                     max_candidates=typemax(Int), max_rounds=1,
+                     max_trial_fixes=typemax(Int), max_work=typemax(Int),
+                     max_exact_work=typemax(Int), deadline_ns=nothing)
+
+Run an optional bounded certified probing pass across `candidates` (defaulting to
+all currently free variables in original order) using a verified parent-scope
+feasible `witness`. Each candidate temporarily conditions on the opposite
+assignment, propagates bounded trial dominance, and commits a [`ProbingStep`](@ref)
+when the trial branch lower bound strictly refutes the branch against `witness`.
+Cancelled or inconclusive trial probes roll back cleanly to the pre-probe
+checkpoint while charging executed work in the returned [`ProbingReport`](@ref).
+"""
+function probe_variables!(
+    ws::Workspace,
+    witness;
+    candidates=nothing,
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+    max_candidates=typemax(Int),
+    max_rounds=1,
+    max_trial_fixes=typemax(Int),
+    max_work=typemax(Int),
+    max_exact_work=typemax(Int),
+    deadline_ns=nothing,
+)
+    _limits(max_candidates, nothing)
+    _limits(max_rounds, nothing)
+    _limits(max_trial_fixes, nothing)
+    _limits(max_work, deadline_ns)
+    _limits(max_exact_work, deadline_ns)
+    map === nothing || _validate_domain_map(ws, map)
+    w_vec = _extract_witness_state(ws, witness, map)
+    s, st = ws._snapshot, ws._state
+    cand_indices = if candidates === nothing
+        Int[i for i in 1:length(s.labels) if st.fixed[i] == 2]
+    else
+        seen = Set{Int}()
+        out = Int[]
+        for lbl in candidates
+            idx = _variable(ws, lbl)
+            if st.fixed[idx] == 2 && !(idx in seen)
+                push!(out, idx)
+                push!(seen, idx)
+            end
+        end
+        out
+    end
+    _direction(s) != 0 || return _probing_report!(ws, :zero_scale, 0, 0, 0, 0, 0; pending=length(cand_indices))
+    probed = 0
+    visits = 0
+    deduced = 0
+    fallbacks = 0
+    exact = 0
+    n_cand = length(cand_indices)
+    for pos in 1:n_cand
+        i = cand_indices[pos]
+        st.fixed[i] == 2 || continue
+        remaining = count(k -> st.fixed[cand_indices[k]] == 2, pos:n_cand)
+        probed < max_candidates ||
+            return _probing_report!(ws, :candidate_limit, probed, visits, deduced, fallbacks, exact; pending=remaining)
+        _expired(deadline_ns) &&
+            return _probing_report!(ws, :deadline, probed, visits, deduced, fallbacks, exact; pending=remaining)
+        deg_i = length(st.adjacency[i])
+        deg_i <= max_work - visits ||
+            return _probing_report!(ws, :work_limit, probed, visits, deduced, fallbacks, exact; pending=remaining)
+        probed += 1
+        p_step, p_reason, _, p_visits, p_fb, p_exact = _probing_witness(
+            ws, i, w_vec;
+            map=nothing, max_rounds, max_trial_fixes,
+            max_work=max_work - visits - deg_i, max_exact_work=max_exact_work - exact,
+            deadline_ns, predecessors=st.proof_count, scope_length=length(st.callers),
+            _prevalidated_witness=w_vec,
+        )
+        visits += p_visits
+        fallbacks += p_fb
+        exact += p_exact
+        if p_reason in (:deadline, :work_limit, :verification_limit)
+            return _probing_report!(ws, p_reason, probed, visits, deduced, fallbacks, exact; pending=remaining)
+        end
+        if p_step !== nothing
+            rep = _fix!(ws, i, p_step.value; proof=p_step, max_work=max_work - visits, deadline_ns)
+            visits += rep.edge_visits
+            rep.stop_reason === :applied ||
+                return _probing_report!(ws, rep.stop_reason, probed, visits, deduced, fallbacks, exact; pending=remaining)
+            deduced += 1
+        end
+    end
+    return _probing_report!(ws, :quiescent, probed, visits, deduced, fallbacks, exact; pending=0)
+end
+
+"""
     contract_relation!(ws, eliminated, representative; sign=nothing, map=nothing,
                        allow_weak=false, max_work=typemax(Int),
                        max_exact_work=typemax(Int), deadline_ns=nothing)
@@ -1647,8 +1828,9 @@ end
     reductions(ws; since=nothing)
 
 Return owned proof records ([`DominanceStep`](@ref), [`RelationStep`](@ref),
-[`EliminationStep`](@ref)) in application order for all certified reductions
-committed on `ws`, optionally added after a valid ancestor checkpoint `since`.
+[`EliminationStep`](@ref), [`ProbingStep`](@ref)) in application order for all
+certified reductions committed on `ws`, optionally added after a valid ancestor
+checkpoint `since`.
 """
 function reductions(ws::Workspace; since=nothing)
     since === nothing || _validate_checkpoint(ws, since)

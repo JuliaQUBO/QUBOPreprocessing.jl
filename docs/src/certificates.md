@@ -87,12 +87,16 @@ tag (`:strong` or `:weak`) queried with `persistency`:
   refused with `:nonzero_field`. `unique_argmin` records whether the minimizing
   value of ``u`` is strict on all boundary states. Higher-degree variables are
   skipped/refused (`:degree_too_high`) with no higher-order truncation.
-- **`:optimum_preserving_restriction` (`DominanceStep`, `RelationStep`):**
-  unary value fixing (`DominanceStep`) or signed pair contraction
+- **`:optimum_preserving_restriction` (`DominanceStep`, `RelationStep`, `ProbingStep`):**
+  unary value fixing (`DominanceStep`), signed pair contraction
   ``s_u = \sigma_{\text{orig}} s_v`` (`RelationStep`, proved via single-endpoint
   `:interval` / `:exact` coupling dominance or Glover–Lewis–Kochenberger (2018)
   Theorems 3.1–3.4 cross-endpoint `:glk_pair` implication bounds with favoring
-  coupling ``-\sigma \tilde{J}_{uv} > 0``). Tagged `:strong` when
+  coupling ``-\sigma \tilde{J}_{uv} > 0``), or trial-branch probing fixing
+  (`ProbingStep`, proved via `prove_probing` / `apply_probing!` / `probe_variables!`
+  when the trial branch lower bound ``L`` after reversible trial conditioning and
+  bounded trial dominance propagation strictly exceeds the verified parent-scope
+  feasible witness upper bound ``U``, ``L > U``). Tagged `:strong` when
   every optimum of the current residual satisfies the restriction, or `:weak`
   when at least one optimum of the current residual satisfies the restriction.
 

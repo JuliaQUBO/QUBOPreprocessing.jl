@@ -92,13 +92,43 @@ end
 EliminationStep(u,nbrs,tbl,cd,ld,qd,c,p) = EliminationStep(u,nbrs,tbl,cd,ld,qd,c,p,-1,true)
 
 """
+    ProbingStep
+
+Compact trial-branch probing witness certifying `variable == value` by refuting
+the opposite assignment `variable == probed_value` against a verified parent-scope
+feasible witness `witness_state` with normalized energy `witness_upper`. After
+temporarily conditioning on `variable == probed_value` and applying the certified
+trial deductions `branch_steps`, `branch_lower` bounds the normalized trial-branch
+objective from below and strictly exceeds `witness_upper` (`branch_lower > witness_upper`,
+`persistency === :strong`).
+"""
+struct ProbingStep <: _ProofRecord
+    variable::Int
+    value::Int
+    probed_value::Int
+    branch_lower::_Exact
+    witness_upper::_Exact
+    witness_state::Tuple{Vararg{Int}}
+    branch_steps::Tuple{Vararg{DominanceStep}}
+    constant::_Exact
+    predecessors::Int
+    method::Symbol
+    scope_length::Int
+    persistency::Symbol
+end
+ProbingStep(i, v, pv, blo, wup, ws, bs, c, p, m) =
+    ProbingStep(i, v, pv, blo, wup, ws, bs, c, p, m, -1, :strong)
+ProbingStep(i, v, pv, blo, wup, ws, bs, c, p, m, sc) =
+    ProbingStep(i, v, pv, blo, wup, ws, bs, c, p, m, sc, :strong)
+
+"""
     DominanceCertificate
 
 Owned source/generation, explicit caller scope and ordered reduction steps
-([`DominanceStep`](@ref), [`RelationStep`](@ref), [`EliminationStep`](@ref)).
-Every step retains all scoped optima (`:strong`) or at least one scoped optimum
-of the evolving residual (`:weak` / non-unique argmin). Also aliased as
-[`ReductionCertificate`](@ref).
+([`DominanceStep`](@ref), [`RelationStep`](@ref), [`EliminationStep`](@ref),
+[`ProbingStep`](@ref)). Every step retains all scoped optima (`:strong`) or at
+least one scoped optimum of the evolving residual (`:weak` / non-unique argmin).
+Also aliased as [`ReductionCertificate`](@ref).
 """
 struct DominanceCertificate
     generation::Generation
@@ -115,8 +145,8 @@ generation(c::DominanceCertificate) = c.generation
     ReductionCertificate
 
 Alias for [`DominanceCertificate`](@ref) representing an ordered certificate
-chain of unary dominance restrictions, signed pair relation contractions, and
-bounded-degree exact variable eliminations.
+chain of unary dominance restrictions, signed pair relation contractions,
+bounded-degree exact variable eliminations, and certified probing steps.
 """
 const ReductionCertificate = DominanceCertificate
 
@@ -126,11 +156,11 @@ const ReductionCertificate = DominanceCertificate
 Return the algebraic guarantee class of a preprocessing step or coordinate map:
 - `:energy_identity` for [`DomainGaugeMap`](@ref),
 - `:exact_elimination` for [`EliminationStep`](@ref),
-- `:optimum_preserving_restriction` for [`DominanceStep`](@ref) and [`RelationStep`](@ref).
+- `:optimum_preserving_restriction` for [`DominanceStep`](@ref), [`RelationStep`](@ref), and [`ProbingStep`](@ref).
 """
 step_guarantee(::DomainGaugeMap) = :energy_identity
 step_guarantee(::EliminationStep) = :exact_elimination
-step_guarantee(::Union{DominanceStep,RelationStep}) = :optimum_preserving_restriction
+step_guarantee(::Union{DominanceStep,RelationStep,ProbingStep}) = :optimum_preserving_restriction
 
 """
     persistency(step_or_certificate)
@@ -139,7 +169,7 @@ Return `:strong` when a step, map, or certificate preserves all optima on its
 scope, or `:weak` when any step relies on tie-breaking / weak persistency.
 """
 persistency(::DomainGaugeMap) = :strong
-persistency(step::Union{DominanceStep,RelationStep}) = step.persistency
+persistency(step::Union{DominanceStep,RelationStep,ProbingStep}) = step.persistency
 persistency(step::EliminationStep) = step.unique_argmin ? :strong : :weak
 persistency(cert::DominanceCertificate) =
     any(s -> persistency(s) === :weak, cert.steps) ? :weak : :strong
@@ -150,7 +180,7 @@ persistency(cert::DominanceCertificate) =
 Return the overall guarantee class of `cert`:
 - `:energy_identity` when `cert.steps` is empty,
 - `:exact_elimination` when every step in `cert.steps` is an [`EliminationStep`](@ref),
-- `:optimum_preserving_restriction` when `cert.steps` contains any [`DominanceStep`](@ref) or [`RelationStep`](@ref).
+- `:optimum_preserving_restriction` when `cert.steps` contains any [`DominanceStep`](@ref), [`RelationStep`](@ref), or [`ProbingStep`](@ref).
 """
 function certificate_guarantee(cert::DominanceCertificate)
     isempty(cert.steps) && return :energy_identity
@@ -187,6 +217,17 @@ struct EliminationAttempt
     stop_reason::Symbol
     method::Symbol
     edge_visits::Int
+    exact_work::Int
+end
+
+"""Certified probing proof attempt with optional `certificate`, `stop_reason`,
+numeric `method`, adjacency `edge_visits`, and explicit `exact_fallbacks`/`exact_work` counters."""
+struct ProbingAttempt
+    certificate::Union{Nothing,DominanceCertificate}
+    stop_reason::Symbol
+    method::Symbol
+    edge_visits::Int
+    exact_fallbacks::Int
     exact_work::Int
 end
 
@@ -751,6 +792,282 @@ function _elimination_witness(ws::Workspace, u::Int;
     return (step, :proved, :exact, visits, exact_work)
 end
 
+function _extract_witness_state(ws::Workspace, witness, map::Union{Nothing,DomainGaugeMap}=nothing)
+    s, st = ws._snapshot, ws._state
+    n = length(s.labels)
+    is_bool = s.domain === QT.BoolDomain
+    low_orig = is_bool ? 0 : -1
+    w = Vector{Int}(undef, n)
+    if witness isa Reconstruction
+        witness.generation == generation(ws) ||
+            throw(ArgumentError("witness belongs to a different workspace generation"))
+        length(witness.state) == n ||
+            throw(ArgumentError("witness state must cover every original variable"))
+        for idx in 1:n
+            v = witness.state[idx]
+            (v == low_orig || v == 1) ||
+                throw(ArgumentError("witness value at index $idx is outside the original domain"))
+            w[idx] = v
+        end
+    elseif witness isa AbstractVector
+        Base.require_one_based_indexing(witness)
+        length(witness) == n ||
+            throw(ArgumentError("witness state must cover every original variable"))
+        target_dom_sym = map === nothing ? _domain_symbol(s.domain) : map.target_domain
+        for idx in 1:n
+            v_mapped = _check_domain_scalar(witness[idx], target_dom_sym)
+            w[idx] = map === nothing ? v_mapped : _lift_index_value(map, idx, v_mapped)
+        end
+    elseif witness isa AbstractDict
+        length(witness) == n ||
+            throw(ArgumentError("witness state must cover every original variable"))
+        target_dom_sym = map === nothing ? _domain_symbol(s.domain) : map.target_domain
+        for (idx, lbl) in enumerate(s.labels)
+            haskey(witness, lbl) ||
+                throw(ArgumentError("witness state is missing variable label $(repr(lbl))"))
+            v_mapped = _check_domain_scalar(witness[lbl], target_dom_sym)
+            w[idx] = map === nothing ? v_mapped : _lift_index_value(map, idx, v_mapped)
+        end
+    else
+        throw(ArgumentError("witness must be a complete original-order vector, label dictionary, or Reconstruction"))
+    end
+    for pos in st.callers
+        e = st.trail[pos]::_UndoFix
+        w[e.index] == e.value ||
+            throw(ArgumentError("witness violates current caller assumptions"))
+    end
+    for pos in st.fixes
+        entry = st.trail[pos]
+        entry.proof === nothing && continue
+        pstep = entry.proof
+        if pstep isa Union{DominanceStep,ProbingStep}
+            w[pstep.variable] == pstep.value ||
+                throw(ArgumentError("witness violates committed workspace reduction"))
+        elseif pstep isa RelationStep
+            s_u = is_bool ? (2 * w[pstep.eliminated] - 1) : w[pstep.eliminated]
+            s_v = is_bool ? (2 * w[pstep.representative] - 1) : w[pstep.representative]
+            s_u == pstep.orig_sign * s_v ||
+                throw(ArgumentError("witness violates committed workspace reduction"))
+        elseif pstep isa EliminationStep
+            idx = 1
+            for (bit_pos, nbr) in enumerate(pstep.neighbors)
+                w[nbr] == 1 && (idx += 1 << (bit_pos - 1))
+            end
+            w[pstep.variable] == pstep.table[idx] ||
+                throw(ArgumentError("witness violates committed workspace reduction"))
+        end
+    end
+    return w
+end
+
+function _probing_witness(
+    ws::Workspace,
+    i::Int,
+    witness;
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+    value=nothing,
+    max_rounds=1,
+    max_trial_fixes=typemax(Int),
+    max_work=typemax(Int),
+    max_exact_work=typemax(Int),
+    deadline_ns=nothing,
+    predecessors=0,
+    scope_length=-1,
+    _prevalidated_witness::Union{Nothing,Vector{Int}}=nothing,
+)
+    _limits(max_work, deadline_ns)
+    _limits(max_exact_work, deadline_ns)
+    _limits(max_rounds, nothing)
+    _limits(max_trial_fixes, nothing)
+    map === nothing || _validate_domain_map(ws, map)
+    w_vec = _prevalidated_witness === nothing ? _extract_witness_state(ws, witness, map) : _prevalidated_witness
+    st, s = ws._state, ws._snapshot
+    req_orig = if value === nothing
+        nothing
+    elseif map === nothing
+        _assignment(ws, value)
+    else
+        _lift_index_value(map, i, _check_domain_scalar(value, map.target_domain))
+    end
+    st.fixed[i] == 2 || return (nothing, :already_fixed, :none, 0, 0, 0)
+    direction = _direction(s)
+    direction != 0 || return (nothing, :zero_scale, :none, 0, 0, 0)
+    _expired(deadline_ns) && return (nothing, :deadline, :none, 0, 0, 0)
+    target_orig = req_orig === nothing ? w_vec[i] : req_orig
+    low_orig = s.domain === QT.BoolDomain ? 0 : -1
+    probed_orig = target_orig == 1 ? low_orig : 1
+    n = length(s.labels)
+    1 <= max_exact_work || return (nothing, :verification_limit, :none, 0, 0, 0)
+    w_energy = st.constant
+    exact_work = 1
+    visits = 0
+    for u in 1:n
+        st.fixed[u] == 2 || continue
+        _expired(deadline_ns) && return (nothing, :deadline, :none, visits, 0, exact_work)
+        exact_work < max_exact_work || return (nothing, :verification_limit, :none, visits, 0, exact_work)
+        w_energy += st.fields[u] * w_vec[u]
+        exact_work += 1
+        for (v, q) in st.adjacency[u]
+            _expired(deadline_ns) && return (nothing, :deadline, :none, visits, 0, exact_work)
+            visits < max_work || return (nothing, :work_limit, :none, visits, 0, exact_work)
+            visits += 1
+            (st.fixed[v] == 2 && u < v) || continue
+            exact_work < max_exact_work || return (nothing, :verification_limit, :none, visits, 0, exact_work)
+            w_energy += q * w_vec[u] * w_vec[v]
+            exact_work += 1
+        end
+    end
+    U_exact = direction * w_energy
+    c_parent = deepcopy(_mapped_constant(ws, map))
+    probe_cp = checkpoint(ws)
+    saved_star_hint = st.star_hint
+    saved_rel_hint = st.rel_hint
+    fallbacks = 0
+    try
+        rep = _fix!(ws, i, probed_orig; proof=nothing, max_work=max_work - visits, deadline_ns=deadline_ns)
+        visits += rep.edge_visits
+        rep.stop_reason === :applied || return (nothing, rep.stop_reason, :none, visits, fallbacks, exact_work)
+        branch_steps = DominanceStep[]
+        trial_candidates = Int[j for (j, _) in st.adjacency[i] if st.fixed[j] == 2]
+        for _ in 1:max_rounds
+            isempty(trial_candidates) && break
+            length(branch_steps) < max_trial_fixes || break
+            next_candidates = Int[]
+            next_seen = Set{Int}()
+            for u in trial_candidates
+                length(branch_steps) < max_trial_fixes || break
+                st.fixed[u] == 2 || continue
+                _expired(deadline_ns) && return (nothing, :deadline, :interval, visits, fallbacks, exact_work)
+                b_step, b_reason, b_method, b_visits, b_fb, b_exact = _dominance_witness(
+                    ws, u; map=map, allow_weak=false,
+                    max_work=max_work - visits, max_exact_work=max_exact_work - exact_work,
+                    deadline_ns=deadline_ns, predecessors=length(branch_steps), scope_length=scope_length,
+                )
+                visits += b_visits
+                fallbacks += b_fb
+                exact_work += b_exact
+                if b_reason in (:deadline, :work_limit, :verification_limit)
+                    return (nothing, b_reason, b_method === :none ? :interval : b_method, visits, fallbacks, exact_work)
+                end
+                if b_step !== nothing
+                    f_rep = _fix!(ws, u, b_step.value; proof=b_step, max_work=max_work - visits, deadline_ns=deadline_ns)
+                    visits += f_rep.edge_visits
+                    f_rep.stop_reason === :applied ||
+                        return (nothing, f_rep.stop_reason, b_method, visits, fallbacks, exact_work)
+                    push!(branch_steps, b_step)
+                    for (w_nbr, _) in st.adjacency[u]
+                        if st.fixed[w_nbr] == 2 && !(w_nbr in next_seen)
+                            push!(next_candidates, w_nbr)
+                            push!(next_seen, w_nbr)
+                        end
+                    end
+                end
+            end
+            trial_candidates = next_candidates
+        end
+        c_spin = _spin_constant(ws)
+        c_bpos = _bool_constant(ws)
+        lo_spin, _ = _enclose(direction * c_spin)
+        lo_bpos, _ = _enclose(direction * c_bpos)
+        lo_bneg = lo_bpos
+        for u in 1:n
+            st.fixed[u] == 2 || continue
+            _expired(deadline_ns) && return (nothing, :deadline, :interval, visits, fallbacks, exact_work)
+            h_u = _spin_field(ws, u)
+            f_u = _bool_field(ws, u)
+            h_lo, h_hi = _enclose(direction * h_u)
+            f_lo, _ = _enclose(direction * f_u)
+            m_h = max(abs(h_lo), abs(h_hi))
+            lo_spin = prevfloat(lo_spin - m_h)
+            lo_bpos = prevfloat(lo_bpos + min(0.0, f_lo))
+            term_x0 = prevfloat(2.0 * h_lo)
+            term_x1 = prevfloat(f_lo - 2.0 * h_hi)
+            lo_bneg = prevfloat(lo_bneg + min(term_x0, term_x1))
+            for (v, q) in st.adjacency[u]
+                _expired(deadline_ns) && return (nothing, :deadline, :interval, visits, fallbacks, exact_work)
+                visits < max_work || return (nothing, :work_limit, :interval, visits, fallbacks, exact_work)
+                visits += 1
+                (st.fixed[v] == 2 && u < v) || continue
+                J_uv = _spin_coupling(ws, q)
+                qb_uv = _bool_coupling(ws, q)
+                j_lo, j_hi = _enclose(direction * J_uv)
+                qb_lo, _ = _enclose(direction * qb_uv)
+                m_j = max(abs(j_lo), abs(j_hi))
+                lo_spin = prevfloat(lo_spin - m_j)
+                add_qb = min(0.0, qb_lo)
+                lo_bpos = prevfloat(lo_bpos + add_qb)
+                lo_bneg = prevfloat(lo_bneg + add_qb)
+            end
+        end
+        _expired(deadline_ns) && return (nothing, :deadline, :interval, visits, fallbacks, exact_work)
+        if isfinite(lo_spin) && isfinite(lo_bpos) && isfinite(lo_bneg)
+            lo_float = max(lo_spin, lo_bpos, lo_bneg)
+            L_int = _Exact(lo_float)
+            if L_int > U_exact
+                step = ProbingStep(
+                    i, target_orig, probed_orig,
+                    deepcopy(L_int), deepcopy(U_exact),
+                    Tuple(w_vec), Tuple(branch_steps),
+                    c_parent, predecessors, :interval, scope_length, :strong,
+                )
+                return (step, :proved, :interval, visits, fallbacks, exact_work)
+            end
+        end
+        2 * st.active_edges <= max_work - visits ||
+            return (nothing, :work_limit, :interval, visits, fallbacks, exact_work)
+        active_verts = count(==(2), st.fixed)
+        needed_exact = 1 + active_verts + st.active_edges
+        needed_exact <= max_exact_work - exact_work ||
+            return (nothing, :verification_limit, :interval, visits, fallbacks, exact_work)
+        fallbacks += 1
+        exact_work += 1
+        L_spin = direction * c_spin
+        L_bpos = direction * c_bpos
+        L_bneg = direction * c_bpos
+        for u in 1:n
+            st.fixed[u] == 2 || continue
+            _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, fallbacks, exact_work)
+            h_u = direction * _spin_field(ws, u)
+            f_u = direction * _bool_field(ws, u)
+            L_spin -= abs(h_u)
+            L_bpos += min(_Exact(0), f_u)
+            L_bneg += min(2 * h_u, f_u - 2 * h_u)
+            exact_work += 1
+            for (v, q) in st.adjacency[u]
+                _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, fallbacks, exact_work)
+                visits += 1
+                (st.fixed[v] == 2 && u < v) || continue
+                J_uv = direction * _spin_coupling(ws, q)
+                qb_uv = direction * _bool_coupling(ws, q)
+                L_spin -= abs(J_uv)
+                add_qb = min(_Exact(0), qb_uv)
+                L_bpos += add_qb
+                L_bneg += add_qb
+                exact_work += 1
+            end
+        end
+        _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, fallbacks, exact_work)
+        L_exact = max(L_spin, L_bpos, L_bneg)
+        if L_exact > U_exact
+            step = ProbingStep(
+                i, target_orig, probed_orig,
+                deepcopy(L_exact), deepcopy(U_exact),
+                Tuple(w_vec), Tuple(branch_steps),
+                c_parent, predecessors, :exact, scope_length, :strong,
+            )
+            return (step, :proved, :exact, visits, fallbacks, exact_work)
+        else
+            return (nothing, :not_strict, :exact, visits, fallbacks, exact_work)
+        end
+    finally
+        if length(st.trail) > probe_cp._depth
+            rollback!(ws, probe_cp)
+        end
+        st.star_hint = saved_star_hint
+        st.rel_hint = saved_rel_hint
+    end
+end
+
 function _convert_step_bounds(s::_Snapshot, step::DominanceStep,
                               from_map::Union{Nothing,DomainGaugeMap},
                               to_map::Union{Nothing,DomainGaugeMap})
@@ -1122,6 +1439,26 @@ function _transport_one_step(
         cd, fd, qd = _poly_relation_deltas(p, step.eliminated, step.representative, step.orig_sign)
         _poly_apply_deltas!(p, step.eliminated, cd, fd, qd)
         return out
+    elseif step isa ProbingStep
+        pstep = step::ProbingStep
+        new_bsteps = if already_in_target
+            deepcopy(pstep.branch_steps)
+        else
+            p_trial = deepcopy(p)
+            _poly_fix!(p_trial, pstep.variable, pstep.probed_value)
+            Tuple(
+                _transport_one_step(s, p_trial, bstep, from_map, to_map; already_in_target=false)
+                for bstep in pstep.branch_steps
+            )
+        end
+        out = ProbingStep(
+            pstep.variable, pstep.value, pstep.probed_value,
+            deepcopy(pstep.branch_lower), deepcopy(pstep.witness_upper),
+            pstep.witness_state, new_bsteps, deepcopy(c_to),
+            pstep.predecessors, pstep.method, pstep.scope_length, pstep.persistency,
+        )
+        _poly_fix!(p, pstep.variable, pstep.value)
+        return out
     else
         estep = step::EliminationStep
         out = EliminationStep(
@@ -1261,6 +1598,46 @@ function prove_elimination(ws::Workspace, label;
     certificate = _build_proof_certificate(ws, step, map, deadline_ns)
     certificate === nothing && return EliminationAttempt(nothing, :deadline, method, visits, exact_work)
     return EliminationAttempt(certificate, reason, method, visits, exact_work)
+end
+
+"""
+    prove_probing(ws, label, witness; map=nothing, value=nothing,
+                  max_rounds=1, max_trial_fixes=typemax(Int),
+                  max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing)
+
+Prove one certified probing restriction `label => value` without mutating `ws`
+by temporarily conditioning on the opposite branch, propagating bounded trial
+unary dominance (`max_rounds`, `max_trial_fixes`), and strictly refuting the
+branch lower bound (`branch_lower > witness_upper`) against the verified
+parent-scope feasible `witness` (an original-order vector, label dictionary, or
+[`Reconstruction`](@ref)). All trial mutations are rolled back before returning.
+"""
+function prove_probing(
+    ws::Workspace,
+    label,
+    witness;
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+    value=nothing,
+    max_rounds=1,
+    max_trial_fixes=typemax(Int),
+    max_work=typemax(Int),
+    max_exact_work=typemax(Int),
+    deadline_ns=nothing,
+)
+    map === nothing || _validate_domain_map(ws, map; full=true)
+    i = _variable(ws, label)
+    step, reason, method, visits, fallbacks, exact_work = _probing_witness(
+        ws, i, witness;
+        map, value, max_rounds, max_trial_fixes,
+        max_work, max_exact_work, deadline_ns,
+        predecessors=ws._state.proof_count, scope_length=length(ws._state.callers),
+    )
+    if step === nothing
+        return ProbingAttempt(nothing, reason, method, visits, fallbacks, exact_work)
+    end
+    certificate = _build_proof_certificate(ws, step, map, deadline_ns)
+    certificate === nothing && return ProbingAttempt(nothing, :deadline, method, visits, fallbacks, exact_work)
+    return ProbingAttempt(certificate, reason, method, visits, fallbacks, exact_work)
 end
 
 """
@@ -1546,14 +1923,139 @@ function _verify_elimination_step(
     return (true, :verified, cost)
 end
 
+function _poly_branch_lower_bound(p::_PolyState, deadline=nothing)
+    direction = _direction_poly(p)
+    is_bool = p.domain === QT.BoolDomain
+    H_sum = _Exact(0)
+    Q_sum = _Exact(0)
+    for u in 1:p.n
+        _expired(deadline) && return nothing
+        p.active[u] || continue
+        H_sum += p.h_spin[u]
+        for (v, q) in p.adj[u]
+            (p.active[v] && u < v) || continue
+            Q_sum += is_bool ? (q // 4) : q
+        end
+    end
+    c_spin = p.c_spin
+    c_bpos = c_spin - H_sum + Q_sum
+    L_spin = direction * c_spin
+    L_bpos = direction * c_bpos
+    L_bneg = direction * c_bpos
+    for u in 1:p.n
+        _expired(deadline) && return nothing
+        p.active[u] || continue
+        h_u_raw = p.h_spin[u]
+        csum_u = _Exact(0)
+        for (v, q) in p.adj[u]
+            p.active[v] || continue
+            J_uv_raw = is_bool ? (q // 4) : q
+            csum_u += J_uv_raw
+            if u < v
+                dJ = direction * J_uv_raw
+                dqb = 4 * dJ
+                L_spin -= abs(dJ)
+                add_qb = min(_Exact(0), dqb)
+                L_bpos += add_qb
+                L_bneg += add_qb
+            end
+        end
+        f_bpos_raw = 2 * h_u_raw - 2 * csum_u
+        h_u = direction * h_u_raw
+        f_u = direction * f_bpos_raw
+        L_spin -= abs(h_u)
+        L_bpos += min(_Exact(0), f_u)
+        L_bneg += min(2 * h_u, f_u - 2 * h_u)
+    end
+    return max(L_spin, L_bpos, L_bneg)
+end
+
+function _verify_probing_step(
+    p::_PolyState,
+    step::ProbingStep,
+    active_map::Union{Nothing,DomainGaugeMap},
+    assumptions_prefix,
+    prefix_steps,
+    later_assumptions,
+    cost::Int,
+    deadline,
+)
+    u = step.variable
+    1 <= u <= p.n && p.active[u] || return (false, :invalid_step, 0)
+    is_bool = p.domain === QT.BoolDomain
+    low_orig = is_bool ? 0 : -1
+    step.value in (low_orig, 1) && step.probed_value in (low_orig, 1) && step.value != step.probed_value ||
+        return (false, :invalid_value, 0)
+    step.method in (:interval, :exact) && step.persistency === :strong ||
+        return (false, :invalid_method, 0)
+    isempty(later_assumptions) || return (false, :invalid_scope, cost)
+    direction = _direction_poly(p)
+    direction != 0 || return (false, :zero_scale, 0)
+    c_expected = _poly_mapped_constant(p, active_map)
+    _expired(deadline) && return (false, :deadline, cost)
+    c_expected == step.constant || return (false, :invalid_constant, cost)
+    w = step.witness_state
+    length(w) == p.n && all(v -> v in (low_orig, 1), w) ||
+        return (false, :invalid_witness, cost)
+    w[u] == step.value || return (false, :invalid_witness, cost)
+    for (idx, val) in assumptions_prefix
+        w[idx] == val || return (false, :invalid_witness, cost)
+    end
+    for pstep in prefix_steps
+        if pstep isa Union{DominanceStep,ProbingStep}
+            w[pstep.variable] == pstep.value || return (false, :invalid_witness, cost)
+        elseif pstep isa RelationStep
+            s_elim = is_bool ? (2 * w[pstep.eliminated] - 1) : w[pstep.eliminated]
+            s_rep = is_bool ? (2 * w[pstep.representative] - 1) : w[pstep.representative]
+            s_elim == pstep.orig_sign * s_rep || return (false, :invalid_witness, cost)
+        elseif pstep isa EliminationStep
+            idx = 1
+            for (bit_pos, nbr) in enumerate(pstep.neighbors)
+                w[nbr] == 1 && (idx += 1 << (bit_pos - 1))
+            end
+            w[pstep.variable] == pstep.table[idx] || return (false, :invalid_witness, cost)
+        end
+    end
+    w_energy = p.constant
+    for v_idx in 1:p.n
+        _expired(deadline) && return (false, :deadline, cost)
+        p.active[v_idx] || continue
+        w_energy += p.fields[v_idx] * w[v_idx]
+        for (nbr, q) in p.adj[v_idx]
+            (p.active[nbr] && v_idx < nbr) || continue
+            w_energy += q * w[v_idx] * w[nbr]
+        end
+    end
+    U_exact = direction * w_energy
+    step.witness_upper == U_exact || return (false, :invalid_witness, cost)
+    p_trial = deepcopy(p)
+    _poly_fix!(p_trial, u, step.probed_value)
+    for (b_idx, bstep) in enumerate(step.branch_steps)
+        bstep isa DominanceStep && bstep.predecessors == b_idx - 1 &&
+            bstep.method in (:interval, :exact) && bstep.persistency === :strong ||
+            return (false, :invalid_step, cost)
+        b_ok, b_reason, _ = _verify_dominance_step(p_trial, bstep, active_map, (), 0, deadline)
+        b_ok || return (false, b_reason, cost)
+    end
+    L_exact = _poly_branch_lower_bound(p_trial, deadline)
+    L_exact === nothing && return (false, :deadline, cost)
+    enclosure = step.method === :exact ? (step.branch_lower == L_exact) :
+                                         (step.branch_lower <= L_exact)
+    refuted = step.branch_lower > step.witness_upper
+    enclosure && refuted || return (false, :invalid_bound, cost)
+    _poly_fix!(p, u, step.value)
+    return (true, :verified, cost)
+end
+
 """
     verify_certificate(ws, certificate; map=nothing, max_work=typemax(Int), deadline_ns=nothing)
 
 Independently recheck source identity, current caller scope, optional
 [`DomainGaugeMap`](@ref) provenance and the complete ordered reduction chain
-([`DominanceStep`](@ref), [`RelationStep`](@ref), [`EliminationStep`](@ref))
-using exact original-coefficient evolution and domain/gauge conversion.
-Never trust cached workspace fields or an authenticated identifier alone.
+([`DominanceStep`](@ref), [`RelationStep`](@ref), [`EliminationStep`](@ref),
+[`ProbingStep`](@ref)) using exact original-coefficient evolution and
+domain/gauge conversion. Never trust cached workspace fields or an
+authenticated identifier alone.
 """
 function verify_certificate(ws::Workspace, cert::DominanceCertificate;
                             map::Union{Nothing,DomainGaugeMap}=nothing,
@@ -1610,7 +2112,7 @@ function verify_certificate(ws::Workspace, cert::DominanceCertificate;
     base_step_cost = length(s.linear.values) + length(s.quadratic.values)
     introduced = 0
     for (k,step) in enumerate(cert.steps)
-        step isa Union{DominanceStep,RelationStep,EliminationStep} && step.predecessors == k-1 ||
+        step isa Union{DominanceStep,RelationStep,EliminationStep,ProbingStep} && step.predecessors == k-1 ||
             return VerificationResult(false,:invalid_predecessors,cost)
         count = step.scope_length == -1 ? length(cert.assumptions) : step.scope_length
         introduced <= count <= length(cert.assumptions) ||
@@ -1621,7 +2123,7 @@ function verify_certificate(ws::Workspace, cert::DominanceCertificate;
             _poly_fix!(p, i, v)
         end
         introduced = count
-        step_cost = base_step_cost
+        step_cost = step isa ProbingStep ? base_step_cost * (1 + length(step.branch_steps)) : base_step_cost
         step_cost <= max_work - cost || return VerificationResult(false,:work_limit,cost)
         _expired(deadline_ns) && return VerificationResult(false,:deadline,cost)
         valid, reason, visits = if step isa DominanceStep
@@ -1629,6 +2131,13 @@ function verify_certificate(ws::Workspace, cert::DominanceCertificate;
             _verify_dominance_step(p, step, active_map, later, step_cost, deadline_ns)
         elseif step isa RelationStep
             _verify_relation_step(p, step, active_map, step_cost, deadline_ns)
+        elseif step isa ProbingStep
+            later = cert.assumptions[(count + 1):end]
+            _verify_probing_step(
+                p, step, active_map,
+                cert.assumptions[1:count], cert.steps[1:(k - 1)], later,
+                step_cost, deadline_ns,
+            )
         else
             _verify_elimination_step(p, step::EliminationStep, active_map, step_cost, deadline_ns)
         end
