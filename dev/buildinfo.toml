@@ -1,7 +1,7 @@
 channel = "dev"
-commit = "45c132c2a1f7bd68a8c16dc14f993a8417098053"
+commit = "a2020ea17cd351142b3cd39416826a671a39442f"
 release_tag = ""
-tree = "1e4383b481f51ac05b2e30e226cf3ed4ea4a6125"
+tree = "3f1093bf3fbb5efb1ae329013aaa131fb8214955"
 package = "QUBOPreprocessing"
 dirty = false
 version = "0.1.0"
