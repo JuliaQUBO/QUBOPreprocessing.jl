@@ -38,27 +38,31 @@ function _incremental(s::_Snapshot;rules=:identity)
         (_Exact(s.offset) + field_sum // 2 + quad_sum // 4) :
         (_Exact(s.offset) - field_sum + quad_sum)
     lower,upper = nothing,nothing
-    if rules in (:dominance, :elimination, :relations)
+    if rules in (:dominance, :elimination, :relations, :mixed)
         lower,upper = copy(fields),copy(fields)
         for i in 1:n, (_,q) in adjacency[i]
             lower[i] += s.domain === QT.BoolDomain ? min(0,q) : -abs(q)
             upper[i] += s.domain === QT.BoolDomain ? max(0,q) : abs(q)
         end
     end
-    queue = rules in (:dominance, :elimination, :relations) ? collect(1:n) : Int[]
-    queued = rules in (:dominance, :elimination, :relations) ? trues(n) : falses(n)
-    elim_queues = ntuple(b -> Int[i for i in 1:n if degrees[i] == b - 1], 4)
-    elim_queued = ntuple(b -> BitVector(degrees[i] == b - 1 for i in 1:n), 4)
+    queue = rules in (:dominance, :elimination, :relations, :mixed) ? collect(1:n) : Int[]
+    queued = rules in (:dominance, :elimination, :relations, :mixed) ? trues(n) : falses(n)
+    is_zero_spin(i) = iszero(s.domain === QT.BoolDomain ? dual_fields[i] : fields[i])
+    elim_queues = ntuple(b -> Int[i for i in 1:n if degrees[i] == b - 1 && (b < 4 || is_zero_spin(i))], 4)
+    elim_queued = ntuple(b -> BitVector(degrees[i] == b - 1 && (b < 4 || is_zero_spin(i)) for i in 1:n), 4)
     elim_blocked_fill = ntuple(_ -> fill(typemax(Int), n), 4)
     rel_queue = Int[i for i in 1:n if degrees[i] >= 1]
     rel_queued = BitVector(degrees[i] >= 1 for i in 1:n)
+    m_init = sum(degrees; init=0) ÷ 2
     return _Incremental(Dict{Any,Int}(v=>i for (i,v) in enumerate(s.labels)),
                         adjacency, adj_pos, fields, _Exact(s.offset), fill(Int8(2), n),
                         queue, queued, _UndoEntry[], 0, uuid4(),rules,lower,upper,1,
                         Int[],Int[],zeros(Int,n),0,0,0,0,0,0,dual_fields,dual_constant,
                         degrees, initial_degrees, elim_queues, elim_queued, [1, 1, 1, 1],
                         elim_blocked_fill,
-                        rel_queue, rel_queued, 1, fill(typemax(Int), n), falses(n))
+                        rel_queue, rel_queued, 1, fill(typemax(Int), n), trues(n),
+                        (Int[], Int[], Int[], Int[]), Int[], Int[], 0,
+                        m_init, m_init, 1, 1)
 end
 
 """
@@ -260,19 +264,7 @@ function _fix!(ws::Workspace,i::Int,v::Int;proof=nothing,max_work=typemax(Int),d
     st.dual_constant = dual_constant
     st.fixed[i] = v
     st.degrees[i] = 0
-    for (j, df) in updated_dual
-        st.dual_fields[j] = df
-        st.degrees[j] -= 1
-        d_j = st.degrees[j]
-        if d_j <= 3 && !st.elim_queued[d_j + 1][j]
-            push!(st.elim_queues[d_j + 1], j)
-            st.elim_queued[d_j + 1][j] = true
-        end
-        if d_j >= 1 && !st.rel_queued[j]
-            push!(st.rel_queue, j)
-            st.rel_queued[j] = true
-        end
-    end
+    st.active_edges -= length(updated_dual)
     for (j,field,lower,upper) in updated
         st.fields[j] = field
         if st.lower !== nothing
@@ -281,6 +273,20 @@ function _fix!(ws::Workspace,i::Int,v::Int;proof=nothing,max_work=typemax(Int),d
         if !st.queued[j]
             push!(st.queue, j)
             st.queued[j] = true
+        end
+    end
+    for (j, df) in updated_dual
+        st.dual_fields[j] = df
+        st.degrees[j] -= 1
+        d_j = st.degrees[j]
+        if d_j <= 3 && (d_j < 3 || iszero(_spin_field(ws, j))) && !st.elim_queued[d_j + 1][j]
+            push!(st.elim_queues[d_j + 1], j)
+            st.elim_queued[d_j + 1][j] = true
+        end
+        d_j == 3 && iszero(_spin_field(ws, j)) && (st.star_hint = st.elim_heads[4])
+        if d_j >= 1 && !st.rel_queued[j]
+            push!(st.rel_queue, j)
+            st.rel_queued[j] = true
         end
     end
     return UpdateReport(:applied, visits, 1)
@@ -497,6 +503,7 @@ function _apply_reduction!(
     st.dual_constant = new_dual_constant
     st.fixed[u] = status
     st.degrees[u] = 0
+    st.active_edges += (-old_dual[1][3] + sum(values(deg_map); init=0)) ÷ 2
     for w in touched
         st.fields[w] += f_map[w]
         st.dual_fields[w] += is_bool ? (f_map[w] // 2 + qsum_map[w] // 4) :
@@ -511,10 +518,11 @@ function _apply_reduction!(
             st.queued[w] = true
         end
         d_w = st.degrees[w]
-        if d_w <= 3 && !st.elim_queued[d_w + 1][w]
+        if d_w <= 3 && (d_w < 3 || iszero(_spin_field(ws, w))) && !st.elim_queued[d_w + 1][w]
             push!(st.elim_queues[d_w + 1], w)
             st.elim_queued[d_w + 1][w] = true
         end
+        d_w == 3 && iszero(_spin_field(ws, w)) && (st.star_hint = st.elim_heads[4])
         if d_w >= 1 && !st.rel_queued[w]
             push!(st.rel_queue, w)
             st.rel_queued[w] = true
@@ -577,19 +585,27 @@ function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
                 st.head = undo.head
                 st.queued[undo.index] = undo.queued
             elseif b == -1
+                u = undo.index
+                st.rel_blocked_fill[u] < typemax(Int) && pop!(st.rel_deferred)
+                !st.rel_checked_weak[u] && pop!(st.rel_weak_deferred)
+                if st.rel_checked_weak[u] != undo.checked_weak
+                    st.unweak_rel_count += undo.checked_weak ? -1 : 1
+                end
                 st.rel_head = undo.head
-                st.rel_queued[undo.index] = undo.queued
-                st.rel_blocked_fill[undo.index] = undo.blocked_fill
-                st.rel_checked_weak[undo.index] = undo.checked_weak
+                st.rel_queued[u] = undo.queued
+                st.rel_blocked_fill[u] = undo.blocked_fill
+                st.rel_checked_weak[u] = undo.checked_weak
             elseif b == -2
                 pop!(st.rel_queue)
                 st.rel_queued[undo.index] = undo.queued
                 st.rel_blocked_fill[undo.index] = undo.blocked_fill
                 st.rel_checked_weak[undo.index] = undo.checked_weak
             elseif 1 <= b <= 4
+                u = undo.index
+                st.elim_blocked_fill[b][u] < typemax(Int) && pop!(st.elim_deferred[b])
                 st.elim_heads[b] = undo.head
-                st.elim_queued[b][undo.index] = undo.queued
-                st.elim_blocked_fill[b][undo.index] = undo.blocked_fill
+                st.elim_queued[b][u] = undo.queued
+                st.elim_blocked_fill[b][u] = undo.blocked_fill
             else
                 eb = b - 4
                 pop!(st.elim_queues[eb])
@@ -622,10 +638,13 @@ function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
                     st.lower[j], st.upper[j] = lower, upper
                 end
             end
+            deg_delta = 0
             for (j, df, deg) in undo.dual_fields
+                deg_delta += deg - st.degrees[j]
                 st.dual_fields[j] = df
                 st.degrees[j] = deg
             end
+            st.active_edges += deg_delta ÷ 2
             while length(st.queue) > undo.queue_length
                 st.queued[pop!(st.queue)] = false
             end
@@ -655,6 +674,7 @@ function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
                 st.dual_fields[j] = df
                 st.degrees[j] += 1
             end
+            st.active_edges += length(undo.dual_fields)
             while length(st.queue) > undo.queue_length
                 st.queued[pop!(st.queue)] = false
             end
@@ -681,6 +701,8 @@ function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
             st.dual_constant = undo.dual_constant
         end
     end
+    st.star_hint = st.elim_heads[4]
+    st.rel_hint = st.rel_head
     return report ? captured : ws
 end
 

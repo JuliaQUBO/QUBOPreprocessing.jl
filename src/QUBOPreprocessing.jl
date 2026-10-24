@@ -27,7 +27,9 @@ export DomainGaugeMap, domain_map, map_value, lift_value, map_state, lift_state,
 
 export propagate!, PropagationReport, deductions, reductions, export_certificate,
        apply_dominance!, contract_relation!, contract_relations!, relation_map,
-       eliminate_variable!, eliminate_low_degree!, apply_weak_batch!
+       eliminate_variable!, eliminate_low_degree!, apply_weak_batch!,
+       SchedulePassSummary, ScheduleReport, schedule_reductions!,
+       PhaseAccounting, PipelineAccounting, audit_pipeline!
 export sample_preprocessed, SolverResult
 
 include("trail.jl")

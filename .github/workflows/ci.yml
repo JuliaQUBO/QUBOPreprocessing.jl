@@ -57,6 +57,7 @@ jobs:
           julia --project=. --startup-file=no examples/elimination.jl
           julia --project=. --startup-file=no examples/relations.jl
           julia --project=. --startup-file=no examples/branch_search.jl
+          julia --project=. --startup-file=no examples/scheduler.jl
       - name: Process core source coverage
         if: matrix.julia == '1.10' && matrix.os == 'ubuntu-latest' && matrix.dependencies == 'compatible'
         uses: julia-actions/julia-processcoverage@v1

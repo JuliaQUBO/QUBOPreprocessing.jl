@@ -143,8 +143,8 @@ mutable struct Workspace
         return new(snapshot, Generation(uuid4(), uuid4()), state)
     end
 end
-_check_rules(rules) = rules in (:identity,:dominance,:elimination,:relations) ? nothing :
-    throw(ArgumentError("supported rules are :identity, :dominance, :elimination and :relations; requested $(repr(rules))"))
+_check_rules(rules) = rules in (:identity,:dominance,:elimination,:relations,:mixed) ? nothing :
+    throw(ArgumentError("supported rules are :identity, :dominance, :elimination, :relations and :mixed; requested $(repr(rules))"))
 
 """`generation(ws_or_export)` returns its immutable source/workspace identity."""
 generation(ws::Workspace) = ws._generation
@@ -310,6 +310,7 @@ function preprocess(model; rules=:identity, kwargs...)
     rules === :dominance && return ws, propagate!(ws;kwargs...)
     rules === :elimination && return ws, eliminate_low_degree!(ws;kwargs...)
     rules === :relations && return ws, contract_relations!(ws;kwargs...)
-    isempty(kwargs) || throw(ArgumentError("propagation limits require rules=:dominance, rules=:elimination or rules=:relations"))
+    rules === :mixed && return ws, schedule_reductions!(ws;kwargs...)
+    isempty(kwargs) || throw(ArgumentError("propagation limits require rules=:dominance, rules=:elimination, rules=:relations or rules=:mixed"))
     return ws, IdentityReport(generation(ws), :identity, :quiescent, 0, 0)
 end

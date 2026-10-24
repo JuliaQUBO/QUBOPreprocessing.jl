@@ -100,4 +100,12 @@ mutable struct _Incremental
     rel_head::Int
     rel_blocked_fill::Vector{Int}
     rel_checked_weak::BitVector
+    elim_deferred::NTuple{4,Vector{Int}}
+    rel_deferred::Vector{Int}
+    rel_weak_deferred::Vector{Int}
+    unweak_rel_count::Int
+    active_edges::Int
+    initial_edges::Int
+    star_hint::Int
+    rel_hint::Int
 end
