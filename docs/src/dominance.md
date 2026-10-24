@@ -360,3 +360,63 @@ Because each candidate probe visits the active graph to evaluate ``L``, probing
 only pays off when a strong primal witness is already available and cheap
 dominance is blocked by local frustration on a small candidate set (`candidates`,
 `max_candidates`, `max_rounds=1`).
+
+## Optional certified roof-duality pass with strong persistency
+
+When attractive (submodular or gauge-submodular) couplings lock a cluster of
+variables together without any single variable having a strictly dominant worst-case
+unary bound ``|\tilde{h}_u| > \sum_v |\tilde{J}_{uv}|``, the optional exact
+rational roof-duality pass (`prove_roof_duality`, `apply_roof_duality!`) can
+compute the Boros–Hammer–Tavares (2006) posiform / implication-network lower
+bound and extract **strongly persistent** assignments without introducing any
+external C++/Python dependency or floating-point capacity clipping:
+
+1. **Canonical symmetric implication network (``G_{\text{imp}}``):** on the
+   direction-normalized active spin polynomial
+   ``\tilde{E}(s) = \tilde{c}_{\text{spin}} + \sum_{u \in F} \tilde{h}_u s_u + \sum_{u<v \in F} \tilde{J}_{uv} s_u s_v``,
+   each original variable ``u \in \{1,\dots,n\}`` is represented by literal
+   vertices ``x_u = 2u - 1`` (``s_u = +1``) and ``\bar{x}_u = 2u`` (``s_u = -1``),
+   plus source ``S = 2n + 1`` and sink ``T = 2n + 2``. Starting from the base
+   constant ``C_{\text{base}} = \tilde{c}_{\text{spin}} - \sum_{u \in F} |\tilde{h}_u| - \sum_{u<v \in F} |\tilde{J}_{uv}|``:
+   - for ``\tilde{h}_u > 0``, directed arcs ``S \to \bar{x}_u`` and ``x_u \to T``
+     receive exact rational capacity ``|\tilde{h}_u|``; for ``\tilde{h}_u < 0``,
+     directed arcs ``S \to x_u`` and ``\bar{x}_u \to T`` receive capacity ``|\tilde{h}_u|``;
+   - for ``\tilde{J}_{uv} < 0`` (attractive), symmetric pairs ``x_u \leftrightarrow x_v``
+     and ``\bar{x}_u \leftrightarrow \bar{x}_v`` receive capacity ``|\tilde{J}_{uv}|``;
+   - for ``\tilde{J}_{uv} > 0`` (repulsive), symmetric pairs ``x_u \leftrightarrow \bar{x}_v``
+     and ``\bar{x}_u \leftrightarrow x_v`` receive capacity ``|\tilde{J}_{uv}|``.
+   Because ``(\tilde{c}_{\text{spin}}, \tilde{h}_u, \tilde{J}_{uv})`` is the unique
+   symmetric normal form of the quadratic pseudo-Boolean function, ``G_{\text{imp}}``
+   and ``L_{\text{roof}} = C_{\text{base}} + \operatorname{MaxFlow}(G_{\text{imp}})``
+   are strictly invariant under binary↔spin domain conversion and `DomainGaugeMap`
+   transformations.
+2. **Exact flow witness and strong-persistency extraction:** Dinic's maximum-flow
+   algorithm runs in exact `Rational{BigInt}` arithmetic under `max_work`,
+   `max_exact_work`, and `deadline_ns`. From the residual network ``G_f``,
+   forward reachability from ``S`` yields the mandatory source-cut set ``\mathcal{R}_S``
+   and backward reachability to ``T`` yields the mandatory sink-cut set ``\mathcal{R}_T``.
+   By Boros–Hammer–Tavares (2006) Theorem 7, variables with
+   ``x_u \in \mathcal{R}_S \land \bar{x}_u \in \mathcal{R}_T`` take ``s_u = +1`` in
+   **every** scoped optimum, and variables with
+   ``\bar{x}_u \in \mathcal{R}_S \land x_u \in \mathcal{R}_T`` take ``s_u = -1`` in
+   **every** scoped optimum. Multiple-optimum ties (where literals lie outside
+   ``\mathcal{R}_S \cup \mathcal{R}_T``) remain unfixed in strong mode.
+3. **Independent primal–dual verification (`RoofDualityStep`):** each recorded
+   [`RoofDualityStep`](@ref) stores `roof_lower`, `max_flow`, the positive flow
+   arcs `flow_edges`, and `batch_fixings`. `verify_certificate` independently
+   reconstructs ``G_{\text{imp}}`` from raw source storage, verifies capacity
+   bounds ``0 < f_{ab} \le C_{ab}`` and flow conservation ``\nabla \cdot f = 0``
+   at all internal vertices, recomputes ``\mathcal{R}_S`` and ``\mathcal{R}_T``,
+   verifies zero residual ``S``–``T`` reachability and exact primal–dual cut
+   equality ``\operatorname{val}(f) = \operatorname{Cap}(\mathcal{R}_S, V \setminus \mathcal{R}_S) = \operatorname{Cap}(V \setminus \mathcal{R}_T, \mathcal{R}_T)``,
+   and checks literal membership in ``(\mathcal{R}_S, \mathcal{R}_T)`` for every
+   fixed variable.
+4. **Operating envelope and adopt/defer guidance:** [`RoofDualityAttempt`](@ref)
+   and [`RoofDualityReport`](@ref) report phase-separated `graph_work`, `flow_work`,
+   `verification_work`, and `materialization_work` counters. Roof duality is kept
+   off by default in `Workspace`, `propagate!`, and `schedule_reductions!` because
+   constructing ``G_{\text{imp}}`` and solving exact rational max-flow is heavier
+   than ``O(\text{touched})`` local dominance and yields zero fixings on balanced
+   zero-field frustrated instances (`:no_persistency`). Call `apply_roof_duality!`
+   explicitly once after cheap propagation quiesces when attractive couplings block
+   unary dominance.
