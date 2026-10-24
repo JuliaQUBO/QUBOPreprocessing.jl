@@ -156,6 +156,11 @@ struct _NormalizedBoolModel{V}
     quadratic::Dict{Tuple{Int,Int},Rational{BigInt}}
 end
 
+function _norm_sign(sense::Symbol, scale::Rational{BigInt})
+    iszero(scale) && return 0 // 1
+    return (sense === :max ? (-1 // 1) : (1 // 1)) * (scale < 0 ? (-1 // 1) : (1 // 1))
+end
+
 function _extract_normalized_bool_model(model::QT.AbstractModel)
     vars = collect(QT.variables(model))
     n = length(vars)
@@ -164,7 +169,7 @@ function _extract_normalized_bool_model(model::QT.AbstractModel)
     sense = Symbol(QT.sense(model))
     scale = _exact_rational_coeff(QT.scale(model))
     offset = _exact_rational_coeff(QT.offset(model))
-    sgn = sense === :max ? (-1 // 1) : (1 // 1)
+    sgn = _norm_sign(sense, scale)
 
     raw_L = zeros(Rational{BigInt}, n)
     for (i, c) in QT.linear_terms(model)
@@ -214,7 +219,7 @@ end
 
 function _to_qubotools_model(nm::_NormalizedBoolModel{V}) where {V}
     n = length(nm.variables)
-    sgn = nm.sense === :max ? (-1 // 1) : (1 // 1)
+    sgn = _norm_sign(nm.sense, nm.scale)
     L_idx = Dict{Int,Rational{BigInt}}()
     Q_idx = Dict{Tuple{Int,Int},Rational{BigInt}}()
     if nm.domain === :bool
@@ -370,6 +375,8 @@ function qubolite_compression_candidates(
     Q_cur = copy(nm.quadratic)
 
     c_neg, c_pos, work = _local_bounds(n, Q_cur)
+    c_neg_orig = copy(c_neg)
+    c_pos_orig = copy(c_pos)
     candidates = CompressionCandidate{V}[]
     if work > max_work
         return (
@@ -456,8 +463,11 @@ function qubolite_compression_candidates(
                     end
                 end
                 if best_target < Qij
-                    unary_dom = (L_orig[i] + c_neg[i] > 0) || (L_orig[j] + c_neg[j] > 0)
-                    pair_dom = (L_orig[i] + c_i_neg_excl + Qij > 0) || (L_orig[j] + c_j_neg_excl + Qij > 0)
+                    qij_orig = get(Q_orig, (i, j), 0 // 1)
+                    c_i_neg_orig_excl = c_neg_orig[i] - min(0 // 1, qij_orig)
+                    c_j_neg_orig_excl = c_neg_orig[j] - min(0 // 1, qij_orig)
+                    unary_dom = (L_orig[i] + c_neg_orig[i] > 0) || (L_orig[j] + c_neg_orig[j] > 0)
+                    pair_dom = (L_orig[i] + c_i_neg_orig_excl + qij_orig > 0) || (L_orig[j] + c_j_neg_orig_excl + qij_orig > 0)
                     sub_rule = unary_dom ? :unary_dominance : (pair_dom ? :pair_dominance : :none)
                     rule_sym = endpoint === :closed ? :qubolite_quadratic_pos_closed : :qubolite_quadratic_pos_open
                     cand = CompressionCandidate{V}(
@@ -497,7 +507,7 @@ function qubolite_compression_candidates(
                     end
                 end
                 if best_target > Qij
-                    unary_dom = (L_orig[i] + c_pos[i] < 0) || (L_orig[j] + c_pos[j] < 0)
+                    unary_dom = (L_orig[i] + c_pos_orig[i] < 0) || (L_orig[j] + c_pos_orig[j] < 0)
                     sub_rule = unary_dom ? :unary_dominance : :none
                     rule_sym = endpoint === :closed ? :qubolite_quadratic_neg_closed : :qubolite_quadratic_neg_open
                     cand = CompressionCandidate{V}(
@@ -541,7 +551,7 @@ function _eval_norm_bool(nm::_NormalizedBoolModel, x_bits::Vector{Int})
 end
 
 function _norm_to_user_objective(nm::_NormalizedBoolModel, norm_val::Rational{BigInt})
-    sgn = nm.sense === :max ? (-1 // 1) : (1 // 1)
+    sgn = _norm_sign(nm.sense, nm.scale)
     return nm.scale * (nm.offset + sgn * norm_val)
 end
 
@@ -652,6 +662,15 @@ function audit_compression(
         nm1 = _extract_normalized_bool_model(transformed)
         nm0.variables == nm1.variables || throw(ArgumentError("original and transformed models must have the same variables"))
         cands, bound_work = _infer_diff_candidates(nm0, nm1)
+        if bound_work > max_work
+            metrics = compression_metrics(original, transformed)
+            return CompressionAuditReport{V}(
+                :work_limit_exceeded, :unverified, false, false, nothing, 0 // 1,
+                0 // 1, 0 // 1, 0 // 1, 0, 0, 0, nothing, nothing,
+                false, :none, :defer, :audit_budget_exceeded, cands, metrics,
+                0, bound_work, 0, 0, bound_work,
+            )
+        end
     end
 
     metrics = compression_metrics(original, _to_qubotools_model(nm1))

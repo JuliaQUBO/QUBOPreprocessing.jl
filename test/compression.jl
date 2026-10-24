@@ -121,6 +121,31 @@ import QUBOTools as QT
         @test rep_open.subsumed_by_dominance
         @test rep_open.subsuming_rule === :unary_dominance
         @test rep_open.decision === :adopt_via_exact_elimination
+
+        # Negative scale under :min and :max senses and zero scale:
+        m_neg_min = QT.Model(Dict(:x1 => 1.0), Dict{Tuple{Symbol,Symbol},Float64}(); scale=-1.0, offset=0.5, sense=:min, domain=:bool)
+        ws_neg = Workspace(m_neg_min)
+        @test prove_dominance(ws_neg, :x1).certificate.steps[1].value == 1
+        rep_neg_open = audit_compression(m_neg_min; endpoint=:open, epsilon=1 // 2)
+        @test rep_neg_open.relation === :exact_optimum_set
+        @test rep_neg_open.original_optimal_value == -3 // 2
+        @test rep_neg_open.subsumed_by_dominance
+        rep_neg_closed = audit_compression(m_neg_min; endpoint=:closed)
+        @test rep_neg_closed.relation === :introduced_suboptimal_tie
+        @test !rep_neg_closed.residual_to_original_valid
+        @test rep_neg_closed.introduced_suboptimal_witness == [0]
+
+        m_neg_max = QT.Model(Dict(:x1 => 1.0), Dict{Tuple{Symbol,Symbol},Float64}(); scale=-2.0, offset=0.0, sense=:max, domain=:bool)
+        rep_neg_max = audit_compression(m_neg_max; endpoint=:open, epsilon=1 // 2)
+        @test rep_neg_max.relation === :exact_optimum_set
+        @test rep_neg_max.original_optimal_value == 0 // 1
+        @test rep_neg_max.subsumed_by_dominance
+
+        m_zero_scale = QT.Model(Dict(:x1 => 1.0), Dict{Tuple{Symbol,Symbol},Float64}(); scale=0.0, offset=2.0, sense=:min, domain=:bool)
+        rep_zero = audit_compression(m_zero_scale)
+        @test rep_zero.relation === :exact_optimum_set
+        @test rep_zero.original_optima_count == 2
+        @test rep_zero.decision === :noop
     end
 
     @testset "6. Positive coupling compression without unary dominance cannot sparsify (Q12' > 0)" begin
