@@ -10,7 +10,12 @@ or use `preprocess(model; rules=:dominance, limits...)`. For queue-driven
 degree-0/1/2 exact local elimination (including arbitrary local fields, fill-edge
 merging/cancellation and optional alternating dominance/elimination cascades),
 select `Workspace(model; rules=:elimination)` or call
-`eliminate_low_degree!(ws; cascade_dominance=true, ...)`. Identity remains the
+`eliminate_low_degree!(ws; cascade_dominance=true, ...)`. For queue-driven
+certified pair relations and reversible signed contractions (`:interval`, `:exact`
+and Glover–Lewis–Kochenberger cross-endpoint `:glk_pair`), select
+`Workspace(model; rules=:relations)` or call
+`contract_relations!(ws; max_fill=..., cascade_dominance=..., ...)` and inspect
+active representatives/parities via `relation_map(ws)`. Identity remains the
 default. Neither path dispatches a solver or implicitly materializes a residual.
 In pure dominance mode (`propagate!(ws)`), only strong unary dominance is enabled:
 every reported value holds in **all** optima within the current caller scope.

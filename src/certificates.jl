@@ -39,9 +39,12 @@ original canonical spin coordinates (equivalently ``x_u = x_v`` for
 ``\\sigma_{\\text{orig}} = +1`` and ``x_u = 1 - x_v`` for
 ``\\sigma_{\\text{orig}} = -1`` in binary coordinates), and
 ``t_{\\text{eliminated}} = \\sigma t_{\\text{representative}}`` (`sign`) in the
-certificate's active coordinate representation. `lower` and `upper` enclose the
-normalized single-flip spin energy difference
+certificate's active coordinate representation. For `method in (:interval, :exact)`,
+`lower` and `upper` enclose the normalized single-flip spin energy difference
 ``-\\sigma \\tilde{J}_{uv} \\mp (|\\tilde{h}_u| + \\sum_{w \\ne v} |\\tilde{J}_{uw}|)``.
+For `method === :glk_pair`, `lower` and `upper` record the exact Glover–Lewis–Kochenberger
+cross-endpoint flip margins ruling out the two violating states
+``(t_u, t_v) \\in \\{(-\\sigma, +1), (+\\sigma, -1)\\}``.
 `persistency` is `:strong` when `lower > 0` and `:weak` when `lower == 0`.
 """
 struct RelationStep <: _ProofRecord
@@ -557,7 +560,7 @@ function _relation_witness(ws::Workspace, u::Int, v::Int;
     end
     degree <= max_work - visits || return (nothing, :work_limit, :interval, visits, 0, 0)
     degree < max_exact_work || return (nothing, :verification_limit, :interval, visits, 0, 0)
-    rad_exact = abs(h_u)
+    rad_u_other = _Exact(0)
     center_exact = _Exact(0)
     exact_work = 1
     for (w, q) in st.adjacency[u]
@@ -569,11 +572,12 @@ function _relation_witness(ws::Workspace, u::Int, v::Int;
         if w == v
             center_exact = -σ * J_uw
         else
-            rad_exact += abs(J_uw)
+            rad_u_other += abs(J_uw)
         end
         exact_work += 1
     end
     _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, 1, exact_work)
+    rad_exact = abs(h_u) + rad_u_other
     lower = center_exact - rad_exact
     upper = center_exact + rad_exact
     if lower > 0 || (allow_weak && lower >= 0)
@@ -582,6 +586,42 @@ function _relation_witness(ws::Workspace, u::Int, v::Int;
         step = RelationStep(u, v, σ, orig_σ, deepcopy(lower), deepcopy(upper), deepcopy(c_val),
                             predecessors, :exact, scope_length, pers)
         return (step, :proved, :exact, visits, 1, exact_work)
+    end
+    best_u = center_exact + abs(h_u) - rad_u_other
+    if !iszero(q_uv) && !iszero(h_u) && (best_u > 0 || (allow_weak && best_u >= 0))
+        deg_v = length(st.adjacency[v])
+        deg_v <= max_work - visits || return (nothing, :work_limit, :glk_pair, visits, 1, exact_work)
+        1 + deg_v <= max_exact_work - exact_work || return (nothing, :verification_limit, :glk_pair, visits, 1, exact_work)
+        h_v = direction * g_v * _spin_field(ws, v)
+        exact_work += 1
+        rad_v_other = _Exact(0)
+        for (w, q) in st.adjacency[v]
+            _expired(deadline_ns) && return (nothing, :deadline, :glk_pair, visits, 1, exact_work)
+            visits += 1
+            st.fixed[w] == 2 || continue
+            if w != u
+                g_w = map === nothing ? 1 : map.gauge[w]
+                J_vw = direction * (g_v * g_w) * _spin_coupling(ws, q)
+                rad_v_other += abs(J_vw)
+            end
+            exact_work += 1
+        end
+        _expired(deadline_ns) && return (nothing, :deadline, :glk_pair, visits, 1, exact_work)
+        m_u_1 = center_exact - σ * h_u - rad_u_other
+        m_u_2 = center_exact + σ * h_u - rad_u_other
+        m_v_1 = center_exact + h_v - rad_v_other
+        m_v_2 = center_exact - h_v - rad_v_other
+        lo_a, hi_a = minmax(m_u_1, m_v_2)
+        lo_b, hi_b = minmax(m_v_1, m_u_2)
+        lo_glk, hi_glk = (lo_a > lo_b || (lo_a == lo_b && hi_a >= hi_b)) ? (lo_a, hi_a) : (lo_b, hi_b)
+        if lo_glk > 0 || (allow_weak && lo_glk >= 0)
+            c_val = _mapped_constant(ws, map)
+            pers = lo_glk > 0 ? :strong : :weak
+            step = RelationStep(u, v, σ, orig_σ, deepcopy(lo_glk), deepcopy(hi_glk), deepcopy(c_val),
+                                predecessors, :glk_pair, scope_length, pers)
+            return (step, :proved, :glk_pair, visits, 1, exact_work)
+        end
+        return (nothing, :not_strict, :glk_pair, visits, 1, exact_work)
     end
     return (nothing, :not_strict, :exact, visits, 1, exact_work)
 end
@@ -1359,7 +1399,7 @@ function _verify_relation_step(
     expected_sign = active_map === nothing ? step.orig_sign :
         (active_map.gauge[u] * active_map.gauge[v] * step.orig_sign)
     step.sign == expected_sign || return (false, :invalid_value, 0)
-    step.method in (:interval, :exact) && step.persistency in (:strong, :weak) ||
+    step.method in (:interval, :exact, :glk_pair) && step.persistency in (:strong, :weak) ||
         return (false, :invalid_method, 0)
     direction = _direction_poly(p)
     direction != 0 || return (false, :zero_scale, 0)
@@ -1368,7 +1408,8 @@ function _verify_relation_step(
     c_expected == step.constant || return (false, :invalid_constant, cost)
     is_bool = p.domain === QT.BoolDomain
     g_u = active_map === nothing ? 1 : active_map.gauge[u]
-    rad = abs(direction * g_u * p.h_spin[u])
+    h_u = direction * g_u * p.h_spin[u]
+    rad_u_other = _Exact(0)
     center = _Exact(0)
     for (nbr, q) in p.adj[u]
         _expired(deadline) && return (false, :deadline, cost)
@@ -1378,14 +1419,40 @@ function _verify_relation_step(
         if nbr == v
             center = -step.sign * (direction * J_uw)
         else
-            rad += abs(direction * J_uw)
+            rad_u_other += abs(direction * J_uw)
         end
     end
-    lower = center - rad
-    upper = center + rad
-    _expired(deadline) && return (false, :deadline, cost)
-    enclosure = step.method === :exact ? (step.lower == lower && step.upper == upper) :
-                                         (step.lower <= lower <= upper <= step.upper)
+    if step.method === :glk_pair
+        (!iszero(center) && !iszero(h_u)) || return (false, :invalid_bound, cost)
+        g_v = active_map === nothing ? 1 : active_map.gauge[v]
+        h_v = direction * g_v * p.h_spin[v]
+        rad_v_other = _Exact(0)
+        for (nbr, q) in p.adj[v]
+            _expired(deadline) && return (false, :deadline, cost)
+            p.active[nbr] || continue
+            if nbr != u
+                g_nbr = active_map === nothing ? 1 : active_map.gauge[nbr]
+                J_vw = (g_v * g_nbr) * (is_bool ? (q // 4) : q)
+                rad_v_other += abs(direction * J_vw)
+            end
+        end
+        _expired(deadline) && return (false, :deadline, cost)
+        m_u_1 = center - step.sign * h_u - rad_u_other
+        m_u_2 = center + step.sign * h_u - rad_u_other
+        m_v_1 = center + h_v - rad_v_other
+        m_v_2 = center - h_v - rad_v_other
+        lo_a, hi_a = minmax(m_u_1, m_v_2)
+        lo_b, hi_b = minmax(m_v_1, m_u_2)
+        lower, upper = (lo_a > lo_b || (lo_a == lo_b && hi_a >= hi_b)) ? (lo_a, hi_a) : (lo_b, hi_b)
+        enclosure = (step.lower == lower && step.upper == upper)
+    else
+        rad = abs(h_u) + rad_u_other
+        lower = center - rad
+        upper = center + rad
+        _expired(deadline) && return (false, :deadline, cost)
+        enclosure = step.method === :exact ? (step.lower == lower && step.upper == upper) :
+                                             (step.lower <= lower <= upper <= step.upper)
+    end
     bound_ok = step.persistency === :strong ? (step.lower > 0) : (step.lower >= 0)
     enclosure && bound_ok || return (false, :invalid_bound, cost)
     cd, fd, qd = _poly_relation_deltas(p, u, v, step.orig_sign)
