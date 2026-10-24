@@ -464,3 +464,39 @@ without constructing the doubled ``(2n + 2)``-vertex implication network:
    capacity bounds, residual ``S``-``T`` disconnection, and primal-dual cut
    equality, and verifies both `:strong` reachability membership and joint minimum-cut
    capacity equality for any `:weak` batch.
+
+## Optional certified weighted Max-Cut edge and triangle preprocessing
+
+Any active Ising / QUBO residual
+``\tilde{F}(t) = \tilde{c}_{\text{spin}} + \sum_{u \in F} \tilde{h}_u t_u + \sum_{u < v \in F} \tilde{J}_{uv} t_u t_v``
+can be represented as a signed weighted Max-Cut instance on
+``G_{\text{MC}} = (\{0\} \cup F, E_{\text{cut}}, w)`` (`maxcut_graph`,
+`maxcut_cut_weight`, `maxcut_energy`, `maxcut_to_spin`, `spin_to_maxcut`) with an
+explicit reference vertex `0` (`z_0 \in \{-1, +1\}`), variable cut spins
+``z_u \in \{-1, +1\}`` (`t_u = z_0 z_u`, `s_u = g_u z_0 z_u`), reference weights
+``w_{0, u} = 2\tilde{h}_u``, internal edge weights ``w_{uv} = 2\tilde{J}_{uv}``,
+and exact energy identity
+``\tilde{F}(t) = C_{\text{cut}} - \operatorname{CutWeight}(z)``:
+
+| Rule / Literature Family | Weight & Sign Regime | Fields / Reference Vertex `0` | Proof & Reconstruction Requirement | Status in `QUBOPreprocessing.jl` |
+| :-- | :-- | :-- | :-- | :-- |
+| Direct edge dominance (`:maxcut_edge`, Lange et al. 2019 / Rehfeldt et al. 2023) | Signed arbitrary `Rational{BigInt}` weights | Reference edges `(0, u)` act as unary fixings; internal edges `(u, v)` act as signed pair contractions | Single-vertex cut flip `U = {a}` with `M_{ab}(\sigma) = -\sigma J_{ab} - \sum_{d \notin \{a, b\}} |J_{ad}|`; `O(1)` reconstruction via `MaxCutStep` | **Adopted** (`prove_maxcut`, `apply_maxcut!`) |
+| External-degree-aware triangle rule (`:maxcut_triangle`, subset flip `U = {a} \cup S_{\text{flip}}`) | Signed arbitrary weights; handles both supportive and frustrated triangles | Reference vertex `0` participates as both endpoint `b = 0` (unary fixing via `{u, 0, c}`) and triangle neighbor `c = 0` (`{u, v, 0}`) | Each triangle `{a, b, c}` contributes `\gamma_{abc}(\sigma) = \max(-|J_{ac}|, \min(|J_{ac}|, \operatorname{sign}(\sigma J_{ac}) J_{bc} - R_c^{(ab)}))` where `R_c^{(ab)} = W_c - |J_{ac}| - |J_{bc}|`; verified in `verify_certificate` | **Adopted** (`prove_maxcut`, `apply_maxcut!`) |
+| Multicut / correlation-clustering triangle rule without external vertex slack `R_c^{(ab)}` (Lange et al. 2019 Multicut Theorem 1) | Valid for unconstrained edge-indicator multicut, **unsound** on signed vertex-constrained Max-Cut when `R_c^{(ab)} > 0` | Ignores pinning of `c` by reference edge `(0, c)` or external couplings `(c, d)` | Counterexample in `test/maxcut.jl` shows `-J_{12} + \min(|J_{13}|, |J_{23}|) - |J_{14}| > 0` can violate unique global Max-Cut optimum when `R_3^{(1,2)} = |h_3|` is large | **Rejected for Max-Cut** (sound `R_c^{(ab)}`-corrected bound used instead) |
+| Unweighted / nonnegative graph-bipartition degree parity & clique rules (Ferizovic et al. 2020) | Requires unit or nonnegative weights (`w_{uv} \ge 0`) and zero reference star (`w_{0, u} = 0`) | Breaks when nonzero fields create a dense signed star at vertex `0` | Requires special-case unweighted verification | **Deferred** (general Ising residuals have signed weights and nonzero reference star) |
+
+### Operating envelope and reference-node degree growth
+
+- **Reference-node degree (`initial_reference_degree`, `residual_reference_degree`):**
+  every nonzero linear field ``\tilde{h}_u \ne 0`` creates an edge ``(0, u)``
+  incident to the reference vertex `0`. Contracting a zero-field variable into a
+  nonzero-field representative leaves `reference_degree` unchanged, whereas
+  contracting two nonzero-field variables decreases `reference_degree` by `1` (or
+  `2` on exact cancellation). [`MaxCutReport`](@ref) records both
+  `initial_reference_degree` and `residual_reference_degree` alongside `fill_edges`,
+  `triangles_used`, `graph_work`, `triangle_work`, and `materialization_work`.
+- **Default policy (opt-in optional pass):** because triangle scanning inspects
+  common-neighbor incidences (`bounded by max_triangles` and `max_fill`),
+  `apply_maxcut!` is kept **off by default** in `Workspace`, `propagate!`, and
+  `schedule_reductions!`. Call `prove_maxcut` or `apply_maxcut!` explicitly when
+  dense triangles block single-endpoint dominance and pair relations.

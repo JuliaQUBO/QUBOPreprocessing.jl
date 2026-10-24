@@ -180,11 +180,52 @@ SubmodularCutStep(i, v, cv, g, copt, mf, fe, bf, bi, c, p, m, sc) =
     SubmodularCutStep(i, v, cv, g, copt, mf, fe, bf, bi, c, p, m, sc, :strong)
 
 """
+    MaxCutStep
+
+Compact weighted Max-Cut edge or triangle preprocessing witness on the active
+residual Max-Cut graph ``G_{\\text{MC}} = (\\{0\\} \\cup F, E_{\\text{cut}}, w)``.
+When `representative == 0`, certifies the unary variable fixing
+`eliminated => value` (``s_{\\text{eliminated}} = \\sigma_{\\text{orig}}`` via
+contraction with reference vertex `0`). When `representative > 0`, certifies the
+signed pair contraction ``s_{\\text{eliminated}} = \\sigma_{\\text{orig}} s_{\\text{representative}}``
+(and ``t_{\\text{eliminated}} = \\sigma t_{\\text{representative}}`` in the active
+coordinate representation). `anchor` (`eliminated` or `representative`) records
+the vertex whose subset-flip neighborhood ``\\{a\\} \\cup S_{\\text{flip}}``
+produces the exact normalized energy-improvement lower bound `margin`
+(`direct_weight + sum(t[5] for t in triangles) - non_triangle_slack`).
+`method` is `:maxcut_edge` when `isempty(triangles)` and `:maxcut_triangle`
+when at least one triangle witness `(c, J_ac, J_bc, R_c, gamma_c)` contributes
+a strictly positive net gain ``\\gamma_c > -|J_{ac}|``.
+"""
+struct MaxCutStep <: _ProofRecord
+    eliminated::Int
+    representative::Int
+    anchor::Int
+    sign::Int
+    orig_sign::Int
+    value::Int
+    margin::_Exact
+    direct_weight::_Exact
+    non_triangle_slack::_Exact
+    triangles::Tuple{Vararg{Tuple{Int,_Exact,_Exact,_Exact,_Exact}}}
+    constant::_Exact
+    predecessors::Int
+    method::Symbol
+    scope_length::Int
+    persistency::Symbol
+end
+MaxCutStep(u, v, a, s, os, val, mrg, dw, nts, tris, c, p, m) =
+    MaxCutStep(u, v, a, s, os, val, mrg, dw, nts, tris, c, p, m, -1, :strong)
+MaxCutStep(u, v, a, s, os, val, mrg, dw, nts, tris, c, p, m, sc) =
+    MaxCutStep(u, v, a, s, os, val, mrg, dw, nts, tris, c, p, m, sc, :strong)
+
+"""
     DominanceCertificate
 
 Owned source/generation, explicit caller scope and ordered reduction steps
 ([`DominanceStep`](@ref), [`RelationStep`](@ref), [`EliminationStep`](@ref),
-[`ProbingStep`](@ref), [`RoofDualityStep`](@ref), [`SubmodularCutStep`](@ref)).
+[`ProbingStep`](@ref), [`RoofDualityStep`](@ref), [`SubmodularCutStep`](@ref),
+[`MaxCutStep`](@ref)).
 Every step retains all scoped optima (`:strong`) or at least one scoped optimum
 of the evolving residual (`:weak` / non-unique argmin). Also aliased as
 [`ReductionCertificate`](@ref).
@@ -215,11 +256,11 @@ const ReductionCertificate = DominanceCertificate
 Return the algebraic guarantee class of a preprocessing step or coordinate map:
 - `:energy_identity` for [`DomainGaugeMap`](@ref),
 - `:exact_elimination` for [`EliminationStep`](@ref),
-- `:optimum_preserving_restriction` for [`DominanceStep`](@ref), [`RelationStep`](@ref), [`ProbingStep`](@ref), and [`RoofDualityStep`](@ref).
+- `:optimum_preserving_restriction` for [`DominanceStep`](@ref), [`RelationStep`](@ref), [`ProbingStep`](@ref), [`RoofDualityStep`](@ref), [`SubmodularCutStep`](@ref), and [`MaxCutStep`](@ref).
 """
 step_guarantee(::DomainGaugeMap) = :energy_identity
 step_guarantee(::EliminationStep) = :exact_elimination
-step_guarantee(::Union{DominanceStep,RelationStep,ProbingStep,RoofDualityStep,SubmodularCutStep}) = :optimum_preserving_restriction
+step_guarantee(::Union{DominanceStep,RelationStep,ProbingStep,RoofDualityStep,SubmodularCutStep,MaxCutStep}) = :optimum_preserving_restriction
 
 """
     persistency(step_or_certificate)
@@ -228,7 +269,7 @@ Return `:strong` when a step, map, or certificate preserves all optima on its
 scope, or `:weak` when any step relies on tie-breaking / weak persistency.
 """
 persistency(::DomainGaugeMap) = :strong
-persistency(step::Union{DominanceStep,RelationStep,ProbingStep,RoofDualityStep,SubmodularCutStep}) = step.persistency
+persistency(step::Union{DominanceStep,RelationStep,ProbingStep,RoofDualityStep,SubmodularCutStep,MaxCutStep}) = step.persistency
 persistency(step::EliminationStep) = step.unique_argmin ? :strong : :weak
 persistency(cert::DominanceCertificate) =
     any(s -> persistency(s) === :weak, cert.steps) ? :weak : :strong
@@ -326,6 +367,22 @@ struct SubmodularCutAttempt{V,S}
     graph_work::Int
     flow_work::Int
     verification_work::Int
+    edge_visits::Int
+    exact_work::Int
+end
+
+"""Certified weighted Max-Cut edge or triangle proof attempt with optional
+`certificate`, `stop_reason`, `method` (`:maxcut_edge` or `:maxcut_triangle`),
+exact normalized flip `margin`, `triangles_used`, and phase-separated work
+counters (`graph_work`, `triangle_work`, `edge_visits`, `exact_work`)."""
+struct MaxCutAttempt
+    certificate::Union{Nothing,DominanceCertificate}
+    stop_reason::Symbol
+    method::Symbol
+    margin::Union{Nothing,_Exact}
+    triangles_used::Int
+    graph_work::Int
+    triangle_work::Int
     edge_visits::Int
     exact_work::Int
 end
@@ -942,6 +999,16 @@ function _extract_witness_state(ws::Workspace, witness, map::Union{Nothing,Domai
         if pstep isa Union{DominanceStep,ProbingStep,RoofDualityStep,SubmodularCutStep}
             w[pstep.variable] == pstep.value ||
                 throw(ArgumentError("witness violates committed workspace reduction"))
+        elseif pstep isa MaxCutStep
+            if pstep.representative == 0
+                w[pstep.eliminated] == pstep.value ||
+                    throw(ArgumentError("witness violates committed workspace reduction"))
+            else
+                s_u = is_bool ? (2 * w[pstep.eliminated] - 1) : w[pstep.eliminated]
+                s_v = is_bool ? (2 * w[pstep.representative] - 1) : w[pstep.representative]
+                s_u == pstep.orig_sign * s_v ||
+                    throw(ArgumentError("witness violates committed workspace reduction"))
+            end
         elseif pstep isa RelationStep
             s_u = is_bool ? (2 * w[pstep.eliminated] - 1) : w[pstep.eliminated]
             s_v = is_bool ? (2 * w[pstep.representative] - 1) : w[pstep.representative]
@@ -1581,6 +1648,34 @@ function _transport_one_step(
         )
         _poly_fix!(p, sstep.variable, sstep.value)
         return out
+    elseif step isa MaxCutStep
+        mstep = step::MaxCutStep
+        if mstep.representative == 0
+            new_sign = already_in_target ? mstep.sign : (to_map === nothing ? mstep.orig_sign :
+                (to_map.gauge[mstep.eliminated] * mstep.orig_sign))
+            out = MaxCutStep(
+                mstep.eliminated, 0, mstep.anchor, new_sign, mstep.orig_sign, mstep.value,
+                deepcopy(mstep.margin), deepcopy(mstep.direct_weight),
+                deepcopy(mstep.non_triangle_slack), deepcopy(mstep.triangles),
+                deepcopy(c_to), mstep.predecessors, mstep.method,
+                mstep.scope_length, mstep.persistency,
+            )
+            _poly_fix!(p, mstep.eliminated, mstep.value)
+            return out
+        else
+            new_sign = already_in_target ? mstep.sign : (to_map === nothing ? mstep.orig_sign :
+                (to_map.gauge[mstep.eliminated] * to_map.gauge[mstep.representative] * mstep.orig_sign))
+            out = MaxCutStep(
+                mstep.eliminated, mstep.representative, mstep.anchor, new_sign, mstep.orig_sign, 0,
+                deepcopy(mstep.margin), deepcopy(mstep.direct_weight),
+                deepcopy(mstep.non_triangle_slack), deepcopy(mstep.triangles),
+                deepcopy(c_to), mstep.predecessors, mstep.method,
+                mstep.scope_length, mstep.persistency,
+            )
+            cd, fd, qd = _poly_relation_deltas(p, mstep.eliminated, mstep.representative, mstep.orig_sign)
+            _poly_apply_deltas!(p, mstep.eliminated, cd, fd, qd)
+            return out
+        end
     else
         estep = step::EliminationStep
         out = EliminationStep(
@@ -2518,6 +2613,85 @@ function prove_submodular_cut(
 end
 
 """
+    prove_maxcut(ws, label; map=nothing, allow_weak=false, value=nothing,
+                 max_triangles=typemax(Int), max_work=typemax(Int),
+                 max_exact_work=typemax(Int), deadline_ns=nothing)
+    prove_maxcut(ws, eliminated, representative; sign=nothing, map=nothing,
+                 allow_weak=false, max_triangles=typemax(Int),
+                 max_work=typemax(Int), max_exact_work=typemax(Int),
+                 deadline_ns=nothing)
+
+Prove a certified weighted Max-Cut edge or triangle preprocessing restriction
+on the active residual Max-Cut graph ``G_{\\text{MC}} = (\\{0\\} \\cup F, E_{\\text{cut}}, w)``
+without mutating `ws`. With `(ws, label)`, tests a unary variable fixing
+(`representative == 0`) using the reference edge ``(u, 0)`` and bounded
+field-coupling triangles ``\\{u, 0, c\\}``. With `(ws, eliminated, representative)`,
+tests a signed pair contraction ``t_{\\text{eliminated}} = \\sigma t_{\\text{representative}}``
+using the internal edge ``(u, v)`` and bounded triangles ``\\{u, v, c\\}``
+(including ``c = 0`` and ``c \\in F \\setminus \\{u, v\\}``). Returns a
+[`MaxCutAttempt`](@ref).
+"""
+function prove_maxcut(
+    ws::Workspace,
+    label;
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+    allow_weak::Bool=false,
+    value=nothing,
+    max_triangles=typemax(Int),
+    max_work=typemax(Int),
+    max_exact_work=typemax(Int),
+    deadline_ns=nothing,
+)
+    map === nothing || _validate_domain_map(ws, map; full=true)
+    u = _variable(ws, label)
+    step, reason, method, margin, tris_used, g_work, t_work, ex_work = _maxcut_witness(
+        ws, u, 0;
+        value=value, map=map, allow_weak=allow_weak, max_triangles=max_triangles,
+        max_work=max_work, max_exact_work=max_exact_work, deadline_ns=deadline_ns,
+        predecessors=ws._state.proof_count, scope_length=length(ws._state.callers),
+    )
+    visits = g_work + t_work
+    if step === nothing
+        return MaxCutAttempt(nothing, reason, method, margin, tris_used, g_work, t_work, visits, ex_work)
+    end
+    cert = _build_proof_certificate(ws, step, map, deadline_ns)
+    cert === nothing &&
+        return MaxCutAttempt(nothing, :deadline, method, margin, tris_used, g_work, t_work, visits, ex_work)
+    return MaxCutAttempt(cert, reason, method, margin, tris_used, g_work, t_work, visits, ex_work)
+end
+
+function prove_maxcut(
+    ws::Workspace,
+    eliminated,
+    representative;
+    sign::Union{Nothing,Int}=nothing,
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+    allow_weak::Bool=false,
+    max_triangles=typemax(Int),
+    max_work=typemax(Int),
+    max_exact_work=typemax(Int),
+    deadline_ns=nothing,
+)
+    map === nothing || _validate_domain_map(ws, map; full=true)
+    u = _variable(ws, eliminated)
+    v = _variable(ws, representative)
+    step, reason, method, margin, tris_used, g_work, t_work, ex_work = _maxcut_witness(
+        ws, u, v;
+        sign=sign, map=map, allow_weak=allow_weak, max_triangles=max_triangles,
+        max_work=max_work, max_exact_work=max_exact_work, deadline_ns=deadline_ns,
+        predecessors=ws._state.proof_count, scope_length=length(ws._state.callers),
+    )
+    visits = g_work + t_work
+    if step === nothing
+        return MaxCutAttempt(nothing, reason, method, margin, tris_used, g_work, t_work, visits, ex_work)
+    end
+    cert = _build_proof_certificate(ws, step, map, deadline_ns)
+    cert === nothing &&
+        return MaxCutAttempt(nothing, :deadline, method, margin, tris_used, g_work, t_work, visits, ex_work)
+    return MaxCutAttempt(cert, reason, method, margin, tris_used, g_work, t_work, visits, ex_work)
+end
+
+"""
     transport_certificate(ws::Workspace, cert::DominanceCertificate, map::DomainGaugeMap)
 
 Transport a valid [`DominanceCertificate`](@ref) for `ws` into the coordinate
@@ -2881,6 +3055,14 @@ function _verify_probing_step(
     for pstep in prefix_steps
         if pstep isa Union{DominanceStep,ProbingStep,RoofDualityStep,SubmodularCutStep}
             w[pstep.variable] == pstep.value || return (false, :invalid_witness, cost)
+        elseif pstep isa MaxCutStep
+            if pstep.representative == 0
+                w[pstep.eliminated] == pstep.value || return (false, :invalid_witness, cost)
+            else
+                s_elim = is_bool ? (2 * w[pstep.eliminated] - 1) : w[pstep.eliminated]
+                s_rep = is_bool ? (2 * w[pstep.representative] - 1) : w[pstep.representative]
+                s_elim == pstep.orig_sign * s_rep || return (false, :invalid_witness, cost)
+            end
         elseif pstep isa RelationStep
             s_elim = is_bool ? (2 * w[pstep.eliminated] - 1) : w[pstep.eliminated]
             s_rep = is_bool ? (2 * w[pstep.representative] - 1) : w[pstep.representative]
@@ -3117,13 +3299,106 @@ function _verify_submodular_cut_step(
     return (true, :verified, cost)
 end
 
+function _verify_maxcut_step(
+    p::_PolyState,
+    step::MaxCutStep,
+    active_map::Union{Nothing,DomainGaugeMap},
+    later_assumptions,
+    cost::Int,
+    deadline,
+)
+    u = step.eliminated
+    v = step.representative
+    a = step.anchor
+    1 <= u <= p.n && p.active[u] || return (false, :invalid_step, 0)
+    (v == 0 || (1 <= v <= p.n && v != u && p.active[v])) ||
+        return (false, :invalid_step, 0)
+    is_bool = p.domain === QT.BoolDomain
+    low_orig = is_bool ? 0 : -1
+    step.sign in (-1, 1) && step.orig_sign in (-1, 1) ||
+        return (false, :invalid_value, 0)
+    if v == 0
+        a == u || return (false, :invalid_step, 0)
+        step.value in (low_orig, 1) || return (false, :invalid_value, 0)
+        s_val = is_bool ? (2 * step.value - 1) : step.value
+        step.orig_sign == s_val || return (false, :invalid_value, 0)
+        expected_sign = active_map === nothing ? step.orig_sign :
+            (active_map.gauge[u] * step.orig_sign)
+        step.sign == expected_sign || return (false, :invalid_value, 0)
+    else
+        a in (u, v) || return (false, :invalid_step, 0)
+        step.value == 0 || return (false, :invalid_value, 0)
+        expected_sign = active_map === nothing ? step.orig_sign :
+            (active_map.gauge[u] * active_map.gauge[v] * step.orig_sign)
+        step.sign == expected_sign || return (false, :invalid_value, 0)
+    end
+    step.method in (:maxcut_edge, :maxcut_triangle) && step.persistency in (:strong, :weak) ||
+        return (false, :invalid_method, 0)
+    (step.method === :maxcut_edge) == isempty(step.triangles) ||
+        return (false, :invalid_method, 0)
+    direction = _direction_poly(p)
+    direction != 0 || return (false, :zero_scale, 0)
+    c_expected = _poly_mapped_constant(p, active_map)
+    _expired(deadline) && return (false, :deadline, cost)
+    c_expected == step.constant || return (false, :invalid_constant, cost)
+    b = a == u ? v : u
+    J_ab = _poly_mc_J(p, a, b, direction)
+    direct_expected = -step.orig_sign * J_ab
+    step.direct_weight == direct_expected || return (false, :invalid_bound, cost)
+    prev_c = -1
+    sum_abs_ac = _Exact(0)
+    sum_gamma = _Exact(0)
+    for (c, J_ac_rec, J_bc_rec, R_c_rec, gamma_rec) in step.triangles
+        _expired(deadline) && return (false, :deadline, cost)
+        (c == 0 || (1 <= c <= p.n && p.active[c])) && c != a && c != b && c > prev_c ||
+            return (false, :invalid_step, cost)
+        prev_c = c
+        if c == 0 || b == 0
+            isempty(later_assumptions) || return (false, :invalid_scope, cost)
+        else
+            all(assump -> !(assump.first in (a, b, c)), later_assumptions) ||
+                return (false, :invalid_scope, cost)
+        end
+        J_ac = _poly_mc_J(p, a, c, direction)
+        J_bc = _poly_mc_J(p, b, c, direction)
+        (!iszero(J_ac) && !iszero(J_bc)) || return (false, :invalid_step, cost)
+        (J_ac_rec == J_ac && J_bc_rec == J_bc) || return (false, :invalid_bound, cost)
+        W_c = _poly_mc_total_abs_weight(p, c, direction, deadline)
+        W_c === nothing && return (false, :deadline, cost)
+        R_c = W_c - abs(J_ac) - abs(J_bc)
+        R_c_rec == R_c || return (false, :invalid_bound, cost)
+        sgn_ac = step.orig_sign * J_ac > 0 ? 1 : -1
+        gamma_expected = max(-abs(J_ac), min(abs(J_ac), sgn_ac * J_bc - R_c))
+        (gamma_rec == gamma_expected && gamma_expected > -abs(J_ac)) ||
+            return (false, :invalid_bound, cost)
+        sum_abs_ac += abs(J_ac)
+        sum_gamma += gamma_expected
+    end
+    W_a = _poly_mc_total_abs_weight(p, a, direction, deadline)
+    W_a === nothing && return (false, :deadline, cost)
+    non_tri_expected = W_a - abs(J_ab) - sum_abs_ac
+    step.non_triangle_slack == non_tri_expected || return (false, :invalid_bound, cost)
+    margin_expected = direct_expected + sum_gamma - non_tri_expected
+    step.margin == margin_expected || return (false, :invalid_bound, cost)
+    bound_ok = step.persistency === :strong ? (margin_expected > 0) : (margin_expected >= 0)
+    bound_ok || return (false, :invalid_bound, cost)
+    if v == 0
+        _poly_fix!(p, u, step.value)
+    else
+        cd, fd, qd = _poly_relation_deltas(p, u, v, step.orig_sign)
+        _poly_apply_deltas!(p, u, cd, fd, qd)
+    end
+    return (true, :verified, cost)
+end
+
 """
     verify_certificate(ws, certificate; map=nothing, max_work=typemax(Int), deadline_ns=nothing)
 
 Independently recheck source identity, current caller scope, optional
 [`DomainGaugeMap`](@ref) provenance and the complete ordered reduction chain
 ([`DominanceStep`](@ref), [`RelationStep`](@ref), [`EliminationStep`](@ref),
-[`ProbingStep`](@ref), [`RoofDualityStep`](@ref), [`SubmodularCutStep`](@ref))
+[`ProbingStep`](@ref), [`RoofDualityStep`](@ref), [`SubmodularCutStep`](@ref),
+[`MaxCutStep`](@ref))
 using exact original-coefficient evolution and domain/gauge conversion. Never
 trust cached workspace fields or an authenticated identifier alone.
 """
@@ -3182,7 +3457,7 @@ function verify_certificate(ws::Workspace, cert::DominanceCertificate;
     base_step_cost = length(s.linear.values) + length(s.quadratic.values)
     introduced = 0
     for (k,step) in enumerate(cert.steps)
-        step isa Union{DominanceStep,RelationStep,EliminationStep,ProbingStep,RoofDualityStep,SubmodularCutStep} && step.predecessors == k-1 ||
+        step isa Union{DominanceStep,RelationStep,EliminationStep,ProbingStep,RoofDualityStep,SubmodularCutStep,MaxCutStep} && step.predecessors == k-1 ||
             return VerificationResult(false,:invalid_predecessors,cost)
         count = step.scope_length == -1 ? length(cert.assumptions) : step.scope_length
         introduced <= count <= length(cert.assumptions) ||
@@ -3222,6 +3497,9 @@ function verify_certificate(ws::Workspace, cert::DominanceCertificate;
                 cert.steps[1:(k - 1)], cert.steps, k, later,
                 step_cost, deadline_ns,
             )
+        elseif step isa MaxCutStep
+            later = cert.assumptions[(count + 1):end]
+            _verify_maxcut_step(p, step, active_map, later, step_cost, deadline_ns)
         else
             _verify_elimination_step(p, step::EliminationStep, active_map, step_cost, deadline_ns)
         end

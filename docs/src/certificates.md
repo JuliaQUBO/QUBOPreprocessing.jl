@@ -87,7 +87,7 @@ tag (`:strong` or `:weak`) queried with `persistency`:
   refused with `:nonzero_field`. `unique_argmin` records whether the minimizing
   value of ``u`` is strict on all boundary states. Higher-degree variables are
   skipped/refused (`:degree_too_high`) with no higher-order truncation.
-- **`:optimum_preserving_restriction` (`DominanceStep`, `RelationStep`, `ProbingStep`, `RoofDualityStep`, `SubmodularCutStep`):**
+- **`:optimum_preserving_restriction` (`DominanceStep`, `RelationStep`, `ProbingStep`, `RoofDualityStep`, `SubmodularCutStep`, `MaxCutStep`):**
   unary value fixing (`DominanceStep`), signed pair contraction
   ``s_u = \sigma_{\text{orig}} s_v`` (`RelationStep`, proved via single-endpoint
   `:interval` / `:exact` coupling dominance or Glover–Lewis–Kochenberger (2018)
@@ -103,11 +103,15 @@ tag (`:strong` or `:weak`) queried with `persistency`:
   ``(\mathcal{R}_S, V \setminus \mathcal{R}_S)`` and
   ``(V \setminus \mathcal{R}_T, \mathcal{R}_T)`` where literal ``2u - 1 \in \mathcal{R}_S \land 2u \in \mathcal{R}_T``
   for ``s_u = +1`` or ``2u \in \mathcal{R}_S \land 2u - 1 \in \mathcal{R}_T``
-  for ``s_u = -1``), or direct gauge-submodular component cut fixing
+  for ``s_u = -1``), direct gauge-submodular component cut fixing
   (`SubmodularCutStep`, proved via `prove_submodular_cut` / `apply_submodular_cut!`
   on a closed active residual component ``C`` with verified bipartite spin gauge
   ``\sigma_a \in \{-1, +1\}`` making all active couplings ``\tilde{J}'_{ab} \le 0``
-  and verified ``(|C| + 2)``-vertex maximum ``S``–``T`` flow and minimum cut). Tagged `:strong` when
+  and verified ``(|C| + 2)``-vertex maximum ``S``–``T`` flow and minimum cut), or
+  weighted Max-Cut edge/triangle restriction (`MaxCutStep`, proved via
+  `prove_maxcut` / `apply_maxcut!` on ``G_{\text{MC}} = (\{0\} \cup F, E_{\\text{cut}}, w)``
+  from the exact subset-flip margin ``M_{ab}(\sigma) = -\sigma J_{ab} + \sum_{c \in C_{\text{tri}}} \gamma_{abc}(\sigma) - \sum_{d \notin \{a, b\} \cup C_{\text{tri}}} |J_{ad}|``
+  with verified external triangle slack ``R_c^{(ab)}``). Tagged `:strong` when
   every optimum of the current residual satisfies the restriction, or `:weak`
   when at least one optimum of the current residual satisfies the restriction.
 

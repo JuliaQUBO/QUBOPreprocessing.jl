@@ -15,22 +15,23 @@ export Workspace, Generation, generation, reset!, materialize, ExportResult,
 export Checkpoint, checkpoint, assume!, rollback!, unfix!, changes, assumptions,
        UpdateReport, RollbackReport, ConditionedExport
 
-export SubmodularComponent,
-       DominanceStep, RelationStep, EliminationStep, ProbingStep, RoofDualityStep, SubmodularCutStep,
+export SubmodularComponent, MaxCutGraph,
+       DominanceStep, RelationStep, EliminationStep, ProbingStep, RoofDualityStep, SubmodularCutStep, MaxCutStep,
        DominanceCertificate, ReductionCertificate,
-       DominanceAttempt, RelationAttempt, EliminationAttempt, ProbingAttempt, RoofDualityAttempt, SubmodularCutAttempt,
+       DominanceAttempt, RelationAttempt, EliminationAttempt, ProbingAttempt, RoofDualityAttempt, SubmodularCutAttempt, MaxCutAttempt,
        VerificationResult,
        recognize_submodular_component, recognize_submodular_components,
-       prove_dominance, prove_relation, prove_elimination, prove_probing, prove_roof_duality, prove_submodular_cut,
+       maxcut_graph, maxcut_cut_weight, maxcut_energy, maxcut_to_spin, spin_to_maxcut,
+       prove_dominance, prove_relation, prove_elimination, prove_probing, prove_roof_duality, prove_submodular_cut, prove_maxcut,
        verify_certificate, transport_certificate,
        step_guarantee, certificate_guarantee, persistency
 
 export DomainGaugeMap, domain_map, map_value, lift_value, map_state, lift_state,
        degree, effective_field, incident_couplings, conditioned_constant
 
-export propagate!, PropagationReport, ProbingReport, RoofDualityReport, SubmodularCutReport,
+export propagate!, PropagationReport, ProbingReport, RoofDualityReport, SubmodularCutReport, MaxCutReport,
        deductions, reductions, export_certificate,
-       apply_dominance!, apply_probing!, probe_variables!, apply_roof_duality!, apply_submodular_cut!,
+       apply_dominance!, apply_probing!, probe_variables!, apply_roof_duality!, apply_submodular_cut!, apply_maxcut!,
        contract_relation!, contract_relations!, relation_map,
        eliminate_variable!, eliminate_low_degree!, apply_weak_batch!,
        SchedulePassSummary, ScheduleReport, schedule_reductions!,
@@ -42,6 +43,7 @@ include("identity.jl")
 include("domain.jl")
 include("workspace.jl")
 include("flow.jl")
+include("maxcut.jl")
 include("certificates.jl")
 include("propagation.jl")
 include("consumer.jl")
