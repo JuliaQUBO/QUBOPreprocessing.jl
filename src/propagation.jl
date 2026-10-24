@@ -47,44 +47,39 @@ function _pop_queue!(ws::Workspace)
     return nothing
 end
 
-function _cached_step(ws::Workspace,i::Int,direction::Int)
+function _cached_step(ws::Workspace,i::Int,direction::Int;allow_weak::Bool=false)
     st = ws._state
     direction == 0 && return nothing
     lower,upper = direction > 0 ? (st.lower[i],st.upper[i]) : (-st.upper[i],-st.lower[i])
     value = _strict_value(lower,upper,ws._snapshot.domain)
-    value === nothing && return nothing
-    return DominanceStep(i,value,deepcopy(lower),deepcopy(upper),deepcopy(st.constant),
-                         st.proof_count,:exact,length(st.callers))
+    if value !== nothing
+        return DominanceStep(i,value,deepcopy(lower),deepcopy(upper),deepcopy(st.constant),
+                             st.proof_count,:exact,length(st.callers),:strong)
+    end
+    if allow_weak
+        wval = _weak_value(lower,upper,ws._snapshot.domain)
+        wval === nothing && return nothing
+        return DominanceStep(i,wval,deepcopy(lower),deepcopy(upper),deepcopy(st.constant),
+                             st.proof_count,:exact,length(st.callers),:weak)
+    end
+    return nothing
 end
 
 """
-    propagate!(ws; map=nothing, max_work=typemax(Int), max_deductions=typemax(Int),
-               max_exact_work=typemax(Int), deadline_ns=nothing)
+    propagate!(ws; map=nothing, allow_weak=false, max_work=typemax(Int),
+               max_deductions=typemax(Int), max_exact_work=typemax(Int),
+               deadline_ns=nothing)
 
-Run deterministic strict dominance on a workspace selected with
+Run deterministic dominance propagation on a workspace selected with
 `rules=:dominance`, optionally validating and operating through a
-[`DomainGaugeMap`](@ref). Exact derivative-bound caches are prepared once and
-updated with touched free neighbors; a dirty candidate reads its cached bounds
-without rescanning its adjacency. Unary strict dominance is algebraically
-equivalent across binary, spin and gauged coordinates; ties and zero scale
-produce no fixing. No weak or heuristic rule is enabled. Calls never build a
-residual or copy the source graph.
-
-Per-call `max_work` bounds examined candidates plus adjacency entries visited
-while installing deductions. Exact work reserves one cached sign check and,
-for an attempted update, one constant plus three values per incident edge;
-fixed-neighbor skips may make this conservative. Bit complexity is additional.
-Reserve complete updates before committing. A refused update leaves its queue
-entry pending; its charged check can be repeated on resumption. Stops retain a
-sound prefix with `:work_limit`, `:deduction_limit`, `:verification_limit` or
-`:deadline`; `:quiescent` means the queue is empty, not solver optimality.
-
-Queue consumption and deductions are trailed. Rollback restores queue/caches/
-proofs; execution counters retain actual work. Initialization may scan the graph;
-subsequent no-change calls are constant-size. Arbitrary caller unfix conservatively
-rebuilds/replays explicit assumptions and discards deductions before resumption.
+[`DomainGaugeMap`](@ref). By default (`allow_weak=false`), only strong strict
+dominance is applied (`:strong` persistency). When `allow_weak=true`, weak
+optimum-preserving restrictions are also applied sequentially on the evolving
+residual so later candidates are always re-evaluated against already-applied
+steps.
 """
 function propagate!(ws::Workspace;map::Union{Nothing,DomainGaugeMap}=nothing,
+                     allow_weak::Bool=false,
                      max_work=typemax(Int),max_deductions=typemax(Int),
                      max_exact_work=typemax(Int),deadline_ns=nothing)
     _limits(max_work,deadline_ns)
@@ -110,7 +105,18 @@ function propagate!(ws::Workspace;map::Union{Nothing,DomainGaugeMap}=nothing,
             continue
         end
         exact += 1
-        step = _cached_step(ws,i,direction)
+        step = _cached_step(ws,i,direction;allow_weak)
+        if step === nothing && allow_weak
+            m_step, m_reason, _, m_visits, _, m_exact = _marginal_dominance_witness(
+                ws, i, nothing, nothing, direction, 0, 0,
+                Int(max_work - candidates - edges), Int(max_exact_work - exact),
+                deadline_ns, st.proof_count, length(st.callers),
+            )
+            edges += m_visits
+            exact += m_exact
+            m_reason in (:work_limit, :verification_limit, :deadline) && return finish(m_reason)
+            step = m_step
+        end
         if step === nothing
             _pop_queue!(ws)
             continue
@@ -133,19 +139,205 @@ function propagate!(ws::Workspace;map::Union{Nothing,DomainGaugeMap}=nothing,
 end
 
 """
+    apply_dominance!(ws, label; value=nothing, map=nothing, allow_weak=false,
+                     max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing)
+
+Certify and transactionally commit one unary dominance fixing on `ws`, recording
+a [`DominanceStep`](@ref) on the reversible trail. Returns an [`UpdateReport`](@ref).
+"""
+function apply_dominance!(ws::Workspace, label;
+                          value=nothing,
+                          map::Union{Nothing,DomainGaugeMap}=nothing,
+                          allow_weak::Bool=false,
+                          max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing)
+    _limits(max_work, deadline_ns)
+    _limits(max_exact_work, deadline_ns)
+    map === nothing || _validate_domain_map(ws, map)
+    i = _variable(ws, label)
+    st = ws._state
+    raw_step, reason, _, visits, _, _ = _dominance_witness(
+        ws, i; map, allow_weak, value, max_work, max_exact_work, deadline_ns,
+        predecessors=st.proof_count, scope_length=length(st.callers),
+    )
+    raw_step === nothing && return UpdateReport(reason, visits, 0)
+    step = if map === nothing
+        raw_step
+    elseif raw_step.method === :marginal
+        dm = map.gauge[i] * raw_step.lower
+        DominanceStep(i, raw_step.value, deepcopy(dm), deepcopy(dm), deepcopy(st.constant),
+                      raw_step.predecessors, :marginal, raw_step.scope_length, raw_step.persistency)
+    else
+        new_lo, new_hi = _convert_step_bounds(ws._snapshot, raw_step, map, nothing)
+        DominanceStep(i, raw_step.value, new_lo, new_hi, deepcopy(st.constant),
+                      raw_step.predecessors, raw_step.method, raw_step.scope_length, raw_step.persistency)
+    end
+    rep = _fix!(ws, i, step.value; proof=step, max_work=max_work - visits, deadline_ns)
+    return UpdateReport(rep.stop_reason, visits + rep.edge_visits, rep.changed)
+end
+
+"""
+    contract_relation!(ws, eliminated, representative; sign=nothing, map=nothing,
+                       allow_weak=false, max_work=typemax(Int),
+                       max_exact_work=typemax(Int), deadline_ns=nothing)
+
+Certify and transactionally contract `eliminated` into `representative` under
+``t_{\\text{eliminated}} = \\sigma t_{\\text{representative}}``, recording a
+[`RelationStep`](@ref) on the reversible trail and updating surviving fields,
+degrees and adjacency in ``O(\\text{touched})`` work. Returns an [`UpdateReport`](@ref).
+"""
+function contract_relation!(ws::Workspace, eliminated, representative;
+                            sign::Union{Nothing,Int}=nothing,
+                            map::Union{Nothing,DomainGaugeMap}=nothing,
+                            allow_weak::Bool=false,
+                            max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing)
+    _limits(max_work, deadline_ns)
+    _limits(max_exact_work, deadline_ns)
+    map === nothing || _validate_domain_map(ws, map)
+    u = _variable(ws, eliminated)
+    v = _variable(ws, representative)
+    st = ws._state
+    raw_step, reason, _, visits, _, _ = _relation_witness(
+        ws, u, v; sign, map, allow_weak, max_work, max_exact_work, deadline_ns,
+        predecessors=st.proof_count, scope_length=length(st.callers),
+    )
+    raw_step === nothing && return UpdateReport(reason, visits, 0)
+    step = map === nothing ? raw_step :
+        RelationStep(u, v, raw_step.orig_sign, raw_step.orig_sign,
+                     deepcopy(raw_step.lower), deepcopy(raw_step.upper), deepcopy(st.constant),
+                     raw_step.predecessors, raw_step.method, raw_step.scope_length, raw_step.persistency)
+    const_delta, field_deltas, quad_deltas = _relation_deltas(ws, u, v, step.orig_sign)
+    return _apply_reduction!(
+        ws, u, Int8(3), step, const_delta, field_deltas, quad_deltas;
+        max_work, deadline_ns, precharged_visits=visits,
+    )
+end
+
+"""
+    eliminate_variable!(ws, label; map=nothing, tie_break=:low,
+                        max_work=typemax(Int), max_exact_work=typemax(Int),
+                        deadline_ns=nothing)
+
+Certify and transactionally eliminate a free variable of active degree `0..3`
+from `ws`, recording an [`EliminationStep`](@ref) with its exact argmin
+reconstruction table and updating surviving neighbor fields, fill edges and
+degrees on the reversible trail. Returns an [`UpdateReport`](@ref).
+"""
+function eliminate_variable!(ws::Workspace, label;
+                             map::Union{Nothing,DomainGaugeMap}=nothing,
+                             tie_break::Symbol=:low,
+                             max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing)
+    _limits(max_work, deadline_ns)
+    _limits(max_exact_work, deadline_ns)
+    map === nothing || _validate_domain_map(ws, map)
+    u = _variable(ws, label)
+    st = ws._state
+    raw_step, reason, _, visits, _ = _elimination_witness(
+        ws, u; map, tie_break, max_work, max_exact_work, deadline_ns,
+        predecessors=st.proof_count, scope_length=length(st.callers),
+    )
+    raw_step === nothing && return UpdateReport(reason, visits, 0)
+    step = map === nothing ? raw_step :
+        EliminationStep(u, raw_step.neighbors, raw_step.table,
+                        deepcopy(raw_step.constant_delta), deepcopy(raw_step.linear_deltas),
+                        deepcopy(raw_step.quadratic_deltas), deepcopy(st.constant),
+                        raw_step.predecessors, raw_step.scope_length, raw_step.unique_argmin)
+    field_deltas = Pair{Int,_Exact}[p for p in step.linear_deltas]
+    quad_deltas = Tuple{Int,Int,_Exact}[t for t in step.quadratic_deltas]
+    return _apply_reduction!(
+        ws, u, Int8(4), step, step.constant_delta, field_deltas, quad_deltas;
+        max_work, deadline_ns, precharged_visits=visits,
+    )
+end
+
+"""
+    apply_weak_batch!(ws, candidates; map=nothing, atomic=false,
+                      max_work=typemax(Int), max_exact_work=typemax(Int),
+                      deadline_ns=nothing)
+
+Sequentially validate and apply a collection of candidate weak restrictions
+(`label => value` pairs or `label` entries) against the evolving conditioned
+residual of `ws`. Because weak persistency is not closed under simultaneous
+application, each candidate is re-certified after earlier candidates update the
+residual. When `atomic=true`, any rejected candidate rolls back the entire batch
+to its entry checkpoint.
+"""
+function apply_weak_batch!(ws::Workspace, candidates;
+                           map::Union{Nothing,DomainGaugeMap}=nothing,
+                           atomic::Bool=false,
+                           max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing)
+    _limits(max_work, deadline_ns)
+    _limits(max_exact_work, deadline_ns)
+    map === nothing || _validate_domain_map(ws, map)
+    entry_cp = checkpoint(ws)
+    applied = 0
+    rejected = 0
+    total_visits = 0
+    last_reason = :applied
+    for item in candidates
+        label, val = item isa Pair ? (item.first, item.second) : (item, nothing)
+        rep = apply_dominance!(
+            ws, label; value=val, map, allow_weak=true,
+            max_work=max_work - total_visits, max_exact_work, deadline_ns,
+        )
+        total_visits += rep.edge_visits
+        if rep.stop_reason === :applied
+            applied += 1
+        else
+            rejected += 1
+            last_reason = rep.stop_reason
+            if atomic || rep.stop_reason in (:work_limit, :verification_limit, :deadline)
+                atomic && rollback!(ws, entry_cp)
+                return (
+                    applied=atomic ? 0 : applied,
+                    rejected=rejected,
+                    stop_reason=last_reason,
+                    edge_visits=total_visits,
+                )
+            end
+        end
+    end
+    return (
+        applied=applied,
+        rejected=rejected,
+        stop_reason=rejected == 0 ? :applied : last_reason,
+        edge_visits=total_visits,
+    )
+end
+
+"""
     deductions(ws; since=nothing)
 
-Return owned original-label/value pairs for certified deductions, optionally
-added after a valid ancestor checkpoint. Scan only fixing records in that range;
-queue-only history and the source graph are not scanned. Caller assumptions
-remain available separately through `assumptions`/`changes`.
+Return owned original-label/value pairs for certified constant-fixing deductions,
+optionally added after a valid ancestor checkpoint. Scan only fixing records in
+that range; queue-only history and the source graph are not scanned. Caller
+assumptions remain available separately through `assumptions`/`changes`, and
+structural reductions (`RelationStep`, `EliminationStep`) are included in
+[`reductions`](@ref).
 """
 function deductions(ws::Workspace;since=nothing)
     since === nothing || _validate_checkpoint(ws,since)
     start = since === nothing ? 1 : since._fix_depth+1
     st,s = ws._state,ws._snapshot
     entries = (st.trail[st.fixes[k]] for k in start:length(st.fixes))
-    return [_owned_labels([s.labels[e.index]])[1]=>e.value for e in entries if e.proof !== nothing]
+    return [_owned_labels([s.labels[e.index]])[1]=>e.value for e in entries if e isa _UndoFix && e.proof !== nothing]
+end
+
+"""
+    reductions(ws; since=nothing)
+
+Return owned proof records ([`DominanceStep`](@ref), [`RelationStep`](@ref),
+[`EliminationStep`](@ref)) in application order for all certified reductions
+committed on `ws`, optionally added after a valid ancestor checkpoint `since`.
+"""
+function reductions(ws::Workspace; since=nothing)
+    since === nothing || _validate_checkpoint(ws, since)
+    start = since === nothing ? 1 : since._fix_depth + 1
+    st = ws._state
+    return _ProofRecord[
+        deepcopy(st.trail[st.fixes[k]].proof)
+        for k in start:length(st.fixes)
+        if st.trail[st.fixes[k]].proof !== nothing
+    ]
 end
 
 function _proof_steps(ws::Workspace; map::Union{Nothing,DomainGaugeMap}=nothing)
@@ -165,10 +357,9 @@ end
 """
     export_certificate(ws; map=nothing)
 
-Explicitly capture the complete owned strong-deduction chain and caller scope
+Explicitly capture the complete owned reduction chain and caller scope
 (optionally transported into `map::DomainGaugeMap`), or return `nothing` in
-constant-size work if no deduction exists. Source/proof copying is
-O(n+m+number of steps), plus scalar bit/label-copy costs. Verify with
+constant-size work if no certified reduction exists. Verify with
 `verify_certificate`; applicability requires the captured current trail tip.
 No inference, solver dispatch or residual materialization occurs here.
 """

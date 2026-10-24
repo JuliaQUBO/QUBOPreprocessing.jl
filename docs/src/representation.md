@@ -95,13 +95,15 @@ Distinguish four different operations:
   (`xᵢ = (sᵢ + 1)/2`, `sᵢ = gᵢ tᵢ`) that preserves every state and its exact
   energy. Optional gauge selection transforms fields as well as couplings; it
   **never** means assuming every model is zero-field or dropping nonzero fields.
-- **Constant fixing (strong persistency):** proves a variable takes a constant
-  value in every scoped optimum. Unary strict dominance is algebraically
-  equivalent in binary, spin and gauged coordinates; rerunning the same unary
-  test in another coordinate system does not create extra deductions. Coordinate
-  maps instead expose additional rule families without repeated whole-model casts.
-- **Exact elimination:** minimizes a variable out as a function of surviving
-  neighbors and restores it via a conditional reconstruction rule.
+- **Constant fixing and pair relations (`DominanceStep`, `RelationStep`):**
+  proves a variable takes a constant value or locked signed relation
+  ``s_u = \sigma_{\text{orig}} s_v`` in every scoped optimum (`:strong`
+  persistency) or in at least one optimum of the current conditioned residual
+  (`:weak` persistency, applied sequentially).
+- **Exact elimination (`EliminationStep`):** minimizes a bounded-degree
+  (`0 <= d <= 3`) variable out as an exact quadratic function of surviving
+  neighbors and restores it via its ``2^d`` argmin lookup table during
+  reverse-order reconstruction.
 - **Symmetry or compatible-optimum selection:** chooses one representative among
   tied or symmetric optima (such as global spin-flip symmetry when all fields
   vanish); this does not hold in every optimum and must not be conflated with

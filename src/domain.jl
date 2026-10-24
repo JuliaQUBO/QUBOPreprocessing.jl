@@ -407,20 +407,33 @@ function _mapped_constant(ws::Workspace, m::Union{Nothing,DomainGaugeMap})
         c = d == 0 ? m._root_bool_constant : cur.constants[d]
         for r in (d + 1):k
             pos = st.fixes[r]
-            entry = st.trail[pos]::_UndoFix
-            i = entry.index
-            u_i = _map_index_value(m, i, entry.value)
-            if u_i != 0
-                g_i = m.gauge[i]
-                h_i = _spin_field(ws, i)
-                csum = _Exact(0)
-                for (j, q) in st.adjacency[i]
-                    (st.fixed[j] == 2 || st.entries[j] > pos) || continue
-                    csum += (g_i * m.gauge[j]) * _spin_coupling(ws, q)
+            raw_entry = st.trail[pos]
+            if raw_entry isa _UndoFix
+                entry = raw_entry
+                i = entry.index
+                u_i = _map_index_value(m, i, entry.value)
+                if u_i != 0
+                    g_i = m.gauge[i]
+                    h_i = _spin_field(ws, i)
+                    csum = _Exact(0)
+                    for (j, q) in st.adjacency[i]
+                        (st.fixed[j] == 2 || st.entries[j] > pos) || continue
+                        csum += (g_i * m.gauge[j]) * _spin_coupling(ws, q)
+                    end
+                    c += (2 * g_i * h_i - 2 * csum) * u_i
                 end
-                c += (2 * g_i * h_i - 2 * csum) * u_i
+                cur.serials[r] = entry.serial
+            else
+                red = raw_entry::_UndoReduction
+                c += red.spin_const_delta
+                for (w, dh) in red.spin_field_deltas
+                    c -= m.gauge[w] * dh
+                end
+                for (j, l, dJ) in red.spin_coupling_deltas
+                    c += (m.gauge[j] * m.gauge[l]) * dJ
+                end
+                cur.serials[r] = red.serial
             end
-            cur.serials[r] = entry.serial
             cur.constants[r] = c
         end
         cur.depth = k

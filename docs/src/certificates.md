@@ -60,36 +60,60 @@ no certificate. Work counts are structural, with integer bit complexity and
 allocation costs additional. Public proof export copies source/scope explicitly
 after a successful numeric check; deadline checks surround that atomic copy.
 
-## Guarantee, scope and verifier
+## Guarantee, scope, composition and verifier
 
-An **energy identity** shows a conditioned residual evaluates like its original
-under supplied assumptions. A **strong-persistency proof** additionally shows
-that the selected value holds in every scoped optimum. Exact **local elimination**
-instead minimizes removed variables conditional on survivors and needs different
-reconstruction records; it is outside this unary slice. Neither an energy
-identity nor a plausible solver sample is an optimality proof.
+Each reduction step or coordinate map carries an explicit guarantee class
+queried with `step_guarantee` and `certificate_guarantee`, and a persistency
+tag (`:strong` or `:weak`) queried with `persistency`:
 
-Each `DominanceCertificate` owns a source snapshot, generation, branch-specific
-checkpoint, explicit caller assumptions and ordered `DominanceStep` records.
-A step records original index/value, signed bounds, exact conditioned constant,
-numeric method, predecessor-prefix length and the number of caller assumptions
-present at its birth. The latter preserves the actual chronological scope when
-new caller pins are added between deductions. An ordered prefix is verified
-sequentially, so deductions cannot be combined as unrelated existential claims.
-All steps in this format are strong. Weak persistency and compatible optimum
-selection require their own supported guarantee; they cannot inherit this one.
+- **`:energy_identity` (`DomainGaugeMap`):** bijective coordinate and gauge
+  transformation ``F(x) = F'(T(x))`` preserving every state and its exact energy.
+- **`:exact_elimination` (`EliminationStep`):** local variable elimination of a
+  bounded-degree (`0 <= d <= 3`) variable ``u`` certifying
+  ``F'(y) = \operatorname{opt}_{x_u} F(y, x_u)`` across all ``2^d \le 8``
+  boundary assignments of `neighbors`, with an exact argmin reconstruction
+  `table` and exact quadratic polynomial deltas (`constant_delta`,
+  `linear_deltas`, `quadratic_deltas`). `unique_argmin` records whether the
+  minimizing value of ``u`` is strict on all boundary states.
+- **`:optimum_preserving_restriction` (`DominanceStep`, `RelationStep`):**
+  unary value fixing (`DominanceStep`) or signed pair contraction
+  ``s_u = \sigma_{\text{orig}} s_v`` (`RelationStep`). Tagged `:strong` when
+  every optimum of the current residual satisfies the restriction, or `:weak`
+  when at least one optimum of the current residual satisfies the restriction.
+
+Each `DominanceCertificate` (aliased as `ReductionCertificate`) owns a source
+snapshot, generation, branch-specific checkpoint, explicit caller assumptions
+and an ordered chain of `DominanceStep`, `RelationStep` and `EliminationStep`
+records. Because steps are composed sequentially:
+
+1. If ``F_k`` preserves all (or at least one) optima of ``F_{k-1}`` and step ``k``
+   is certified on the evolved residual ``F_k``, then ``F_{k+1}`` preserves all
+   (or at least one) optima of ``F_0``.
+2. Weak restrictions are **not** closed under simultaneous application: if two
+   weak steps hold individually on ``F_k``, the second must be re-certified on
+   ``F_{k+1}`` after the first updates the residual. Default `propagate!(ws)`
+   remains strong-only (`allow_weak=false`); `apply_weak_batch!` and
+   `propagate!(ws; allow_weak=true)` apply weak steps sequentially on the
+   evolving residual.
+3. Reconstruction (`reconstruct`) walks `reduction_chain` in **reverse**
+   application order so every `DominanceStep`, `RelationStep` and
+   `EliminationStep` reads only survivor/representative/boundary values that have
+   already been reconstructed.
 
 `verify_certificate(ws, certificate)` compares actual source data as well as
 generation, checks the live caller scope and exact current trail-tip checkpoint
-(generation, epoch, depth and serial), then substitutes
-each step's caller prefix and each already validated predecessor directly in
-the original polynomial. Later caller assumptions restrict still-free variables;
+(generation, epoch, depth and serial), then independently evolves the exact
+original polynomial from raw source storage step by step across caller
+assumptions, `DominanceStep`, `RelationStep` and `EliminationStep` records.
+Later caller assumptions restrict still-free variables;
 they are not retroactively substituted into earlier bound/constant evidence. It does not trust cached fields, adjacency, constant or queue and
 does not call the producer's bound/conditioning helper. Exact bounds must match
 exact recomputation; interval bounds must enclose the exact range and prove the
-claimed strict sign. A wider but still sound enclosure remains mathematically
-valid; forged strict bounds, values, constants, predecessors and source identity
-are rejected. This is mathematical verification, not just hash authentication.
+claimed strict sign; elimination steps must match all ``2^d \le 8`` boundary
+states and argmin table values. A wider but still sound enclosure remains mathematically
+valid; forged strict bounds, values, signs, tables, deltas, constants, predecessors,
+reordered steps, unconditioned weak batches and source identity are rejected.
+This is mathematical verification, not just hash authentication.
 
 ```@example certificates
 root = checkpoint(ws)
