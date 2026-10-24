@@ -135,20 +135,29 @@ producing revision and all paired raw rows. In that tiny warm run, the all-fixed
 case reduced total time, while the cascade and both no-reduction controls were
 slower with preprocessing. Variable reduction alone did not predict payoff.
 
-For degree-0/1/2 local elimination (`eliminate_low_degree!`, `examples/elimination.jl`),
-the elimination queue `elim_queue` tracks only vertices with active degree `<= 3`:
-- **Dense / high-degree no-benefit control (`K_5` or 4-regular graphs):**
-  `elim_queue` is initially empty (`0` candidates examined, `0` edge visits), so
-  calling `eliminate_low_degree!(ws)` on an already-imported workspace incurs
-  constant-size overhead without scanning the graph.
-- **Tiny sparse instances (`n = 6`, 4-clique core + 2-vertex tail):**
-  eliminating 2 degree-`<= 2` vertices reduces the exhaustive child search from
-  `2^6 = 64` to `2^4 = 16` states, but exact `Rational{BigInt}` table
-  construction, residual materialization and certificate verification cost more
-  than evaluating the 48 saved states directly.
-- **Break-even and sparse payoff (`n >= 10..14`, 4-clique core + 6..10-vertex tail/chains/cycles):**
+For degree-0/1/2 local elimination (`eliminate_low_degree!`, `examples/elimination.jl`,
+`scripts/elimination_pilot.jl`, and retained artifact `docs/evidence/elimination-pilot.md`
+with raw rows in `docs/evidence/elimination-pilot.tsv`), `elim_queue` tracks only
+vertices with active degree `<= 3` and reversibly preserves candidates deferred at
+a smaller `max_degree` cutoff so subsequent calls with a larger `max_degree`
+reconsider them without a full-graph scan:
+- **Dense / high-degree no-benefit control (`dense_k5`, 5-vertex `K_5`):**
+  `elim_queue` is initially empty (`0` candidates examined, `0` edge visits, `32 -> 32`
+  states). End-to-end `on` (including workspace construction and residual export)
+  takes `947.15 µs` (`388.5 KiB`) vs `441.84 µs` (`327.5 KiB`) `off` (median paired
+  `+409.88 µs`).
+- **Tiny sparse instances (`whisker_5`, 4-clique core + 1 leaf, `n = 5 -> 4`):**
+  eliminating 1 degree-`<= 2` vertex halves the exhaustive child search (`32 -> 16`
+  states), but workspace construction, exact `Rational{BigInt}` table certification,
+  proof verification and residual materialization take `1173.34 µs` (`241.4 KiB`)
+  vs `460.29 µs` (`257.4 KiB`) `off` (median paired `+713.05 µs`).
+- **Break-even and sparse payoff (`whisker_7`, `whisker_10`, and `cycle_8`):**
   each eliminated degree-`<= 2` vertex halves the downstream exponential search
   space at `O(touched)` local cost (`<= 4` boundary evaluations per vertex),
-  crossing break-even against unpreprocessed exhaustive evaluation around `6`
-  eliminated variables (`2^10 = 1024 -> 16` states) and yielding an order-of-magnitude
-  net reduction by `n = 14` (`2^14 = 16,384 -> 16` states).
+  crossing end-to-end break-even against the exact-enumeration child at 3
+  eliminated variables (`whisker_7`, `128 -> 16` states, `2138.64 -> 1359.81 µs`,
+  median paired `−642.35 µs`, `1274.6 -> 401.0 KiB`), reaching a ~10x total time
+  and ~21x allocation reduction at 6 eliminated variables (`whisker_10`, `1024 -> 16`
+  states, `23469.22 -> 2316.66 µs`, median paired `−21152.56 µs`, `13622.6 -> 639.6 KiB`),
+  and solving `cycle_8` completely where strict dominance removes 0 variables
+  (`256 -> 1` state, `4204.97 -> 1817.25 µs`, median paired `−2303.33 µs`).
