@@ -241,6 +241,111 @@ end
 DominanceCertificate(g,cp,a,s,src) = DominanceCertificate(g,cp,a,s,src,nothing)
 generation(c::DominanceCertificate) = c.generation
 
+function Base.deepcopy_internal(s::EliminationStep, dict::IdDict)
+    haskey(dict, s) && return dict[s]::EliminationStep
+    return EliminationStep(
+        s.variable,
+        _deepcopy_tuple(s.neighbors, dict),
+        _deepcopy_tuple(s.table, dict),
+        Base.deepcopy_internal(s.constant_delta, dict),
+        _deepcopy_tuple(s.linear_deltas, dict),
+        _deepcopy_tuple(s.quadratic_deltas, dict),
+        Base.deepcopy_internal(s.constant, dict),
+        s.predecessors,
+        s.scope_length,
+        s.unique_argmin,
+    )
+end
+
+function Base.deepcopy_internal(s::ProbingStep, dict::IdDict)
+    haskey(dict, s) && return dict[s]::ProbingStep
+    return ProbingStep(
+        s.variable,
+        s.value,
+        s.probed_value,
+        Base.deepcopy_internal(s.branch_lower, dict),
+        Base.deepcopy_internal(s.witness_upper, dict),
+        _deepcopy_tuple(s.witness_state, dict),
+        _deepcopy_tuple(s.branch_steps, dict),
+        Base.deepcopy_internal(s.constant, dict),
+        s.predecessors,
+        s.method,
+        s.scope_length,
+        s.persistency,
+    )
+end
+
+function Base.deepcopy_internal(s::RoofDualityStep, dict::IdDict)
+    haskey(dict, s) && return dict[s]::RoofDualityStep
+    return RoofDualityStep(
+        s.variable,
+        s.value,
+        Base.deepcopy_internal(s.roof_lower, dict),
+        Base.deepcopy_internal(s.max_flow, dict),
+        _deepcopy_tuple(s.flow_edges, dict),
+        _deepcopy_tuple(s.batch_fixings, dict),
+        s.batch_index,
+        Base.deepcopy_internal(s.constant, dict),
+        s.predecessors,
+        s.method,
+        s.scope_length,
+        s.persistency,
+    )
+end
+
+function Base.deepcopy_internal(s::SubmodularCutStep, dict::IdDict)
+    haskey(dict, s) && return dict[s]::SubmodularCutStep
+    return SubmodularCutStep(
+        s.variable,
+        s.value,
+        _deepcopy_tuple(s.component_variables, dict),
+        _deepcopy_tuple(s.gauge, dict),
+        Base.deepcopy_internal(s.component_opt, dict),
+        Base.deepcopy_internal(s.max_flow, dict),
+        _deepcopy_tuple(s.flow_edges, dict),
+        _deepcopy_tuple(s.batch_fixings, dict),
+        s.batch_index,
+        Base.deepcopy_internal(s.constant, dict),
+        s.predecessors,
+        s.method,
+        s.scope_length,
+        s.persistency,
+    )
+end
+
+function Base.deepcopy_internal(s::MaxCutStep, dict::IdDict)
+    haskey(dict, s) && return dict[s]::MaxCutStep
+    return MaxCutStep(
+        s.eliminated,
+        s.representative,
+        s.anchor,
+        s.sign,
+        s.orig_sign,
+        s.value,
+        Base.deepcopy_internal(s.margin, dict),
+        Base.deepcopy_internal(s.direct_weight, dict),
+        Base.deepcopy_internal(s.non_triangle_slack, dict),
+        _deepcopy_tuple(s.triangles, dict),
+        Base.deepcopy_internal(s.constant, dict),
+        s.predecessors,
+        s.method,
+        s.scope_length,
+        s.persistency,
+    )
+end
+
+function Base.deepcopy_internal(c::DominanceCertificate, dict::IdDict)
+    haskey(dict, c) && return dict[c]::DominanceCertificate
+    return DominanceCertificate(
+        c.generation,
+        c._scope_checkpoint,
+        _deepcopy_tuple(c.assumptions, dict),
+        _deepcopy_tuple(c.steps, dict),
+        Base.deepcopy_internal(c._source, dict),
+        Base.deepcopy_internal(c._map, dict),
+    )
+end
+
 """
     ReductionCertificate
 
@@ -406,10 +511,17 @@ function _enclose(q::_Exact)
     v = Float64(q)
     isfinite(v) || return (-Inf,Inf)
     exact = _Exact(v)
-    lo = exact > q ? prevfloat(v) : v
-    hi = exact < q ? nextfloat(v) : v
-    isfinite(lo) && isfinite(hi) && _Exact(lo) <= q <= _Exact(hi) || return (-Inf,Inf)
-    return lo,hi
+    if exact == q
+        return v, v
+    elseif exact > q
+        lo = prevfloat(v)
+        isfinite(lo) && _Exact(lo) <= q || return (-Inf,Inf)
+        return lo, v
+    else
+        hi = nextfloat(v)
+        isfinite(hi) && q <= _Exact(hi) || return (-Inf,Inf)
+        return v, hi
+    end
 end
 
 function _strict_value(lower, upper, domain)
@@ -567,33 +679,45 @@ function _dominance_witness(ws::Workspace, i::Int; map::Union{Nothing,DomainGaug
         2 * direction * map.gauge[i] * _spin_field(ws, i)
     end
     lo, hi = _enclose(init_field)
+    lo_in, hi_in = hi, lo
     visits = 0
     for (j,q) in st.adjacency[i]
         _expired(deadline_ns) && return (nothing,:deadline,:interval,visits,0,0)
         visits += 1
         st.fixed[j] == 2 || continue
         if map === nothing
-            c_lo, c_hi = _enclose(direction * q)
+            q_lo, q_hi = _enclose(q)
+            c_lo, c_hi = direction >= 0 ? (q_lo, q_hi) : (-q_hi, -q_lo)
             if s.domain === QT.BoolDomain
                 a, b = min(0.0, c_lo), max(0.0, c_hi)
+                a_in, b_in = min(0.0, c_hi), max(0.0, c_lo)
             else
                 m = max(abs(c_lo), abs(c_hi))
+                m_in = (c_lo <= 0.0 && c_hi >= 0.0) ? 0.0 : min(abs(c_lo), abs(c_hi))
                 a, b = -m, m
+                a_in, b_in = -m_in, m_in
             end
         elseif map.target_domain === :spin
             c_lo, c_hi = _enclose(direction * _mapped_coupling(ws, i, j, q, map))
             m = max(abs(c_lo), abs(c_hi))
+            m_in = (c_lo <= 0.0 && c_hi >= 0.0) ? 0.0 : min(abs(c_lo), abs(c_hi))
             a, b = -m, m
+            a_in, b_in = -m_in, m_in
         elseif !gauged_bool
             c_lo, c_hi = _enclose(direction * _bool_coupling(ws, q))
             a, b = min(0.0, c_lo), max(0.0, c_hi)
+            a_in, b_in = min(0.0, c_hi), max(0.0, c_lo)
         else
             c_lo, c_hi = _enclose(2 * _spin_coupling(ws, q))
             m = max(abs(c_lo), abs(c_hi))
+            m_in = (c_lo <= 0.0 && c_hi >= 0.0) ? 0.0 : min(abs(c_lo), abs(c_hi))
             a, b = -m, m
+            a_in, b_in = -m_in, m_in
         end
         lo = prevfloat(lo + a)
         hi = nextfloat(hi + b)
+        lo_in = nextfloat(lo_in + a_in)
+        hi_in = prevfloat(hi_in + b_in)
     end
     mapped_val = isfinite(lo) && isfinite(hi) ? _strict_value(lo,hi,target_dom) : nothing
     _expired(deadline_ns) && return (nothing,:deadline,:interval,visits,0,0)
@@ -602,6 +726,16 @@ function _dominance_witness(ws::Workspace, i::Int; map::Union{Nothing,DomainGaug
         c_val = _mapped_constant(ws, map)
         step = DominanceStep(i,val,_Exact(lo),_Exact(hi),deepcopy(c_val),predecessors,:interval,scope_length,:strong)
         return (step,:proved,:interval,visits,0,0)
+    end
+    if !allow_weak && isfinite(lo_in) && isfinite(hi_in)
+        strictly_unproved = if req_mapped === nothing
+            lo_in < 0.0 && hi_in > 0.0
+        elseif req_mapped == low_target
+            lo_in < 0.0
+        else
+            hi_in > 0.0
+        end
+        strictly_unproved && return (nothing,:not_strict,:interval,visits,0,0)
     end
     # Reserve the complete fallback before doing it. Exact work counts the
     # initial field and each free coefficient addition; adjacency visits include
@@ -722,28 +856,40 @@ function _relation_witness(ws::Workspace, u::Int, v::Int;
     _expired(deadline_ns) && return (nothing, :deadline, :none, 0, 0, 0)
     g_u = map === nothing ? 1 : map.gauge[u]
     g_v = map === nothing ? 1 : map.gauge[v]
-    h_u = direction * g_u * _spin_field(ws, u)
-    h_lo, h_hi = _enclose(h_u)
-    rad_hi = max(abs(h_lo), abs(h_hi))
+    h_u_raw = _spin_field(ws, u)
+    hu_lo, hu_hi = _enclose(h_u_raw)
+    h_lo, h_hi = (direction * g_u >= 0) ? (hu_lo, hu_hi) : (-hu_hi, -hu_lo)
+    h_abs_hi = max(abs(h_lo), abs(h_hi))
+    h_abs_lo = (h_lo <= 0.0 && h_hi >= 0.0) ? 0.0 : min(abs(h_lo), abs(h_hi))
+    rad_hi = h_abs_hi
+    rad_other_lo = 0.0
     j_uv_lo, j_uv_hi = 0.0, 0.0
     q_uv = _Exact(0)
     visits = 0
+    is_spin_dom = s.domain === QT.SpinDomain
     for (w, q) in st.adjacency[u]
         _expired(deadline_ns) && return (nothing, :deadline, :interval, visits, 0, 0)
         visits += 1
         st.fixed[w] == 2 || continue
         g_w = map === nothing ? 1 : map.gauge[w]
-        c_lo, c_hi = _enclose(direction * (g_u * g_w) * _spin_coupling(ws, q))
+        q_lo, q_hi = _enclose(q)
+        if !is_spin_dom
+            q_lo = prevfloat(0.25 * q_lo)
+            q_hi = nextfloat(0.25 * q_hi)
+        end
+        c_lo, c_hi = (direction * (g_u * g_w) >= 0) ? (q_lo, q_hi) : (-q_hi, -q_lo)
         if w == v
             q_uv = q
             j_uv_lo, j_uv_hi = c_lo, c_hi
         else
             m = max(abs(c_lo), abs(c_hi))
+            m_in = (c_lo <= 0.0 && c_hi >= 0.0) ? 0.0 : min(abs(c_lo), abs(c_hi))
             rad_hi = nextfloat(rad_hi + m)
+            rad_other_lo = prevfloat(rad_other_lo + m_in)
         end
     end
-    J_uv_mapped = direction * (g_u * g_v) * _spin_coupling(ws, q_uv)
-    σ = sign !== nothing ? Int(sign) : (J_uv_mapped <= 0 ? 1 : -1)
+    q_uv_mapped_nonpos = iszero(q_uv) || ((direction * (g_u * g_v) >= 0) ? (q_uv < 0) : (q_uv > 0))
+    σ = sign !== nothing ? Int(sign) : (q_uv_mapped_nonpos ? 1 : -1)
     orig_σ = g_u * g_v * σ
     center_lo, center_hi = σ == 1 ? (-j_uv_hi, -j_uv_lo) : (j_uv_lo, j_uv_hi)
     lo = prevfloat(center_lo - rad_hi)
@@ -755,8 +901,34 @@ function _relation_witness(ws::Workspace, u::Int, v::Int;
                             predecessors, :interval, scope_length, :strong)
         return (step, :proved, :interval, visits, 0, 0)
     end
+    lower_hi = nextfloat(center_hi - prevfloat(h_abs_lo + rad_other_lo))
+    if isfinite(lower_hi) && lower_hi < 0.0
+        best_u_hi = nextfloat(nextfloat(center_hi + h_abs_hi) - rad_other_lo)
+        if iszero(h_u_raw) || center_hi <= 0.0 || (isfinite(best_u_hi) && best_u_hi < 0.0)
+            return (nothing, :not_strict, :interval, visits, 0, 0)
+        elseif st.lower !== nothing && st.upper !== nothing
+            up_v_lo, _ = _enclose(st.upper[v])
+            _, lo_v_hi = _enclose(st.lower[v])
+            scale_inv = is_spin_dom ? 0.5 : 0.25
+            tot_v_lo = prevfloat(scale_inv * prevfloat(up_v_lo - lo_v_hi))
+            j_abs_hi = max(abs(j_uv_lo), abs(j_uv_hi))
+            rad_v_other_lo = prevfloat(tot_v_lo - j_abs_hi)
+            hv_raw = _spin_field(ws, v)
+            hvr_lo, hvr_hi = _enclose(hv_raw)
+            hv_lo, hv_hi = (direction * g_v >= 0) ? (hvr_lo, hvr_hi) : (-hvr_hi, -hvr_lo)
+            h_u_pos = (direction * g_u >= 0) ? (h_u_raw > 0) : (h_u_raw < 0)
+            σ_hu_pos = (σ == 1) ? h_u_pos : !h_u_pos
+            m_v_req_hi = σ_hu_pos ?
+                nextfloat(nextfloat(center_hi + hv_hi) - rad_v_other_lo) :
+                nextfloat(nextfloat(center_hi - hv_lo) - rad_v_other_lo)
+            if isfinite(m_v_req_hi) && m_v_req_hi < 0.0
+                return (nothing, :not_strict, :interval, visits, 0, 0)
+            end
+        end
+    end
     degree <= max_work - visits || return (nothing, :work_limit, :interval, visits, 0, 0)
     degree < max_exact_work || return (nothing, :verification_limit, :interval, visits, 0, 0)
+    h_u = direction * g_u * h_u_raw
     rad_u_other = _Exact(0)
     center_exact = _Exact(0)
     exact_work = 1
@@ -1040,6 +1212,7 @@ function _probing_witness(
     predecessors=0,
     scope_length=-1,
     _prevalidated_witness::Union{Nothing,Vector{Int}}=nothing,
+    _w_energy_ref::Union{Nothing,Base.RefValue{Union{Nothing,_Exact}}}=nothing,
 )
     _limits(max_work, deadline_ns)
     _limits(max_exact_work, deadline_ns)
@@ -1064,24 +1237,29 @@ function _probing_witness(
     probed_orig = target_orig == 1 ? low_orig : 1
     n = length(s.labels)
     1 <= max_exact_work || return (nothing, :verification_limit, :none, 0, 0, 0)
-    w_energy = st.constant
     exact_work = 1
     visits = 0
-    for u in 1:n
-        st.fixed[u] == 2 || continue
-        _expired(deadline_ns) && return (nothing, :deadline, :none, visits, 0, exact_work)
-        exact_work < max_exact_work || return (nothing, :verification_limit, :none, visits, 0, exact_work)
-        w_energy += st.fields[u] * w_vec[u]
-        exact_work += 1
-        for (v, q) in st.adjacency[u]
+    if _w_energy_ref !== nothing && _w_energy_ref[] !== nothing
+        w_energy = _w_energy_ref[]::_Exact
+    else
+        w_energy = st.constant
+        for u in 1:n
+            st.fixed[u] == 2 || continue
             _expired(deadline_ns) && return (nothing, :deadline, :none, visits, 0, exact_work)
-            visits < max_work || return (nothing, :work_limit, :none, visits, 0, exact_work)
-            visits += 1
-            (st.fixed[v] == 2 && u < v) || continue
             exact_work < max_exact_work || return (nothing, :verification_limit, :none, visits, 0, exact_work)
-            w_energy += q * w_vec[u] * w_vec[v]
+            w_energy += st.fields[u] * w_vec[u]
             exact_work += 1
+            for (v, q) in st.adjacency[u]
+                _expired(deadline_ns) && return (nothing, :deadline, :none, visits, 0, exact_work)
+                visits < max_work || return (nothing, :work_limit, :none, visits, 0, exact_work)
+                visits += 1
+                (st.fixed[v] == 2 && u < v) || continue
+                exact_work < max_exact_work || return (nothing, :verification_limit, :none, visits, 0, exact_work)
+                w_energy += q * (w_vec[u] * w_vec[v])
+                exact_work += 1
+            end
         end
+        _w_energy_ref !== nothing && (_w_energy_ref[] = w_energy)
     end
     U_exact = direction * w_energy
     c_parent = deepcopy(_mapped_constant(ws, map))
@@ -1104,6 +1282,20 @@ function _probing_witness(
                 length(branch_steps) < max_trial_fixes || break
                 st.fixed[u] == 2 || continue
                 _expired(deadline_ns) && return (nothing, :deadline, :interval, visits, fallbacks, exact_work)
+                if map === nothing && st.lower !== nothing && st.upper !== nothing
+                    deg_u = length(st.adjacency[u])
+                    if deg_u <= max_work - visits
+                        lo_u, hi_u = direction > 0 ? (st.lower[u], st.upper[u]) : (-st.upper[u], -st.lower[u])
+                        if !(lo_u > 0 || hi_u < 0)
+                            _, lo_u_hi = _enclose(lo_u)
+                            hi_u_lo, _ = _enclose(hi_u)
+                            if isfinite(lo_u_hi) && isfinite(hi_u_lo) && lo_u_hi < 0.0 && hi_u_lo > 0.0
+                                visits += deg_u
+                                continue
+                            end
+                        end
+                    end
+                end
                 b_step, b_reason, b_method, b_visits, b_fb, b_exact = _dominance_witness(
                     ws, u; map=map, allow_weak=false,
                     max_work=max_work - visits, max_exact_work=max_exact_work - exact_work,
@@ -1133,36 +1325,100 @@ function _probing_witness(
         end
         c_spin = _spin_constant(ws)
         c_bpos = _bool_constant(ws)
-        lo_spin, _ = _enclose(direction * c_spin)
-        lo_bpos, _ = _enclose(direction * c_bpos)
-        lo_bneg = lo_bpos
+        cs_lo, cs_hi = _enclose(c_spin)
+        cb_lo, cb_hi = _enclose(c_bpos)
+        lo_spin, hi_spin = direction >= 0 ? (cs_lo, cs_hi) : (-cs_hi, -cs_lo)
+        lo_bpos, hi_bpos = direction >= 0 ? (cb_lo, cb_hi) : (-cb_hi, -cb_lo)
+        lo_bneg, hi_bneg = lo_bpos, hi_bpos
+        is_spin_dom = s.domain === QT.SpinDomain
+        total_active_adj = 0
+        if st.lower !== nothing && st.upper !== nothing
+            @inbounds for u in 1:n
+                st.fixed[u] == 2 && (total_active_adj += length(st.adjacency[u]))
+            end
+        end
+        use_vertex_sums = st.lower !== nothing && st.upper !== nothing &&
+                          total_active_adj <= max_work - visits
         for u in 1:n
             st.fixed[u] == 2 || continue
             _expired(deadline_ns) && return (nothing, :deadline, :interval, visits, fallbacks, exact_work)
             h_u = _spin_field(ws, u)
             f_u = _bool_field(ws, u)
-            h_lo, h_hi = _enclose(direction * h_u)
-            f_lo, _ = _enclose(direction * f_u)
+            hu_lo, hu_hi = _enclose(h_u)
+            fu_lo, fu_hi = _enclose(f_u)
+            h_lo, h_hi = direction >= 0 ? (hu_lo, hu_hi) : (-hu_hi, -hu_lo)
+            f_lo, f_hi = direction >= 0 ? (fu_lo, fu_hi) : (-fu_hi, -fu_lo)
             m_h = max(abs(h_lo), abs(h_hi))
+            m_h_lo = max(0.0, h_lo, -h_hi)
             lo_spin = prevfloat(lo_spin - m_h)
+            hi_spin = nextfloat(hi_spin - m_h_lo)
             lo_bpos = prevfloat(lo_bpos + min(0.0, f_lo))
+            hi_bpos = nextfloat(hi_bpos + min(0.0, f_hi))
             term_x0 = prevfloat(2.0 * h_lo)
             term_x1 = prevfloat(f_lo - 2.0 * h_hi)
             lo_bneg = prevfloat(lo_bneg + min(term_x0, term_x1))
-            for (v, q) in st.adjacency[u]
-                _expired(deadline_ns) && return (nothing, :deadline, :interval, visits, fallbacks, exact_work)
-                visits < max_work || return (nothing, :work_limit, :interval, visits, fallbacks, exact_work)
-                visits += 1
-                (st.fixed[v] == 2 && u < v) || continue
-                J_uv = _spin_coupling(ws, q)
-                qb_uv = _bool_coupling(ws, q)
-                j_lo, j_hi = _enclose(direction * J_uv)
-                qb_lo, _ = _enclose(direction * qb_uv)
-                m_j = max(abs(j_lo), abs(j_hi))
-                lo_spin = prevfloat(lo_spin - m_j)
-                add_qb = min(0.0, qb_lo)
-                lo_bpos = prevfloat(lo_bpos + add_qb)
-                lo_bneg = prevfloat(lo_bneg + add_qb)
+            term_x0_hi = nextfloat(2.0 * h_hi)
+            term_x1_hi = nextfloat(f_hi - 2.0 * h_lo)
+            hi_bneg = nextfloat(hi_bneg + min(term_x0_hi, term_x1_hi))
+            if use_vertex_sums
+                visits += length(st.adjacency[u])
+                if st.degrees[u] > 0
+                    up_lo, up_hi = _enclose(st.upper[u])
+                    lo_lo, lo_hi = _enclose(st.lower[u])
+                    fld_lo, fld_hi = _enclose(st.fields[u])
+                    diff_lo = max(0.0, prevfloat(up_lo - lo_hi))
+                    diff_hi = max(0.0, nextfloat(up_hi - lo_lo))
+                    if !is_spin_dom
+                        m_j_hi = nextfloat(0.125 * diff_hi)
+                        m_j_lo = prevfloat(0.125 * diff_lo)
+                        neg_qb_lo = direction >= 0 ? min(0.0, prevfloat(lo_lo - fld_hi)) : min(0.0, prevfloat(fld_lo - up_hi))
+                        neg_qb_hi = direction >= 0 ? min(0.0, nextfloat(lo_hi - fld_lo)) : min(0.0, nextfloat(fld_hi - up_lo))
+                        add_qb = prevfloat(0.5 * neg_qb_lo)
+                        add_qb_hi = nextfloat(0.5 * neg_qb_hi)
+                    else
+                        df_lo, df_hi = _enclose(st.dual_fields[u])
+                        m_j_hi = nextfloat(0.25 * diff_hi)
+                        m_j_lo = prevfloat(0.25 * diff_lo)
+                        two_csum_lo = prevfloat(2.0 * fld_lo - df_hi)
+                        two_csum_hi = nextfloat(2.0 * fld_hi - df_lo)
+                        dir_two_csum_lo = direction >= 0 ? two_csum_lo : -two_csum_hi
+                        dir_two_csum_hi = direction >= 0 ? two_csum_hi : -two_csum_lo
+                        add_qb = min(0.0, prevfloat(0.5 * prevfloat(dir_two_csum_lo - diff_hi)))
+                        add_qb_hi = min(0.0, nextfloat(0.5 * nextfloat(dir_two_csum_hi - diff_lo)))
+                    end
+                    lo_spin = prevfloat(lo_spin - m_j_hi)
+                    hi_spin = nextfloat(hi_spin - m_j_lo)
+                    lo_bpos = prevfloat(lo_bpos + add_qb)
+                    hi_bpos = nextfloat(hi_bpos + add_qb_hi)
+                    lo_bneg = prevfloat(lo_bneg + add_qb)
+                    hi_bneg = nextfloat(hi_bneg + add_qb_hi)
+                end
+            else
+                for (v, q) in st.adjacency[u]
+                    _expired(deadline_ns) && return (nothing, :deadline, :interval, visits, fallbacks, exact_work)
+                    visits < max_work || return (nothing, :work_limit, :interval, visits, fallbacks, exact_work)
+                    visits += 1
+                    (st.fixed[v] == 2 && u < v) || continue
+                    q_lo, q_hi = _enclose(q)
+                    c_lo, c_hi = direction >= 0 ? (q_lo, q_hi) : (-q_hi, -q_lo)
+                    if is_spin_dom
+                        j_lo, j_hi = c_lo, c_hi
+                        qb_lo, qb_hi = prevfloat(4.0 * c_lo), nextfloat(4.0 * c_hi)
+                    else
+                        qb_lo, qb_hi = c_lo, c_hi
+                        j_lo, j_hi = prevfloat(0.25 * c_lo), nextfloat(0.25 * c_hi)
+                    end
+                    m_j = max(abs(j_lo), abs(j_hi))
+                    m_j_lo = max(0.0, j_lo, -j_hi)
+                    lo_spin = prevfloat(lo_spin - m_j)
+                    hi_spin = nextfloat(hi_spin - m_j_lo)
+                    add_qb = min(0.0, qb_lo)
+                    add_qb_hi = min(0.0, qb_hi)
+                    lo_bpos = prevfloat(lo_bpos + add_qb)
+                    hi_bpos = nextfloat(hi_bpos + add_qb_hi)
+                    lo_bneg = prevfloat(lo_bneg + add_qb)
+                    hi_bneg = nextfloat(hi_bneg + add_qb_hi)
+                end
             end
         end
         _expired(deadline_ns) && return (nothing, :deadline, :interval, visits, fallbacks, exact_work)
@@ -1179,6 +1435,12 @@ function _probing_witness(
                 return (step, :proved, :interval, visits, fallbacks, exact_work)
             end
         end
+        if isfinite(hi_spin) && isfinite(hi_bpos) && isfinite(hi_bneg)
+            hi_float = max(hi_spin, hi_bpos, hi_bneg)
+            if _Exact(hi_float) <= U_exact
+                return (nothing, :not_strict, :interval, visits, fallbacks, exact_work)
+            end
+        end
         2 * st.active_edges <= max_work - visits ||
             return (nothing, :work_limit, :interval, visits, fallbacks, exact_work)
         active_verts = count(==(2), st.fixed)
@@ -1190,26 +1452,53 @@ function _probing_witness(
         L_spin = direction * c_spin
         L_bpos = direction * c_bpos
         L_bneg = direction * c_bpos
-        for u in 1:n
-            st.fixed[u] == 2 || continue
-            _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, fallbacks, exact_work)
-            h_u = direction * _spin_field(ws, u)
-            f_u = direction * _bool_field(ws, u)
-            L_spin -= abs(h_u)
-            L_bpos += min(_Exact(0), f_u)
-            L_bneg += min(2 * h_u, f_u - 2 * h_u)
-            exact_work += 1
-            for (v, q) in st.adjacency[u]
+        if st.lower !== nothing && st.upper !== nothing && total_active_adj <= max_work - visits
+            sum_diff = _Exact(0)
+            sum_neg_qb2 = _Exact(0)
+            for u in 1:n
+                st.fixed[u] == 2 || continue
                 _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, fallbacks, exact_work)
-                visits += 1
-                (st.fixed[v] == 2 && u < v) || continue
-                J_uv = direction * _spin_coupling(ws, q)
-                qb_uv = direction * _bool_coupling(ws, q)
-                L_spin -= abs(J_uv)
-                add_qb = min(_Exact(0), qb_uv)
-                L_bpos += add_qb
-                L_bneg += add_qb
+                h_u = direction * _spin_field(ws, u)
+                f_u = direction * _bool_field(ws, u)
+                L_spin -= abs(h_u)
+                L_bpos += min(_Exact(0), f_u)
+                L_bneg += min(2 * h_u, f_u - 2 * h_u)
+                diff_u = st.upper[u] - st.lower[u]
+                sum_diff += diff_u
+                if !is_spin_dom
+                    sum_neg_qb2 += direction > 0 ? (st.lower[u] - st.fields[u]) : (st.fields[u] - st.upper[u])
+                else
+                    sum_neg_qb2 += direction * (2 * st.fields[u] - st.dual_fields[u]) - diff_u
+                end
+                visits += length(st.adjacency[u])
+            end
+            exact_work += active_verts + st.active_edges
+            L_spin -= is_spin_dom ? (sum_diff // 4) : (sum_diff // 8)
+            add_qb_tot = sum_neg_qb2 // 2
+            L_bpos += add_qb_tot
+            L_bneg += add_qb_tot
+        else
+            for u in 1:n
+                st.fixed[u] == 2 || continue
+                _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, fallbacks, exact_work)
+                h_u = direction * _spin_field(ws, u)
+                f_u = direction * _bool_field(ws, u)
+                L_spin -= abs(h_u)
+                L_bpos += min(_Exact(0), f_u)
+                L_bneg += min(2 * h_u, f_u - 2 * h_u)
                 exact_work += 1
+                for (v, q) in st.adjacency[u]
+                    _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, fallbacks, exact_work)
+                    visits += 1
+                    (st.fixed[v] == 2 && u < v) || continue
+                    J_uv = direction * _spin_coupling(ws, q)
+                    qb_uv = direction * _bool_coupling(ws, q)
+                    L_spin -= abs(J_uv)
+                    add_qb = min(_Exact(0), qb_uv)
+                    L_bpos += add_qb
+                    L_bneg += add_qb
+                    exact_work += 1
+                end
             end
         end
         _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, fallbacks, exact_work)
@@ -1608,7 +1897,7 @@ function _transport_one_step(
     elseif step isa ProbingStep
         pstep = step::ProbingStep
         new_bsteps = if already_in_target
-            deepcopy(pstep.branch_steps)
+            _deepcopy_tuple(pstep.branch_steps, IdDict())
         else
             p_trial = deepcopy(p)
             _poly_fix!(p_trial, pstep.variable, pstep.probed_value)
@@ -1656,7 +1945,7 @@ function _transport_one_step(
             out = MaxCutStep(
                 mstep.eliminated, 0, mstep.anchor, new_sign, mstep.orig_sign, mstep.value,
                 deepcopy(mstep.margin), deepcopy(mstep.direct_weight),
-                deepcopy(mstep.non_triangle_slack), deepcopy(mstep.triangles),
+                deepcopy(mstep.non_triangle_slack), _deepcopy_tuple(mstep.triangles, IdDict()),
                 deepcopy(c_to), mstep.predecessors, mstep.method,
                 mstep.scope_length, mstep.persistency,
             )
@@ -1668,7 +1957,7 @@ function _transport_one_step(
             out = MaxCutStep(
                 mstep.eliminated, mstep.representative, mstep.anchor, new_sign, mstep.orig_sign, 0,
                 deepcopy(mstep.margin), deepcopy(mstep.direct_weight),
-                deepcopy(mstep.non_triangle_slack), deepcopy(mstep.triangles),
+                deepcopy(mstep.non_triangle_slack), _deepcopy_tuple(mstep.triangles, IdDict()),
                 deepcopy(c_to), mstep.predecessors, mstep.method,
                 mstep.scope_length, mstep.persistency,
             )
@@ -1680,7 +1969,7 @@ function _transport_one_step(
         estep = step::EliminationStep
         out = EliminationStep(
             estep.variable, estep.neighbors, estep.table,
-            deepcopy(estep.constant_delta), deepcopy(estep.linear_deltas), deepcopy(estep.quadratic_deltas),
+            deepcopy(estep.constant_delta), _deepcopy_tuple(estep.linear_deltas, IdDict()), _deepcopy_tuple(estep.quadratic_deltas, IdDict()),
             deepcopy(c_to), estep.predecessors, estep.scope_length, estep.unique_argmin,
         )
         _poly_apply_deltas!(p, estep.variable, estep.constant_delta, estep.linear_deltas, estep.quadratic_deltas)
@@ -1723,10 +2012,14 @@ function _build_proof_certificate(ws::Workspace, step::_ProofRecord,
     source = deepcopy(ws._snapshot)
     _validate_label_copy(ws._snapshot.labels, source.labels)
     owned_map = map === nothing ? nothing : deepcopy(map)
-    raw_prefix = Tuple(deepcopy(ws._state.trail[p].proof) for p in ws._state.fixes
-                       if ws._state.trail[p].proof !== nothing)
-    steps = owned_map === nothing ? (raw_prefix..., step) :
-        _transport_steps(ws, _caller_scope(ws), raw_prefix, nothing, owned_map; tail_step=step)
+    raw_vec = _ProofRecord[deepcopy(ws._state.trail[p].proof) for p in ws._state.fixes
+                           if ws._state.trail[p].proof !== nothing]
+    steps = if owned_map === nothing
+        push!(raw_vec, step)
+        Tuple(raw_vec)
+    else
+        _transport_steps(ws, _caller_scope(ws), Tuple(raw_vec), nothing, owned_map; tail_step=step)
+    end
     _expired(deadline_ns) && return nothing
     return DominanceCertificate(generation(ws), checkpoint(ws), _caller_scope(ws), steps, source, owned_map)
 end
@@ -1985,8 +2278,9 @@ function _build_roof_certificate(
     source = deepcopy(ws._snapshot)
     _validate_label_copy(ws._snapshot.labels, source.labels)
     owned_map = map === nothing ? nothing : deepcopy(map)
-    raw_prefix = Tuple(deepcopy(st.trail[p].proof) for p in st.fixes if st.trail[p].proof !== nothing)
-    raw_all = (raw_prefix..., raw_steps...)
+    raw_vec = _ProofRecord[deepcopy(st.trail[p].proof) for p in st.fixes if st.trail[p].proof !== nothing]
+    append!(raw_vec, raw_steps)
+    raw_all = Tuple(raw_vec)
     steps = owned_map === nothing ? raw_all :
         _transport_steps(ws, _caller_scope(ws), raw_all, nothing, owned_map)
     _expired(deadline_ns) && return (nothing, :deadline, mat_visits)
@@ -2321,8 +2615,9 @@ function _build_submodular_cut_certificate(
     source = deepcopy(ws._snapshot)
     _validate_label_copy(ws._snapshot.labels, source.labels)
     owned_map = map === nothing ? nothing : deepcopy(map)
-    raw_prefix = Tuple(deepcopy(st.trail[p].proof) for p in st.fixes if st.trail[p].proof !== nothing)
-    raw_all = (raw_prefix..., raw_steps...)
+    raw_vec = _ProofRecord[deepcopy(st.trail[p].proof) for p in st.fixes if st.trail[p].proof !== nothing]
+    append!(raw_vec, raw_steps)
+    raw_all = Tuple(raw_vec)
     steps = owned_map === nothing ? raw_all :
         _transport_steps(ws, _caller_scope(ws), raw_all, nothing, owned_map)
     _expired(deadline_ns) && return (nothing, :deadline, mat_visits)

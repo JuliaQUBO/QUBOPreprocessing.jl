@@ -329,6 +329,7 @@ function _ws_mc_total_abs_weight(
     max_work::Int=typemax(Int),
     max_exact_work::Int=typemax(Int),
     deadline_ns=nothing,
+    w0_cache::Union{Nothing,Base.RefValue{Union{Nothing,_Exact}}}=nothing,
 )
     st = ws._state
     n = length(ws._snapshot.labels)
@@ -336,6 +337,12 @@ function _ws_mc_total_abs_weight(
     exact_work = 0
     total = _Exact(0)
     if x == 0
+        if w0_cache !== nothing && w0_cache[] !== nothing
+            _expired(deadline_ns) && return (false, :deadline, _Exact(0), 0, 0)
+            1 <= max_work || return (false, :work_limit, _Exact(0), 0, 0)
+            1 <= max_exact_work || return (false, :verification_limit, _Exact(0), 0, 0)
+            return (true, :ok, w0_cache[]::_Exact, 1, 1)
+        end
         for d in 1:n
             _expired(deadline_ns) && return (false, :deadline, _Exact(0), visits, exact_work)
             visits < max_work || return (false, :work_limit, _Exact(0), visits, exact_work)
@@ -345,9 +352,20 @@ function _ws_mc_total_abs_weight(
             exact_work += 1
             total += abs(direction * _spin_field(ws, d))
         end
+        w0_cache !== nothing && (w0_cache[] = total)
         return (true, :ok, total, visits, exact_work)
     else
         st.fixed[x] == 2 || return (false, :already_fixed, _Exact(0), 0, 0)
+        if st.lower !== nothing && st.upper !== nothing
+            _expired(deadline_ns) && return (false, :deadline, _Exact(0), 0, 0)
+            1 <= max_work || return (false, :work_limit, _Exact(0), 0, 0)
+            1 <= max_exact_work || return (false, :verification_limit, _Exact(0), 0, 0)
+            edge_abs = ws._snapshot.domain === QT.BoolDomain ?
+                ((st.upper[x] - st.lower[x]) // 4) :
+                ((st.upper[x] - st.lower[x]) // 2)
+            total = abs(direction * _spin_field(ws, x)) + edge_abs
+            return (true, :ok, total, 1, 1)
+        end
         exact_work < max_exact_work || return (false, :verification_limit, _Exact(0), 0, 0)
         exact_work += 1
         total += abs(direction * _spin_field(ws, x))
@@ -413,6 +431,7 @@ function _eval_maxcut_anchor(
     max_work::Int,
     max_exact_work::Int,
     deadline_ns,
+    w0_cache::Union{Nothing,Base.RefValue{Union{Nothing,_Exact}}}=nothing,
 )
     st = ws._state
     _expired(deadline_ns) &&
@@ -477,12 +496,37 @@ function _eval_maxcut_anchor(
         )
     end
     common_info = Tuple{Int,_Exact,_Exact,_Exact}[]
+    is_spin_dom = ws._snapshot.domain === QT.SpinDomain
+    scale_inv = is_spin_dom ? 1.0 : 0.25
+    tot_scale = is_spin_dom ? 0.5 : 0.25
     for (c, J_ac) in a_nbrs
         _expired(deadline_ns) &&
             return (false, :deadline, :maxcut_triangle, 0, _Exact(0), _Exact(0), _Exact(0), (), graph_work, tri_work, exact_work)
         graph_work + tri_work < max_work ||
             return (false, :work_limit, :maxcut_triangle, 0, _Exact(0), _Exact(0), _Exact(0), (), graph_work, tri_work, exact_work)
         tri_work += 1
+        if b >= 1 && c >= 1
+            pos_bc = get(st.adj_pos[b], c, 0)
+            pos_bc == 0 && continue
+            q_bc = st.adjacency[b][pos_bc].second
+            iszero(q_bc) && continue
+            if st.lower !== nothing && st.upper !== nothing &&
+               max_work - graph_work - tri_work >= 1 && max_exact_work - exact_work >= 1
+                jac_lo, jac_hi = _enclose(J_ac)
+                jac_abs_hi = max(abs(jac_lo), abs(jac_hi))
+                qbc_lo, qbc_hi = _enclose(q_bc)
+                jbc_abs_hi = nextfloat(scale_inv * max(abs(qbc_lo), abs(qbc_hi)))
+                upc_lo, _ = _enclose(st.upper[c])
+                _, loc_hi = _enclose(st.lower[c])
+                wc_lo = prevfloat(tot_scale * prevfloat(upc_lo - loc_hi))
+                if isfinite(wc_lo) && isfinite(jac_abs_hi) && isfinite(jbc_abs_hi) &&
+                   nextfloat(2.0 * nextfloat(jac_abs_hi + jbc_abs_hi)) <= wc_lo
+                    tri_work += 1
+                    exact_work += 1
+                    continue
+                end
+            end
+        end
         J_bc = _ws_mc_J(ws, b, c, direction)
         iszero(J_bc) && continue
         can_help = false
@@ -499,6 +543,7 @@ function _eval_maxcut_anchor(
             max_work=max_work - graph_work - tri_work,
             max_exact_work=max_exact_work - exact_work,
             deadline_ns=deadline_ns,
+            w0_cache=w0_cache,
         )
         tri_work += dw_c
         exact_work += dx_c
@@ -508,6 +553,7 @@ function _eval_maxcut_anchor(
             graph_work, tri_work, exact_work,
         )
         R_c = W_c - abs(J_ac) - abs(J_bc)
+        R_c >= abs(J_ac) + abs(J_bc) && continue
         push!(common_info, (c, J_ac, J_bc, R_c))
     end
     best_sigma = best_edge_sigma
@@ -568,6 +614,7 @@ function _maxcut_witness(
     deadline_ns=nothing,
     predecessors::Int=0,
     scope_length::Int=-1,
+    w0_cache::Union{Nothing,Base.RefValue{Union{Nothing,_Exact}}}=nothing,
 )
     _limits(max_work, deadline_ns)
     _limits(max_exact_work, deadline_ns)
@@ -576,6 +623,7 @@ function _maxcut_witness(
     map === nothing || _validate_domain_map(ws, map)
     st, s = ws._state, ws._snapshot
     mt = Int(max_triangles)
+    local_w0 = w0_cache === nothing ? Ref{Union{Nothing,_Exact}}(nothing) : w0_cache
     if v == 0
         sign === nothing || throw(ArgumentError("use value keyword for unary Max-Cut proof"))
         req_orig = if value === nothing
@@ -599,7 +647,7 @@ function _maxcut_witness(
         end
         ok, reason, meth, orig_sigma, margin, direct_w, non_tri, tris, g_w, t_w, ex_w = _eval_maxcut_anchor(
             ws, u, 0, cand_signs, direction, allow_weak, mt,
-            Int(max_work), Int(max_exact_work), deadline_ns,
+            Int(max_work), Int(max_exact_work), deadline_ns, local_w0,
         )
         total_visits = g_w + t_w
         if !ok
@@ -639,7 +687,7 @@ function _maxcut_witness(
         end
         ok_u, reason_u, meth_u, sig_u, marg_u, dir_u, ntri_u, tris_u, gw_u, tw_u, ex_u = _eval_maxcut_anchor(
             ws, u, v, cand_signs, direction, allow_weak, mt,
-            Int(max_work), Int(max_exact_work), deadline_ns,
+            Int(max_work), Int(max_exact_work), deadline_ns, local_w0,
         )
         if reason_u in (:deadline, :work_limit, :verification_limit)
             return (nothing, reason_u, meth_u, nothing, 0, gw_u, tw_u, ex_u)
@@ -658,7 +706,7 @@ function _maxcut_witness(
         rem_exact = Int(max_exact_work) - ex_u
         ok_v, reason_v, meth_v, sig_v, marg_v, dir_v, ntri_v, tris_v, gw_v, tw_v, ex_v = _eval_maxcut_anchor(
             ws, v, u, cand_signs, direction, allow_weak, mt,
-            rem_work, rem_exact, deadline_ns,
+            rem_work, rem_exact, deadline_ns, local_w0,
         )
         gw_tot = gw_u + gw_v
         tw_tot = tw_u + tw_v

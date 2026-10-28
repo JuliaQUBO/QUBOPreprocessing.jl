@@ -237,4 +237,47 @@ import QUBOTools as QT
         @test_throws ArgumentError audit_compression(m; max_vars=17)
         @test_throws ArgumentError audit_compression(m; max_work=-1)
     end
+
+    @testset "9. Large-instance scalability and certified fast rejection" begin
+        # 1. Unique large (n, m) tuple length without O(N^2) deepcopy/specialization latency:
+        n_lg = 223
+        L_lg = Dict{Int,Float64}(i => (i == 1 ? 500.0 : 0.1 * ((i % 7) - 3)) for i in 1:n_lg)
+        Q_lg = Dict{Tuple{Int,Int},Float64}()
+        for i in 1:n_lg, j in (i + 1):min(n_lg, i + 20)
+            Q_lg[(i, j)] = ((i + j) % 2 == 0) ? 1.0 : -1.0
+        end
+        m_lg = QT.Model(L_lg, Q_lg; sense=:min, domain=:bool)
+        ws_lg = Workspace(m_lg; rules=:mixed)
+        r_lg = schedule_reductions!(ws_lg; enable_star_triangle=true)
+        @test r_lg.dominance_deductions >= 1
+        @test r_lg.exact_fallbacks == 0
+        t_cert0 = time()
+        cert_lg = export_certificate(ws_lg)
+        mat_lg = materialize(ws_lg; coefficient_type=Float64)
+        elapsed_cert = time() - t_cert0
+        @test cert_lg !== nothing
+        @test verify_certificate(ws_lg, cert_lg).valid
+        @test QT.dimension(export_model(mat_lg)) == n_lg - length(ws_lg._state.fixes)
+        @test elapsed_cert < 5.0
+
+        # 2. O(1) _ws_mc_total_abs_weight exact match with _poly_mc_total_abs_weight across domains:
+        for dom in (:bool, :spin)
+            m_mc = QT.Model(
+                Dict(1 => 1.5, 2 => -2.25, 3 => 0.75, 4 => -0.5),
+                Dict((1, 2) => -3.0, (1, 3) => 2.5, (2, 3) => 1.25, (2, 4) => -1.75, (3, 4) => 0.5);
+                sense=:min,
+                domain=dom,
+            )
+            ws_mc = Workspace(m_mc; rules=:mixed)
+            assume!(ws_mc, 4, 1)
+            p_mc = QUBOPreprocessing._init_poly_state(ws_mc._snapshot)
+            QUBOPreprocessing._poly_fix!(p_mc, 4, 1)
+            dir_mc = QUBOPreprocessing._direction(ws_mc._snapshot)
+            for u in 1:3
+                w_fast = QUBOPreprocessing._ws_mc_total_abs_weight(ws_mc, u, dir_mc)
+                w_poly = QUBOPreprocessing._poly_mc_total_abs_weight(p_mc, u, dir_mc)
+                @test w_fast[1] && w_fast[2] === :ok && w_fast[3] == w_poly
+            end
+        end
+    end
 end
