@@ -364,8 +364,10 @@ import QUBOTools as QT
         rep_lg_mc = apply_maxcut!(ws_lg_mc; max_triangles=2)
         @test rep_lg_mc.stop_reason in (:quiescent, :no_persistency)
         @test rep_lg_mc.candidates >= n_lg
-        enc_big = QUBOPreprocessing._enclose(((BigInt(3) << 1100) + 1) // (BigInt(2) << 1100))
-        @test enc_big[1] <= 1.5 <= enc_big[2]
+        r_big = ((BigInt(3) << 1100) + 1) // (BigInt(2) << 1100)
+        enc_big = QUBOPreprocessing._enclose(r_big)
+        @test Rational{BigInt}(enc_big[1]) <= r_big <= Rational{BigInt}(enc_big[2])
+        @test enc_big[1] == 1.5 && enc_big[2] == nextfloat(1.5)
         ws_id_sp = Workspace(m_ovf; rules=:identity)
         @test prove_dominance(ws_id_sp, 1).stop_reason === :not_strict
         @test prove_probing(ws_id_sp, 5, [-1, -1, -1, -1, -1]; max_rounds=0).stop_reason === :proved
