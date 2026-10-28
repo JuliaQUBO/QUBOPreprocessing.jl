@@ -37,7 +37,9 @@ makedocs(
                            "Reversible conditioning" => "workspace.md",
                            "Certificates" => "certificates.md", "Dominance" => "dominance.md",
                            "Branch workloads" => "scopes.md", "Optional consumers" => "consumers.md"],
-           "Operating envelope" => "performance.md", "API" => "api.md"],
+           "Operating envelope" => "performance.md",
+           "Corpus benchmarks" => "benchmarks.md",
+           "API" => "api.md"],
     checkdocs=:exports,
     warnonly=false,
 )

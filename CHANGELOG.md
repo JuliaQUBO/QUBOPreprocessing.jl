@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.2
+
+Scalability, numerical soundness, and full-corpus benchmark release (#46, #47):
+
+- Eliminated degree-parameterized `NTuple{k, Int}` dynamic dispatch specialization
+  in local certificate construction and verification for high-degree vertices.
+- Replaced $\mathcal{O}(m)$ full-graph `BigFloat` fallbacks with $\mathcal{O}(\deg(i))$
+  localized neighborhood evaluations and outward-rounded IEEE-754 interval enclosures
+  across unary persistency, pair relations, local elimination, Max-Cut, and probing.
+- Fixed `Int64` overflow in probing upper-bound intervals, stale quadratic weight
+  lookups after Max-Cut pair contractions, unbounded sweep precomputation when
+  `max_triangle_pairs == 0`, and interrupted `max_steps` certification reporting.
+- Added the `QUBOLib.jl` and `QOBLIB` corpus benchmark documentation page
+  (`docs/src/benchmarks.md`) and `CITATION.cff` metadata.
+
 ## 0.1.1
 
 Second public release adding the Phase 2 certified reduction passes, composed proof
