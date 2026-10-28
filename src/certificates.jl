@@ -524,6 +524,11 @@ function _enclose(q::_Exact)
     end
 end
 
+@inline _prevfloat_finite(x::Float64) = isfinite(x) ? prevfloat(x) : NaN
+@inline _nextfloat_finite(x::Float64) = isfinite(x) ? nextfloat(x) : NaN
+@inline _min_nan(a::Float64, b::Float64) = (isnan(a) || isnan(b)) ? NaN : min(a, b)
+@inline _max_nan(a::Float64, b::Float64) = (isnan(a) || isnan(b)) ? NaN : max(a, b)
+
 function _strict_value(lower, upper, domain)
     lower > 0 && return domain === QT.BoolDomain ? 0 : -1
     upper < 0 && return 1
@@ -714,10 +719,10 @@ function _dominance_witness(ws::Workspace, i::Int; map::Union{Nothing,DomainGaug
             a, b = -m, m
             a_in, b_in = -m_in, m_in
         end
-        lo = prevfloat(lo + a)
-        hi = nextfloat(hi + b)
-        lo_in = nextfloat(lo_in + a_in)
-        hi_in = prevfloat(hi_in + b_in)
+        lo = _prevfloat_finite(lo + a)
+        hi = _nextfloat_finite(hi + b)
+        lo_in = _nextfloat_finite(lo_in + a_in)
+        hi_in = _prevfloat_finite(hi_in + b_in)
     end
     mapped_val = isfinite(lo) && isfinite(hi) ? _strict_value(lo,hi,target_dom) : nothing
     _expired(deadline_ns) && return (nothing,:deadline,:interval,visits,0,0)
@@ -884,16 +889,16 @@ function _relation_witness(ws::Workspace, u::Int, v::Int;
         else
             m = max(abs(c_lo), abs(c_hi))
             m_in = (c_lo <= 0.0 && c_hi >= 0.0) ? 0.0 : min(abs(c_lo), abs(c_hi))
-            rad_hi = nextfloat(rad_hi + m)
-            rad_other_lo = prevfloat(rad_other_lo + m_in)
+            rad_hi = _nextfloat_finite(rad_hi + m)
+            rad_other_lo = _prevfloat_finite(rad_other_lo + m_in)
         end
     end
     q_uv_mapped_nonpos = iszero(q_uv) || ((direction * (g_u * g_v) >= 0) ? (q_uv < 0) : (q_uv > 0))
     σ = sign !== nothing ? Int(sign) : (q_uv_mapped_nonpos ? 1 : -1)
     orig_σ = g_u * g_v * σ
     center_lo, center_hi = σ == 1 ? (-j_uv_hi, -j_uv_lo) : (j_uv_lo, j_uv_hi)
-    lo = prevfloat(center_lo - rad_hi)
-    hi = nextfloat(center_hi + rad_hi)
+    lo = _prevfloat_finite(center_lo - rad_hi)
+    hi = _nextfloat_finite(center_hi + rad_hi)
     _expired(deadline_ns) && return (nothing, :deadline, :interval, visits, 0, 0)
     if isfinite(lo) && isfinite(hi) && lo > 0
         c_val = _mapped_constant(ws, map)
@@ -901,26 +906,28 @@ function _relation_witness(ws::Workspace, u::Int, v::Int;
                             predecessors, :interval, scope_length, :strong)
         return (step, :proved, :interval, visits, 0, 0)
     end
-    lower_hi = nextfloat(center_hi - prevfloat(h_abs_lo + rad_other_lo))
+    lower_hi = _nextfloat_finite(center_hi - _prevfloat_finite(h_abs_lo + rad_other_lo))
     if isfinite(lower_hi) && lower_hi < 0.0
-        best_u_hi = nextfloat(nextfloat(center_hi + h_abs_hi) - rad_other_lo)
+        best_u_hi = _nextfloat_finite(_nextfloat_finite(center_hi + h_abs_hi) - rad_other_lo)
+        # Note: `:glk_pair` (line 960 and `_verify_relation_step` line 3172) requires
+        # `center_exact > 0 && !iszero(h_u)` even when `sign` is explicitly supplied.
         if iszero(h_u_raw) || center_hi <= 0.0 || (isfinite(best_u_hi) && best_u_hi < 0.0)
             return (nothing, :not_strict, :interval, visits, 0, 0)
         elseif st.lower !== nothing && st.upper !== nothing
             up_v_lo, _ = _enclose(st.upper[v])
             _, lo_v_hi = _enclose(st.lower[v])
             scale_inv = is_spin_dom ? 0.5 : 0.25
-            tot_v_lo = prevfloat(scale_inv * prevfloat(up_v_lo - lo_v_hi))
+            tot_v_lo = _prevfloat_finite(scale_inv * _prevfloat_finite(up_v_lo - lo_v_hi))
             j_abs_hi = max(abs(j_uv_lo), abs(j_uv_hi))
-            rad_v_other_lo = prevfloat(tot_v_lo - j_abs_hi)
+            rad_v_other_lo = _prevfloat_finite(tot_v_lo - j_abs_hi)
             hv_raw = _spin_field(ws, v)
             hvr_lo, hvr_hi = _enclose(hv_raw)
             hv_lo, hv_hi = (direction * g_v >= 0) ? (hvr_lo, hvr_hi) : (-hvr_hi, -hvr_lo)
             h_u_pos = (direction * g_u >= 0) ? (h_u_raw > 0) : (h_u_raw < 0)
             σ_hu_pos = (σ == 1) ? h_u_pos : !h_u_pos
             m_v_req_hi = σ_hu_pos ?
-                nextfloat(nextfloat(center_hi + hv_hi) - rad_v_other_lo) :
-                nextfloat(nextfloat(center_hi - hv_lo) - rad_v_other_lo)
+                _nextfloat_finite(_nextfloat_finite(center_hi + hv_hi) - rad_v_other_lo) :
+                _nextfloat_finite(_nextfloat_finite(center_hi - hv_lo) - rad_v_other_lo)
             if isfinite(m_v_req_hi) && m_v_req_hi < 0.0
                 return (nothing, :not_strict, :interval, visits, 0, 0)
             end
@@ -1348,50 +1355,54 @@ function _probing_witness(
             fu_lo, fu_hi = _enclose(f_u)
             h_lo, h_hi = direction >= 0 ? (hu_lo, hu_hi) : (-hu_hi, -hu_lo)
             f_lo, f_hi = direction >= 0 ? (fu_lo, fu_hi) : (-fu_hi, -fu_lo)
-            m_h = max(abs(h_lo), abs(h_hi))
-            m_h_lo = max(0.0, h_lo, -h_hi)
-            lo_spin = prevfloat(lo_spin - m_h)
-            hi_spin = nextfloat(hi_spin - m_h_lo)
-            lo_bpos = prevfloat(lo_bpos + min(0.0, f_lo))
-            hi_bpos = nextfloat(hi_bpos + min(0.0, f_hi))
-            term_x0 = prevfloat(2.0 * h_lo)
-            term_x1 = prevfloat(f_lo - 2.0 * h_hi)
-            lo_bneg = prevfloat(lo_bneg + min(term_x0, term_x1))
-            term_x0_hi = nextfloat(2.0 * h_hi)
-            term_x1_hi = nextfloat(f_hi - 2.0 * h_lo)
-            hi_bneg = nextfloat(hi_bneg + min(term_x0_hi, term_x1_hi))
+            m_h = _max_nan(abs(h_lo), abs(h_hi))
+            m_h_lo = _max_nan(0.0, _max_nan(h_lo, -h_hi))
+            lo_spin = _prevfloat_finite(lo_spin - m_h)
+            hi_spin = _nextfloat_finite(hi_spin - m_h_lo)
+            lo_bpos = _prevfloat_finite(lo_bpos + _min_nan(0.0, f_lo))
+            hi_bpos = _nextfloat_finite(hi_bpos + _min_nan(0.0, f_hi))
+            two_h_lo = _prevfloat_finite(2.0 * h_lo)
+            two_h_hi = _nextfloat_finite(2.0 * h_hi)
+            term_x0 = two_h_lo
+            term_x1 = _prevfloat_finite(f_lo - two_h_hi)
+            lo_bneg = _prevfloat_finite(lo_bneg + _min_nan(term_x0, term_x1))
+            term_x0_hi = two_h_hi
+            term_x1_hi = _nextfloat_finite(f_hi - two_h_lo)
+            hi_bneg = _nextfloat_finite(hi_bneg + _min_nan(term_x0_hi, term_x1_hi))
             if use_vertex_sums
                 visits += length(st.adjacency[u])
                 if st.degrees[u] > 0
                     up_lo, up_hi = _enclose(st.upper[u])
                     lo_lo, lo_hi = _enclose(st.lower[u])
                     fld_lo, fld_hi = _enclose(st.fields[u])
-                    diff_lo = max(0.0, prevfloat(up_lo - lo_hi))
-                    diff_hi = max(0.0, nextfloat(up_hi - lo_lo))
+                    diff_lo = _max_nan(0.0, _prevfloat_finite(up_lo - lo_hi))
+                    diff_hi = _max_nan(0.0, _nextfloat_finite(up_hi - lo_lo))
                     if !is_spin_dom
-                        m_j_hi = nextfloat(0.125 * diff_hi)
-                        m_j_lo = prevfloat(0.125 * diff_lo)
-                        neg_qb_lo = direction >= 0 ? min(0.0, prevfloat(lo_lo - fld_hi)) : min(0.0, prevfloat(fld_lo - up_hi))
-                        neg_qb_hi = direction >= 0 ? min(0.0, nextfloat(lo_hi - fld_lo)) : min(0.0, nextfloat(fld_hi - up_lo))
-                        add_qb = prevfloat(0.5 * neg_qb_lo)
-                        add_qb_hi = nextfloat(0.5 * neg_qb_hi)
+                        m_j_hi = _nextfloat_finite(0.125 * diff_hi)
+                        m_j_lo = _prevfloat_finite(0.125 * diff_lo)
+                        neg_qb_lo = direction >= 0 ? _min_nan(0.0, _prevfloat_finite(lo_lo - fld_hi)) : _min_nan(0.0, _prevfloat_finite(fld_lo - up_hi))
+                        neg_qb_hi = direction >= 0 ? _min_nan(0.0, _nextfloat_finite(lo_hi - fld_lo)) : _min_nan(0.0, _nextfloat_finite(fld_hi - up_lo))
+                        add_qb = _prevfloat_finite(0.5 * neg_qb_lo)
+                        add_qb_hi = _nextfloat_finite(0.5 * neg_qb_hi)
                     else
                         df_lo, df_hi = _enclose(st.dual_fields[u])
-                        m_j_hi = nextfloat(0.25 * diff_hi)
-                        m_j_lo = prevfloat(0.25 * diff_lo)
-                        two_csum_lo = prevfloat(2.0 * fld_lo - df_hi)
-                        two_csum_hi = nextfloat(2.0 * fld_hi - df_lo)
+                        m_j_hi = _nextfloat_finite(0.25 * diff_hi)
+                        m_j_lo = _prevfloat_finite(0.25 * diff_lo)
+                        two_fld_lo = _prevfloat_finite(2.0 * fld_lo)
+                        two_fld_hi = _nextfloat_finite(2.0 * fld_hi)
+                        two_csum_lo = _prevfloat_finite(two_fld_lo - df_hi)
+                        two_csum_hi = _nextfloat_finite(two_fld_hi - df_lo)
                         dir_two_csum_lo = direction >= 0 ? two_csum_lo : -two_csum_hi
                         dir_two_csum_hi = direction >= 0 ? two_csum_hi : -two_csum_lo
-                        add_qb = min(0.0, prevfloat(0.5 * prevfloat(dir_two_csum_lo - diff_hi)))
-                        add_qb_hi = min(0.0, nextfloat(0.5 * nextfloat(dir_two_csum_hi - diff_lo)))
+                        add_qb = _min_nan(0.0, _prevfloat_finite(0.5 * _prevfloat_finite(dir_two_csum_lo - diff_hi)))
+                        add_qb_hi = _min_nan(0.0, _nextfloat_finite(0.5 * _nextfloat_finite(dir_two_csum_hi - diff_lo)))
                     end
-                    lo_spin = prevfloat(lo_spin - m_j_hi)
-                    hi_spin = nextfloat(hi_spin - m_j_lo)
-                    lo_bpos = prevfloat(lo_bpos + add_qb)
-                    hi_bpos = nextfloat(hi_bpos + add_qb_hi)
-                    lo_bneg = prevfloat(lo_bneg + add_qb)
-                    hi_bneg = nextfloat(hi_bneg + add_qb_hi)
+                    lo_spin = _prevfloat_finite(lo_spin - m_j_hi)
+                    hi_spin = _nextfloat_finite(hi_spin - m_j_lo)
+                    lo_bpos = _prevfloat_finite(lo_bpos + add_qb)
+                    hi_bpos = _nextfloat_finite(hi_bpos + add_qb_hi)
+                    lo_bneg = _prevfloat_finite(lo_bneg + add_qb)
+                    hi_bneg = _nextfloat_finite(hi_bneg + add_qb_hi)
                 end
             else
                 for (v, q) in st.adjacency[u]
@@ -1403,21 +1414,21 @@ function _probing_witness(
                     c_lo, c_hi = direction >= 0 ? (q_lo, q_hi) : (-q_hi, -q_lo)
                     if is_spin_dom
                         j_lo, j_hi = c_lo, c_hi
-                        qb_lo, qb_hi = prevfloat(4.0 * c_lo), nextfloat(4.0 * c_hi)
+                        qb_lo, qb_hi = _prevfloat_finite(4.0 * c_lo), _nextfloat_finite(4.0 * c_hi)
                     else
                         qb_lo, qb_hi = c_lo, c_hi
-                        j_lo, j_hi = prevfloat(0.25 * c_lo), nextfloat(0.25 * c_hi)
+                        j_lo, j_hi = _prevfloat_finite(0.25 * c_lo), _nextfloat_finite(0.25 * c_hi)
                     end
-                    m_j = max(abs(j_lo), abs(j_hi))
-                    m_j_lo = max(0.0, j_lo, -j_hi)
-                    lo_spin = prevfloat(lo_spin - m_j)
-                    hi_spin = nextfloat(hi_spin - m_j_lo)
-                    add_qb = min(0.0, qb_lo)
-                    add_qb_hi = min(0.0, qb_hi)
-                    lo_bpos = prevfloat(lo_bpos + add_qb)
-                    hi_bpos = nextfloat(hi_bpos + add_qb_hi)
-                    lo_bneg = prevfloat(lo_bneg + add_qb)
-                    hi_bneg = nextfloat(hi_bneg + add_qb_hi)
+                    m_j = _max_nan(abs(j_lo), abs(j_hi))
+                    m_j_lo = _max_nan(0.0, _max_nan(j_lo, -j_hi))
+                    lo_spin = _prevfloat_finite(lo_spin - m_j)
+                    hi_spin = _nextfloat_finite(hi_spin - m_j_lo)
+                    add_qb = _min_nan(0.0, qb_lo)
+                    add_qb_hi = _min_nan(0.0, qb_hi)
+                    lo_bpos = _prevfloat_finite(lo_bpos + add_qb)
+                    hi_bpos = _nextfloat_finite(hi_bpos + add_qb_hi)
+                    lo_bneg = _prevfloat_finite(lo_bneg + add_qb)
+                    hi_bneg = _nextfloat_finite(hi_bneg + add_qb_hi)
                 end
             end
         end
@@ -1455,9 +1466,10 @@ function _probing_witness(
         if st.lower !== nothing && st.upper !== nothing && total_active_adj <= max_work - visits
             sum_diff = _Exact(0)
             sum_neg_qb2 = _Exact(0)
+            edge_deg_sum = 0
             for u in 1:n
                 st.fixed[u] == 2 || continue
-                _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, fallbacks, exact_work)
+                _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, fallbacks, exact_work + (edge_deg_sum ÷ 2))
                 h_u = direction * _spin_field(ws, u)
                 f_u = direction * _bool_field(ws, u)
                 L_spin -= abs(h_u)
@@ -1471,8 +1483,10 @@ function _probing_witness(
                     sum_neg_qb2 += direction * (2 * st.fields[u] - st.dual_fields[u]) - diff_u
                 end
                 visits += length(st.adjacency[u])
+                exact_work += 1
+                edge_deg_sum += st.degrees[u]
             end
-            exact_work += active_verts + st.active_edges
+            exact_work += st.active_edges
             L_spin -= is_spin_dom ? (sum_diff // 4) : (sum_diff // 8)
             add_qb_tot = sum_neg_qb2 // 2
             L_bpos += add_qb_tot

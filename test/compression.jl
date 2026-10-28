@@ -279,5 +279,84 @@ import QUBOTools as QT
                 @test w_fast[1] && w_fast[2] === :ok && w_fast[3] == w_poly
             end
         end
+
+        # 3. Probing upper-bound overflow guard (2.0 * h_lo -> Inf must not turn into -floatmax):
+        A_ovf = ldexp(1.0, 1022)
+        m_ovf = QT.Model(
+            Dict(1 => A_ovf, 2 => A_ovf, 3 => A_ovf, 4 => A_ovf, 5 => 1.0),
+            Dict((1, 2) => A_ovf, (3, 4) => A_ovf);
+            sense=:min,
+            domain=:spin,
+        )
+        ws_ovf = Workspace(m_ovf; rules=:mixed)
+        att_ovf = prove_probing(ws_ovf, 5, [-1, -1, -1, -1, -1]; max_rounds=0)
+        @test att_ovf.stop_reason === :proved
+        @test (att_ovf.certificate.steps[1]::ProbingStep).value == -1
+        @test verify_certificate(ws_ovf, att_ovf.certificate).valid
+        rep_ovf = apply_probing!(ws_ovf, 5, [-1, -1, -1, -1, -1]; max_rounds=0)
+        @test rep_ovf.stop_reason === :applied
+        @test rep_ovf.changed == 1
+        @test deductions(ws_ovf) == [5 => -1]
+        @test verify_certificate(ws_ovf, export_certificate(ws_ovf)).valid
+
+        # 4. Max-Cut live pair coupling refresh when neighbor v is contracted into representative u:
+        L_stale = Dict{Int,Float64}(i => (i == 4 ? -5.0 : 0.0) for i in 1:20)
+        Q_stale = Dict{Tuple{Int,Int},Float64}(
+            (1, 2) => -100.0, (1, 3) => -1.0, (2, 3) => -10.0, (1, 4) => -1.0,
+        )
+        m_stale = QT.Model(L_stale, Q_stale; sense=:min, domain=:spin)
+        ws_stale2 = Workspace(m_stale; rules=:mixed)
+        rep_stale2 = apply_maxcut!(
+            ws_stale2; candidates=collect(1:20), enable_unary=false, max_triangles=0, max_deductions=2,
+        )
+        @test rep_stale2.stop_reason === :deduction_limit
+        @test rep_stale2.pair_contractions == 2
+        @test relation_map(ws_stale2, 2) == (1 => 1)
+        @test relation_map(ws_stale2, 3) == (1 => 1)
+        @test verify_certificate(ws_stale2, export_certificate(ws_stale2)).valid
+        ws_stale = Workspace(m_stale; rules=:mixed)
+        rep_stale = apply_maxcut!(ws_stale; candidates=collect(1:20), enable_unary=false, max_triangles=0)
+        @test rep_stale.stop_reason === :quiescent
+        @test rep_stale.pair_contractions == 3
+        @test relation_map(ws_stale, 1) == (4 => 1)
+        @test relation_map(ws_stale, 2) == (4 => 1)
+        @test relation_map(ws_stale, 3) == (4 => 1)
+        @test verify_certificate(ws_stale, export_certificate(ws_stale)).valid
+
+        # 5. Max-Cut sweep-bound precomputation respects work, verification, and deadline budgets:
+        ws_mc_lim1 = Workspace(m_lg; rules=:mixed)
+        rep_mc_lim1 = apply_maxcut!(ws_mc_lim1; candidates=[2], max_work=5)
+        @test rep_mc_lim1.stop_reason === :work_limit
+        @test rep_mc_lim1.edge_visits <= 5
+        ws_mc_lim2 = Workspace(m_lg; rules=:mixed)
+        rep_mc_lim2 = apply_maxcut!(ws_mc_lim2; candidates=[2], max_exact_work=2)
+        @test rep_mc_lim2.stop_reason === :verification_limit
+        @test rep_mc_lim2.exact_work <= 2
+        ws_mc_lim3 = Workspace(m_lg; rules=:mixed)
+        rep_mc_lim3 = apply_maxcut!(ws_mc_lim3; deadline_ns=UInt64(1))
+        @test rep_mc_lim3.stop_reason === :deadline
+        @test rep_mc_lim3.edge_visits == 0
+
+        # 6. Probing aggregate exact fallback charges partial exact work on early exit:
+        ws_pr_acc = Workspace(m_ovf; rules=:mixed)
+        att_pr_acc = prove_probing(
+            ws_pr_acc, 5, [-1, -1, -1, -1, -1]; max_rounds=0, max_exact_work=3,
+        )
+        @test att_pr_acc.stop_reason === :verification_limit
+        @test att_pr_acc.exact_work == 3
+
+        # 7. Explicit opposite-sign relation with nonpositive center is rejected consistently:
+        m_rel_np = QT.Model(
+            Dict(1 => 2.0, 2 => -2.0),
+            Dict((1, 2) => -1.0);
+            sense=:min,
+            domain=:spin,
+        )
+        for rmode in (:mixed, :relations)
+            ws_rel_np = Workspace(m_rel_np; rules=rmode)
+            att_rel_np = prove_relation(ws_rel_np, 1, 2; sign=-1)
+            @test att_rel_np.stop_reason === :not_strict
+            @test att_rel_np.certificate === nothing
+        end
     end
 end

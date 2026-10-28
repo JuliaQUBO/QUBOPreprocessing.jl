@@ -515,12 +515,12 @@ function _eval_maxcut_anchor(
                 jac_lo, jac_hi = _enclose(J_ac)
                 jac_abs_hi = max(abs(jac_lo), abs(jac_hi))
                 qbc_lo, qbc_hi = _enclose(q_bc)
-                jbc_abs_hi = nextfloat(scale_inv * max(abs(qbc_lo), abs(qbc_hi)))
+                jbc_abs_hi = _nextfloat_finite(scale_inv * max(abs(qbc_lo), abs(qbc_hi)))
                 upc_lo, _ = _enclose(st.upper[c])
                 _, loc_hi = _enclose(st.lower[c])
-                wc_lo = prevfloat(tot_scale * prevfloat(upc_lo - loc_hi))
-                if isfinite(wc_lo) && isfinite(jac_abs_hi) && isfinite(jbc_abs_hi) &&
-                   nextfloat(2.0 * nextfloat(jac_abs_hi + jbc_abs_hi)) <= wc_lo
+                wc_lo = _prevfloat_finite(tot_scale * _prevfloat_finite(upc_lo - loc_hi))
+                two_j_sum = _nextfloat_finite(2.0 * _nextfloat_finite(jac_abs_hi + jbc_abs_hi))
+                if isfinite(wc_lo) && isfinite(two_j_sum) && two_j_sum <= wc_lo
                     tri_work += 1
                     exact_work += 1
                     continue
