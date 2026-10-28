@@ -134,9 +134,59 @@ struct DomainGaugeMap
             cursor,
         )
     end
+    function DomainGaugeMap(
+        generation::Generation,
+        source_domain::Symbol,
+        target_domain::Symbol,
+        sense::Symbol,
+        scale::Float64,
+        offset::Float64,
+        gauge::Tuple{Vararg{Int}},
+        _label_map::Dict{Any,Int},
+        _source::_Snapshot,
+        _identity_gauge::Bool,
+        _validated::Bool,
+        _root_bool_constant::_Exact,
+        _cursor::_GaugeConstantCursor,
+    )
+        return new(
+            generation,
+            source_domain,
+            target_domain,
+            sense,
+            scale,
+            offset,
+            gauge,
+            _label_map,
+            _source,
+            _identity_gauge,
+            _validated,
+            _root_bool_constant,
+            _cursor,
+        )
+    end
 end
 generation(m::DomainGaugeMap) = m.generation
-original_variables(m::DomainGaugeMap) = _owned_labels(m._source.label_type[m._source.labels...])
+original_variables(m::DomainGaugeMap) = _labels_vector(m._source)
+
+function Base.deepcopy_internal(m::DomainGaugeMap, dict::IdDict)
+    haskey(dict, m) && return dict[m]::DomainGaugeMap
+    return DomainGaugeMap(
+        m.generation,
+        m.source_domain,
+        m.target_domain,
+        m.sense,
+        m.scale,
+        m.offset,
+        _deepcopy_tuple(m.gauge, dict),
+        Base.deepcopy_internal(m._label_map, dict),
+        Base.deepcopy_internal(m._source, dict),
+        m._identity_gauge,
+        m._validated,
+        Base.deepcopy_internal(m._root_bool_constant, dict),
+        Base.deepcopy_internal(m._cursor, dict),
+    )
+end
 
 function _check_gauge_scalar(v)
     !(v isa Bool) && v isa Real && isfinite(v) && (v == -1 || v == 1) ||
@@ -147,7 +197,7 @@ end
 function _parse_gauge(ws::Workspace, gauge)
     n = length(ws._snapshot.labels)
     if gauge === nothing
-        return ntuple(_ -> 1, n)
+        return Tuple(ones(Int, n))
     elseif gauge isa AbstractVector
         Base.require_one_based_indexing(gauge)
         length(gauge) == n || throw(ArgumentError("gauge vector must cover all $n original variables"))
@@ -179,7 +229,7 @@ function domain_map(ws::Workspace; domain::Symbol=_domain_symbol(ws._snapshot.do
     _qt_domain(domain)
     g = _parse_gauge(ws, gauge)
     source = ws._snapshot
-    _validate_label_copy(source.labels, deepcopy(source.labels))
+    _validate_label_copy(source.labels, _deepcopy_tuple(source.labels, IdDict()))
     lmap = Dict{Any,Int}(v => i for (i, v) in enumerate(source.labels))
     m = DomainGaugeMap(
         generation(ws),

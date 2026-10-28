@@ -533,6 +533,7 @@ function probe_variables!(
     fallbacks = 0
     exact = 0
     n_cand = length(cand_indices)
+    w_energy_ref = Ref{Union{Nothing,_Exact}}(nothing)
     for pos in 1:n_cand
         i = cand_indices[pos]
         st.fixed[i] == 2 || continue
@@ -551,6 +552,7 @@ function probe_variables!(
             max_work=max_work - visits - deg_i, max_exact_work=max_exact_work - exact,
             deadline_ns, predecessors=st.proof_count, scope_length=length(st.callers),
             _prevalidated_witness=w_vec,
+            _w_energy_ref=w_energy_ref,
         )
         visits += p_visits
         fallbacks += p_fb
@@ -1226,6 +1228,125 @@ function apply_maxcut!(
     )
 end
 
+function _mc_compute_sweep_bounds!(
+    W_lo::Vector{Float64},
+    M_hi::Vector{Float64},
+    G_hi::Vector{Float64},
+    H_hi::Vector{Float64},
+    ws::Workspace,
+    mt::Int,
+    max_work::Int,
+    max_exact_work::Int,
+    deadline_ns,
+)
+    s, st = ws._snapshot, ws._state
+    (st.lower !== nothing && st.upper !== nothing) || return (false, :no_bounds, 0, 0)
+    n = length(s.labels)
+    is_spin_dom = s.domain === QT.SpinDomain
+    scale_inv = is_spin_dom ? 1.0 : 0.25
+    tot_scale = is_spin_dom ? 0.5 : 0.25
+    W0_lo = 0.0
+    M0_hi = 0.0
+    gw = 0
+    exw = 0
+    @inbounds for x in 1:n
+        _expired(deadline_ns) && return (false, :deadline, gw, exw)
+        if st.fixed[x] != 2
+            W_lo[x] = Inf
+            M_hi[x] = 0.0
+            G_hi[x] = 0.0
+            H_hi[x] = 0.0
+            continue
+        end
+        exw < max_exact_work || return (false, :verification_limit, gw, exw)
+        exw += 1
+        hx_raw = _spin_field(ws, x)
+        hx_lo, hx_hi = _enclose(hx_raw)
+        hx_abs_lo = (hx_lo <= 0.0 && hx_hi >= 0.0) ? 0.0 : min(abs(hx_lo), abs(hx_hi))
+        hx_abs_hi = max(abs(hx_lo), abs(hx_hi))
+        H_hi[x] = hx_abs_hi
+        W0_lo = _prevfloat_finite(W0_lo + hx_abs_lo)
+        M0_hi = _max_nan(M0_hi, hx_abs_hi)
+        up_lo, _ = _enclose(st.upper[x])
+        _, lo_hi = _enclose(st.lower[x])
+        edge_lo = _prevfloat_finite(tot_scale * _prevfloat_finite(up_lo - lo_hi))
+        W_lo[x] = _prevfloat_finite(edge_lo + hx_abs_lo)
+        if mt == 0
+            M_hi[x] = 0.0
+            G_hi[x] = 0.0
+            continue
+        end
+        mx = hx_abs_hi
+        for (w, q) in st.adjacency[x]
+            _expired(deadline_ns) && return (false, :deadline, gw, exw)
+            gw < max_work || return (false, :work_limit, gw, exw)
+            gw += 1
+            (st.fixed[w] == 2 && !iszero(q)) || continue
+            exw < max_exact_work || return (false, :verification_limit, gw, exw)
+            exw += 1
+            q_lo, q_hi = _enclose(q)
+            j_hi = _nextfloat_finite(scale_inv * max(abs(q_lo), abs(q_hi)))
+            mx = _max_nan(mx, j_hi)
+        end
+        M_hi[x] = mx
+    end
+    mt == 0 && return (true, :ok, gw, exw)
+    @inbounds for x in 1:n
+        _expired(deadline_ns) && return (false, :deadline, gw, exw)
+        st.fixed[x] == 2 || continue
+        g_sum = 0.0
+        if !(H_hi[x] <= 0.0)
+            two_jac = _nextfloat_finite(2.0 * H_hi[x])
+            cand_g = _nextfloat_finite(_nextfloat_finite(two_jac + _nextfloat_finite(2.0 * M0_hi)) - W0_lo)
+            if !(cand_g <= 0.0)
+                g_sum = _nextfloat_finite(g_sum + _min_nan(two_jac, cand_g))
+            end
+        end
+        for (c, q) in st.adjacency[x]
+            _expired(deadline_ns) && return (false, :deadline, gw, exw)
+            gw < max_work || return (false, :work_limit, gw, exw)
+            gw += 1
+            (st.fixed[c] == 2 && !iszero(q)) || continue
+            exw < max_exact_work || return (false, :verification_limit, gw, exw)
+            exw += 1
+            q_lo, q_hi = _enclose(q)
+            j_ac_hi = _nextfloat_finite(scale_inv * max(abs(q_lo), abs(q_hi)))
+            two_jac = _nextfloat_finite(2.0 * j_ac_hi)
+            cand_g = _nextfloat_finite(_nextfloat_finite(two_jac + _nextfloat_finite(2.0 * M_hi[c])) - W_lo[c])
+            if !(cand_g <= 0.0)
+                g_sum = _nextfloat_finite(g_sum + _min_nan(two_jac, cand_g))
+            end
+        end
+        G_hi[x] = g_sum
+    end
+    return (true, :ok, gw, exw)
+end
+
+function _mc_try_refresh_bounds!(
+    W_lo::Vector{Float64},
+    M_hi::Vector{Float64},
+    G_hi::Vector{Float64},
+    H_hi::Vector{Float64},
+    ws::Workspace,
+    mt::Int,
+    n_cands::Int,
+    rem_w::Int,
+    rem_ex::Int,
+    deadline_ns,
+)
+    st = ws._state
+    (st.lower !== nothing && st.upper !== nothing && n_cands >= 16) ||
+        return (false, :skipped, 0, 0)
+    n_vars = length(W_lo)
+    est_gw = mt > 0 ? 4 * st.active_edges : 0
+    est_ex = mt > 0 ? (2 * n_vars + 4 * st.active_edges) : n_vars
+    (rem_w >= 2 * max(est_gw, 1) && rem_ex >= 2 * max(est_ex, 1)) ||
+        return (false, :skipped, 0, 0)
+    return _mc_compute_sweep_bounds!(
+        W_lo, M_hi, G_hi, H_hi, ws, mt, rem_w ÷ 2, rem_ex ÷ 2, deadline_ns,
+    )
+end
+
 function apply_maxcut!(
     ws::Workspace;
     candidates=nothing,
@@ -1298,9 +1419,29 @@ function apply_maxcut!(
         )
     end
 
+    w0_cache = Ref{Union{Nothing,_Exact}}(nothing)
+    tested_pairs = Set{Tuple{Int,Int}}()
+    n_vars = length(s.labels)
+    n_cands = length(cand_indices)
+    W_lo = Vector{Float64}(undef, n_vars)
+    M_hi = Vector{Float64}(undef, n_vars)
+    G_hi = Vector{Float64}(undef, n_vars)
+    H_hi = Vector{Float64}(undef, n_vars)
+    scale_inv = s.domain === QT.SpinDomain ? 1.0 : 0.25
     while true
         changed_in_sweep = false
+        empty!(tested_pairs)
+        bounds_valid = false
         if enable_unary
+            _expired(deadline_ns) && return finish(:deadline)
+            rem_w0 = Int(max_work) - (g_work_tot + t_work_tot + mat_work_tot)
+            rem_ex0 = Int(max_exact_work) - ex_work_tot
+            bounds_valid, b_reason, b_gw, b_exw = _mc_try_refresh_bounds!(
+                W_lo, M_hi, G_hi, H_hi, ws, mt, n_cands, rem_w0, rem_ex0, deadline_ns,
+            )
+            g_work_tot += b_gw
+            ex_work_tot += b_exw
+            b_reason === :deadline && return finish(:deadline)
             for u in cand_indices
                 st.fixed[u] == 2 || continue
                 _expired(deadline_ns) && return finish(:deadline)
@@ -1309,12 +1450,21 @@ function apply_maxcut!(
                 rem_ex = Int(max_exact_work) - ex_work_tot
                 rem_w > 0 || return finish(:work_limit)
                 rem_ex > 0 || return finish(:verification_limit)
+                if bounds_valid && isfinite(W_lo[u]) && isfinite(G_hi[u]) && isfinite(H_hi[u])
+                    req_u = _nextfloat_finite(_nextfloat_finite(2.0 * H_hi[u]) + G_hi[u])
+                    if isfinite(req_u) && req_u < W_lo[u]
+                        cand_count += 1
+                        ex_work_tot += 1
+                        continue
+                    end
+                end
                 cand_count += 1
                 raw_step, reason, method, _, tris_used, gw, tw, exw = _maxcut_witness(
                     ws, u, 0;
                     map=map, allow_weak=allow_weak, max_triangles=mt,
                     max_work=rem_w, max_exact_work=rem_ex, deadline_ns=deadline_ns,
                     predecessors=st.proof_count, scope_length=length(st.callers),
+                    w0_cache=w0_cache,
                 )
                 g_work_tot += gw
                 t_work_tot += tw
@@ -1325,7 +1475,7 @@ function apply_maxcut!(
                     MaxCutStep(
                         u, 0, raw_step.anchor, raw_step.orig_sign, raw_step.orig_sign, raw_step.value,
                         deepcopy(raw_step.margin), deepcopy(raw_step.direct_weight),
-                        deepcopy(raw_step.non_triangle_slack), deepcopy(raw_step.triangles),
+                        deepcopy(raw_step.non_triangle_slack), _deepcopy_tuple(raw_step.triangles, IdDict()),
                         deepcopy(st.constant), raw_step.predecessors, raw_step.method,
                         raw_step.scope_length, raw_step.persistency,
                     )
@@ -1333,6 +1483,8 @@ function apply_maxcut!(
                 rep = _fix!(ws, u, step.value; proof=step, max_work=rem_w2, deadline_ns=deadline_ns)
                 mat_work_tot += rep.edge_visits
                 rep.stop_reason === :applied || return finish(rep.stop_reason)
+                w0_cache[] = nothing
+                bounds_valid = false
                 ded_count += 1
                 unary_count += 1
                 method === :maxcut_edge ? (edge_count += 1) : (tri_count += 1)
@@ -1343,63 +1495,104 @@ function apply_maxcut!(
             end
         end
         if enable_pairs
-            for u in cand_indices
-                st.fixed[u] == 2 && st.degrees[u] >= 1 || continue
+            if !bounds_valid
                 _expired(deadline_ns) && return finish(:deadline)
-                ded_count < max_deductions || return finish(:deduction_limit)
-                nbrs = Int[w for (w, q) in st.adjacency[u] if st.fixed[w] == 2 && !iszero(_spin_coupling(ws, q))]
-                sort!(nbrs)
-                for v in nbrs
-                    (st.fixed[u] == 2 && st.fixed[v] == 2) || continue
-                    f_uv = _contraction_fill(st, u, v)
-                    f_vu = _contraction_fill(st, v, u)
-                    elim, rep_v, f_chosen = f_uv <= f_vu ? (u, v, f_uv) : (v, u, f_vu)
-                    if f_chosen > mf
-                        fill_skipped = true
-                        continue
-                    end
+                rem_w0 = Int(max_work) - (g_work_tot + t_work_tot + mat_work_tot)
+                rem_ex0 = Int(max_exact_work) - ex_work_tot
+                bounds_valid, b_reason, b_gw, b_exw = _mc_try_refresh_bounds!(
+                    W_lo, M_hi, G_hi, H_hi, ws, mt, n_cands, rem_w0, rem_ex0, deadline_ns,
+                )
+                g_work_tot += b_gw
+                ex_work_tot += b_exw
+                b_reason === :deadline && return finish(:deadline)
+            end
+            for u in cand_indices
+                while st.fixed[u] == 2 && st.degrees[u] >= 1
                     _expired(deadline_ns) && return finish(:deadline)
                     ded_count < max_deductions || return finish(:deduction_limit)
-                    rem_w = Int(max_work) - (g_work_tot + t_work_tot + mat_work_tot)
-                    rem_ex = Int(max_exact_work) - ex_work_tot
-                    rem_w > 0 || return finish(:work_limit)
-                    rem_ex > 0 || return finish(:verification_limit)
-                    cand_count += 1
-                    raw_step, reason, method, _, tris_used, gw, tw, exw = _maxcut_witness(
-                        ws, elim, rep_v;
-                        map=map, allow_weak=allow_weak, max_triangles=mt,
-                        max_work=rem_w, max_exact_work=rem_ex, deadline_ns=deadline_ns,
-                        predecessors=st.proof_count, scope_length=length(st.callers),
-                    )
-                    g_work_tot += gw
-                    t_work_tot += tw
-                    ex_work_tot += exw
-                    reason in (:deadline, :work_limit, :verification_limit) && return finish(reason)
-                    raw_step === nothing && continue
-                    step = map === nothing ? raw_step :
-                        MaxCutStep(
-                            elim, rep_v, raw_step.anchor, raw_step.orig_sign, raw_step.orig_sign, 0,
-                            deepcopy(raw_step.margin), deepcopy(raw_step.direct_weight),
-                            deepcopy(raw_step.non_triangle_slack), deepcopy(raw_step.triangles),
-                            deepcopy(st.constant), raw_step.predecessors, raw_step.method,
-                            raw_step.scope_length, raw_step.persistency,
+                    nbrs = Int[w for (w, q) in st.adjacency[u] if st.fixed[w] == 2 && !iszero(q)]
+                    sort!(nbrs)
+                    restarted_u = false
+                    for v in nbrs
+                        (st.fixed[u] == 2 && st.fixed[v] == 2) || continue
+                        pos_uv = get(st.adj_pos[u], v, 0)
+                        pos_uv == 0 && continue
+                        q = st.adjacency[u][pos_uv].second
+                        iszero(q) && continue
+                        pair_key = u < v ? (u, v) : (v, u)
+                        pair_key in tested_pairs && continue
+                        _expired(deadline_ns) && return finish(:deadline)
+                        ded_count < max_deductions || return finish(:deduction_limit)
+                        rem_w = Int(max_work) - (g_work_tot + t_work_tot + mat_work_tot)
+                        rem_ex = Int(max_exact_work) - ex_work_tot
+                        rem_w > 0 || return finish(:work_limit)
+                        rem_ex > 0 || return finish(:verification_limit)
+                        if bounds_valid && isfinite(W_lo[u]) && isfinite(G_hi[u]) && isfinite(W_lo[v]) && isfinite(G_hi[v])
+                            q_lo, q_hi = _enclose(q)
+                            j_uv_hi = _nextfloat_finite(scale_inv * max(abs(q_lo), abs(q_hi)))
+                            two_j = _nextfloat_finite(2.0 * j_uv_hi)
+                            req_u = _nextfloat_finite(two_j + G_hi[u])
+                            req_v = _nextfloat_finite(two_j + G_hi[v])
+                            if isfinite(req_u) && isfinite(req_v) && req_u < W_lo[u] && req_v < W_lo[v]
+                                push!(tested_pairs, pair_key)
+                                cand_count += 1
+                                g_work_tot += 1
+                                ex_work_tot += 1
+                                continue
+                            end
+                        end
+                        f_uv = _contraction_fill(st, u, v)
+                        f_vu = _contraction_fill(st, v, u)
+                        elim, rep_v, f_chosen = f_uv <= f_vu ? (u, v, f_uv) : (v, u, f_vu)
+                        if f_chosen > mf
+                            fill_skipped = true
+                            push!(tested_pairs, pair_key)
+                            continue
+                        end
+                        push!(tested_pairs, pair_key)
+                        cand_count += 1
+                        raw_step, reason, method, _, tris_used, gw, tw, exw = _maxcut_witness(
+                            ws, elim, rep_v;
+                            map=map, allow_weak=allow_weak, max_triangles=mt,
+                            max_work=rem_w, max_exact_work=rem_ex, deadline_ns=deadline_ns,
+                            predecessors=st.proof_count, scope_length=length(st.callers),
+                            w0_cache=w0_cache,
                         )
-                    const_delta, field_deltas, quad_deltas = _relation_deltas(ws, elim, rep_v, step.orig_sign)
-                    rem_w2 = Int(max_work) - (g_work_tot + t_work_tot + mat_work_tot)
-                    rep_apply = _apply_reduction!(
-                        ws, elim, Int8(3), step, const_delta, field_deltas, quad_deltas;
-                        max_work=rem_w2, deadline_ns=deadline_ns, precharged_visits=0,
-                    )
-                    mat_work_tot += rep_apply.edge_visits
-                    rep_apply.stop_reason === :applied || return finish(rep_apply.stop_reason)
-                    ded_count += 1
-                    pair_count += 1
-                    method === :maxcut_edge ? (edge_count += 1) : (tri_count += 1)
-                    tris_total += tris_used
-                    fill_total += f_chosen
-                    push!(contractions, (deepcopy(s.labels[elim]), deepcopy(s.labels[rep_v]), raw_step.sign))
-                    changed_in_sweep = true
-                    elim == u && break
+                        g_work_tot += gw
+                        t_work_tot += tw
+                        ex_work_tot += exw
+                        reason in (:deadline, :work_limit, :verification_limit) && return finish(reason)
+                        raw_step === nothing && continue
+                        step = map === nothing ? raw_step :
+                            MaxCutStep(
+                                elim, rep_v, raw_step.anchor, raw_step.orig_sign, raw_step.orig_sign, 0,
+                                deepcopy(raw_step.margin), deepcopy(raw_step.direct_weight),
+                                deepcopy(raw_step.non_triangle_slack), _deepcopy_tuple(raw_step.triangles, IdDict()),
+                                deepcopy(st.constant), raw_step.predecessors, raw_step.method,
+                                raw_step.scope_length, raw_step.persistency,
+                            )
+                        const_delta, field_deltas, quad_deltas = _relation_deltas(ws, elim, rep_v, step.orig_sign)
+                        rem_w2 = Int(max_work) - (g_work_tot + t_work_tot + mat_work_tot)
+                        rep_apply = _apply_reduction!(
+                            ws, elim, Int8(3), step, const_delta, field_deltas, quad_deltas;
+                            max_work=rem_w2, deadline_ns=deadline_ns, precharged_visits=0,
+                        )
+                        mat_work_tot += rep_apply.edge_visits
+                        rep_apply.stop_reason === :applied || return finish(rep_apply.stop_reason)
+                        w0_cache[] = nothing
+                        empty!(tested_pairs)
+                        bounds_valid = false
+                        ded_count += 1
+                        pair_count += 1
+                        method === :maxcut_edge ? (edge_count += 1) : (tri_count += 1)
+                        tris_total += tris_used
+                        fill_total += f_chosen
+                        push!(contractions, (deepcopy(s.labels[elim]), deepcopy(s.labels[rep_v]), raw_step.sign))
+                        changed_in_sweep = true
+                        restarted_u = (elim != u)
+                        break
+                    end
+                    restarted_u || break
                 end
             end
         end
@@ -1698,6 +1891,54 @@ function _try_contract_pair!(
     return (rep_apply.stop_reason, w_visits + rep_apply.edge_visits, w_exact + apply_exact_need, w_fb)
 end
 
+@inline function _can_possibly_contract(
+    ws::Workspace,
+    elim::Int,
+    rep::Int,
+    q::_Exact,
+    direction::Int,
+    map::Union{Nothing,DomainGaugeMap},
+)
+    st, s = ws._state, ws._snapshot
+    (st.lower !== nothing && st.upper !== nothing) || return true
+    iszero(q) && return false
+    is_spin_dom = s.domain === QT.SpinDomain
+    tot_scale = is_spin_dom ? 0.5 : 0.25
+    j_scale = is_spin_dom ? 1.0 : 0.25
+    up_e_lo, _ = _enclose(st.upper[elim])
+    _, lo_e_hi = _enclose(st.lower[elim])
+    tot_e_lo = _prevfloat_finite(tot_scale * _prevfloat_finite(up_e_lo - lo_e_hi))
+    g_e = map === nothing ? 1 : map.gauge[elim]
+    g_r = map === nothing ? 1 : map.gauge[rep]
+    he_raw = _spin_field(ws, elim)
+    he_lo, he_hi = _enclose(he_raw)
+    he_abs_hi = max(abs(he_lo), abs(he_hi))
+    he_abs_lo = (he_lo <= 0.0 && he_hi >= 0.0) ? 0.0 : min(abs(he_lo), abs(he_hi))
+    q_lo, q_hi = _enclose(q)
+    two_c_hi = _nextfloat_finite(2.0 * _nextfloat_finite(j_scale * max(abs(q_lo), abs(q_hi))))
+    if isfinite(tot_e_lo) && isfinite(he_abs_hi) && isfinite(two_c_hi)
+        _nextfloat_finite(two_c_hi + he_abs_hi) < tot_e_lo && return false
+        if _nextfloat_finite(two_c_hi - he_abs_lo) < tot_e_lo
+            iszero(he_raw) && return false
+            up_r_lo, _ = _enclose(st.upper[rep])
+            _, lo_r_hi = _enclose(st.lower[rep])
+            tot_r_lo = _prevfloat_finite(tot_scale * _prevfloat_finite(up_r_lo - lo_r_hi))
+            hr_raw = _spin_field(ws, rep)
+            hrr_lo, hrr_hi = _enclose(hr_raw)
+            hr_lo, hr_hi = (direction * g_r >= 0) ? (hrr_lo, hrr_hi) : (-hrr_hi, -hrr_lo)
+            q_mapped_nonpos = (direction * (g_e * g_r) >= 0) ? (q < 0) : (q > 0)
+            σ = q_mapped_nonpos ? 1 : -1
+            he_pos = (direction * g_e >= 0) ? (he_raw > 0) : (he_raw < 0)
+            σ_he_pos = (σ == 1) ? he_pos : !he_pos
+            req_hr_hi = σ_he_pos ? hr_hi : -hr_lo
+            if isfinite(tot_r_lo) && isfinite(req_hr_hi) && _nextfloat_finite(two_c_hi + req_hr_hi) < tot_r_lo
+                return false
+            end
+        end
+    end
+    return true
+end
+
 function _step_relation_queue!(
     ws::Workspace,
     mf::Int,
@@ -1722,22 +1963,29 @@ function _step_relation_queue!(
     end
     adj_u_len = length(st.adjacency[u])
     adj_u_len <= rem_work - 1 || return (:work_limit, 0, 0, 0, 0, 0, 0)
-    nbrs = Int[]
+    nbrs = Pair{Int,_Exact}[]
     for (w, q) in st.adjacency[u]
         _expired(deadline_ns) && return (:deadline, 0, 0, 0, 0, 0, 0)
         if st.fixed[w] == 2 && !iszero(q)
-            push!(nbrs, w)
+            push!(nbrs, w => q)
         end
     end
-    sort!(nbrs)
+    sort!(nbrs; by=first)
     u_visits = 0
     u_exact = 0
     u_fb = 0
     called_witness = false
     min_blocked = typemax(Int)
-    for v in nbrs
+    fills_uv = fill(-1, length(nbrs))
+    for (idx, (v, q)) in enumerate(nbrs)
+        can_uv = _can_possibly_contract(ws, u, v, q, direction, map)
+        if !can_uv && (mf == typemax(Int) || min_blocked <= mf + 1)
+            continue
+        end
         f_uv = _contraction_fill(st, u, v)
+        fills_uv[idx] = f_uv
         if f_uv <= mf
+            can_uv || continue
             called_witness = true
             status, dv, dx, dfb = _try_contract_pair!(
                 ws, u, v, map, allow_weak,
@@ -1760,10 +2008,29 @@ function _step_relation_queue!(
             min_blocked = min(min_blocked, f_uv)
         end
     end
-    for v in nbrs
-        f_uv = _contraction_fill(st, u, v)
+    for (idx, (v, q)) in enumerate(nbrs)
+        can_vu = _can_possibly_contract(ws, v, u, q, direction, map)
+        if !can_vu && (mf == typemax(Int) || min_blocked <= mf + 1)
+            continue
+        end
+        f_uv = fills_uv[idx]
+        if f_uv >= 0 && f_uv <= mf && st.rel_queued[v]
+            if st.degrees[v] - 1 > mf && (can_vu || min_blocked > mf + 1)
+                f_vu = _contraction_fill(st, v, u)
+                f_vu > mf && (min_blocked = min(min_blocked, f_vu))
+            end
+            continue
+        end
+        if f_uv < 0 && st.rel_queued[v]
+            if st.degrees[v] - 1 > mf && (can_vu || min_blocked > mf + 1)
+                f_vu = _contraction_fill(st, v, u)
+                f_vu > mf && (min_blocked = min(min_blocked, f_vu))
+            end
+            continue
+        end
         f_vu = _contraction_fill(st, v, u)
-        if f_vu <= mf && (f_uv > mf || !st.rel_queued[v])
+        if f_vu <= mf
+            can_vu || continue
             called_witness = true
             status, dv, dx, dfb = _try_contract_pair!(
                 ws, v, u, map, allow_weak,
@@ -1781,7 +2048,7 @@ function _step_relation_queue!(
             elseif status !== :not_strict
                 return (status, 1, u_visits, 0, u_exact, u_fb, 0)
             end
-        elseif f_vu > mf
+        else
             min_blocked = min(min_blocked, f_vu)
         end
     end

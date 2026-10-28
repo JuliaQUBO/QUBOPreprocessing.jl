@@ -237,4 +237,162 @@ import QUBOTools as QT
         @test_throws ArgumentError audit_compression(m; max_vars=17)
         @test_throws ArgumentError audit_compression(m; max_work=-1)
     end
+
+    @testset "9. Large-instance scalability and certified fast rejection" begin
+        # 1. Unique large (n, m) tuple length without O(N^2) deepcopy/specialization latency:
+        n_lg = 223
+        L_lg = Dict{Int,Float64}(i => (i == 1 ? 500.0 : 0.1 * ((i % 7) - 3)) for i in 1:n_lg)
+        Q_lg = Dict{Tuple{Int,Int},Float64}()
+        for i in 1:n_lg, j in (i + 1):min(n_lg, i + 20)
+            Q_lg[(i, j)] = ((i + j) % 2 == 0) ? 1.0 : -1.0
+        end
+        m_lg = QT.Model(L_lg, Q_lg; sense=:min, domain=:bool)
+        ws_lg = Workspace(m_lg; rules=:mixed)
+        r_lg = schedule_reductions!(ws_lg; enable_star_triangle=true)
+        @test r_lg.dominance_deductions >= 1
+        @test r_lg.exact_fallbacks == 0
+        t_cert0 = time()
+        cert_lg = export_certificate(ws_lg)
+        mat_lg = materialize(ws_lg; coefficient_type=Float64)
+        elapsed_cert = time() - t_cert0
+        @test cert_lg !== nothing
+        @test verify_certificate(ws_lg, cert_lg).valid
+        @test QT.dimension(export_model(mat_lg)) == n_lg - length(ws_lg._state.fixes)
+        @test elapsed_cert < 5.0
+
+        # 2. O(1) _ws_mc_total_abs_weight exact match with _poly_mc_total_abs_weight across domains:
+        for dom in (:bool, :spin)
+            m_mc = QT.Model(
+                Dict(1 => 1.5, 2 => -2.25, 3 => 0.75, 4 => -0.5),
+                Dict((1, 2) => -3.0, (1, 3) => 2.5, (2, 3) => 1.25, (2, 4) => -1.75, (3, 4) => 0.5);
+                sense=:min,
+                domain=dom,
+            )
+            ws_mc = Workspace(m_mc; rules=:mixed)
+            assume!(ws_mc, 4, 1)
+            p_mc = QUBOPreprocessing._init_poly_state(ws_mc._snapshot)
+            QUBOPreprocessing._poly_fix!(p_mc, 4, 1)
+            dir_mc = QUBOPreprocessing._direction(ws_mc._snapshot)
+            for u in 1:3
+                w_fast = QUBOPreprocessing._ws_mc_total_abs_weight(ws_mc, u, dir_mc)
+                w_poly = QUBOPreprocessing._poly_mc_total_abs_weight(p_mc, u, dir_mc)
+                @test w_fast[1] && w_fast[2] === :ok && w_fast[3] == w_poly
+            end
+        end
+
+        # 3. Probing upper-bound overflow guard (2.0 * h_lo -> Inf must not turn into -floatmax):
+        A_ovf = ldexp(1.0, 1022)
+        m_ovf = QT.Model(
+            Dict(1 => A_ovf, 2 => A_ovf, 3 => A_ovf, 4 => A_ovf, 5 => 1.0),
+            Dict((1, 2) => A_ovf, (3, 4) => A_ovf);
+            sense=:min,
+            domain=:spin,
+        )
+        ws_ovf = Workspace(m_ovf; rules=:mixed)
+        att_ovf = prove_probing(ws_ovf, 5, [-1, -1, -1, -1, -1]; max_rounds=0)
+        @test att_ovf.stop_reason === :proved
+        @test (att_ovf.certificate.steps[1]::ProbingStep).value == -1
+        @test verify_certificate(ws_ovf, att_ovf.certificate).valid
+        rep_ovf = apply_probing!(ws_ovf, 5, [-1, -1, -1, -1, -1]; max_rounds=0)
+        @test rep_ovf.stop_reason === :applied
+        @test rep_ovf.changed == 1
+        @test deductions(ws_ovf) == [5 => -1]
+        @test verify_certificate(ws_ovf, export_certificate(ws_ovf)).valid
+
+        # 4. Max-Cut live pair coupling refresh when neighbor v is contracted into representative u:
+        L_stale = Dict{Int,Float64}(i => (i == 4 ? -5.0 : 0.0) for i in 1:20)
+        Q_stale = Dict{Tuple{Int,Int},Float64}(
+            (1, 2) => -100.0, (1, 3) => -1.0, (2, 3) => -10.0, (1, 4) => -1.0,
+        )
+        m_stale = QT.Model(L_stale, Q_stale; sense=:min, domain=:spin)
+        ws_stale2 = Workspace(m_stale; rules=:mixed)
+        rep_stale2 = apply_maxcut!(
+            ws_stale2; candidates=collect(1:20), enable_unary=false, max_triangles=0, max_deductions=2,
+        )
+        @test rep_stale2.stop_reason === :deduction_limit
+        @test rep_stale2.pair_contractions == 2
+        @test relation_map(ws_stale2, 2) == (1 => 1)
+        @test relation_map(ws_stale2, 3) == (1 => 1)
+        @test verify_certificate(ws_stale2, export_certificate(ws_stale2)).valid
+        ws_stale = Workspace(m_stale; rules=:mixed)
+        rep_stale = apply_maxcut!(ws_stale; candidates=collect(1:20), enable_unary=false, max_triangles=0)
+        @test rep_stale.stop_reason === :quiescent
+        @test rep_stale.pair_contractions == 3
+        @test relation_map(ws_stale, 1) == (4 => 1)
+        @test relation_map(ws_stale, 2) == (4 => 1)
+        @test relation_map(ws_stale, 3) == (4 => 1)
+        @test verify_certificate(ws_stale, export_certificate(ws_stale)).valid
+
+        # 5. Max-Cut sweep-bound precomputation respects work, verification, and deadline budgets:
+        ws_mc_lim1 = Workspace(m_lg; rules=:mixed)
+        rep_mc_lim1 = apply_maxcut!(ws_mc_lim1; candidates=[2], max_work=5)
+        @test rep_mc_lim1.stop_reason === :work_limit
+        @test rep_mc_lim1.edge_visits <= 5
+        ws_mc_lim2 = Workspace(m_lg; rules=:mixed)
+        rep_mc_lim2 = apply_maxcut!(ws_mc_lim2; candidates=[2], max_exact_work=2)
+        @test rep_mc_lim2.stop_reason === :verification_limit
+        @test rep_mc_lim2.exact_work <= 2
+        ws_mc_lim3 = Workspace(m_lg; rules=:mixed)
+        rep_mc_lim3 = apply_maxcut!(ws_mc_lim3; deadline_ns=UInt64(1))
+        @test rep_mc_lim3.stop_reason === :deadline
+        @test rep_mc_lim3.edge_visits == 0
+
+        # 6. Probing aggregate exact fallback charges partial exact work on early exit:
+        ws_pr_acc = Workspace(m_ovf; rules=:mixed)
+        att_pr_acc = prove_probing(
+            ws_pr_acc, 5, [-1, -1, -1, -1, -1]; max_rounds=0, max_exact_work=3,
+        )
+        @test att_pr_acc.stop_reason === :verification_limit
+        @test att_pr_acc.exact_work == 3
+
+        # 7. Explicit opposite-sign relation with nonpositive center is rejected consistently:
+        m_rel_np = QT.Model(
+            Dict(1 => 2.0, 2 => -2.0),
+            Dict((1, 2) => -1.0);
+            sense=:min,
+            domain=:spin,
+        )
+        for rmode in (:mixed, :relations)
+            ws_rel_np = Workspace(m_rel_np; rules=rmode)
+            att_rel_np = prove_relation(ws_rel_np, 1, 2; sign=-1)
+            @test att_rel_np.stop_reason === :not_strict
+            @test att_rel_np.certificate === nothing
+        end
+
+        # 8. Full sweep-bound coverage (mt > 0, n_cands >= 16), BigInt _enclose, and :identity rules:
+        ws_lg_mc = Workspace(m_lg; rules=:mixed)
+        rep_lg_mc = apply_maxcut!(ws_lg_mc; max_triangles=2)
+        @test rep_lg_mc.stop_reason in (:quiescent, :no_persistency)
+        @test rep_lg_mc.candidates >= n_lg
+        r_big = ((BigInt(3) << 1100) + 1) // (BigInt(2) << 1100)
+        enc_big = QUBOPreprocessing._enclose(r_big)
+        @test Rational{BigInt}(enc_big[1]) <= r_big <= Rational{BigInt}(enc_big[2])
+        @test enc_big[1] == 1.5 && enc_big[2] == nextfloat(1.5)
+        ws_id_sp = Workspace(m_ovf; rules=:identity)
+        @test prove_dominance(ws_id_sp, 1).stop_reason === :not_strict
+        @test prove_probing(ws_id_sp, 5, [-1, -1, -1, -1, -1]; max_rounds=0).stop_reason === :proved
+        m_bool_pr = QT.Model(
+            Dict(1 => 10.0, 2 => 10.0, 3 => 1.0),
+            Dict((1, 2) => 10.0);
+            sense=:min,
+            domain=:bool,
+        )
+        for rmode in (:identity, :mixed)
+            ws_bp = Workspace(m_bool_pr; rules=rmode)
+            @test prove_probing(ws_bp, 3, [0, 0, 0]; max_rounds=0).stop_reason === :proved
+            @test prove_probing(ws_bp, 3, [1, 1, 1]; max_rounds=0).stop_reason === :not_strict
+        end
+        ws_mc0 = Workspace(
+            QT.Model(Dict(1 => 1.5, 2 => -2.0), Dict((1, 2) => -1.0); sense=:min, domain=:spin);
+            rules=:mixed,
+        )
+        dir0 = QUBOPreprocessing._direction(ws_mc0._snapshot)
+        @test iszero(QUBOPreprocessing._ws_mc_J(ws_mc0, 1, 1, dir0))
+        @test QUBOPreprocessing._ws_mc_J(ws_mc0, 0, 1, dir0) == QUBOPreprocessing._ws_mc_J(ws_mc0, 1, 0, dir0)
+        w0_ref = Ref{Union{Nothing,Rational{BigInt}}}(nothing)
+        w0_a = QUBOPreprocessing._ws_mc_total_abs_weight(ws_mc0, 0, dir0; w0_cache=w0_ref)
+        w0_b = QUBOPreprocessing._ws_mc_total_abs_weight(ws_mc0, 0, dir0; w0_cache=w0_ref)
+        w0_c = QUBOPreprocessing._ws_mc_total_abs_weight(ws_mc0, 0, dir0)
+        @test w0_a[1] && w0_b[1] && w0_c[1] && w0_a[3] == w0_b[3] == w0_c[3]
+    end
 end

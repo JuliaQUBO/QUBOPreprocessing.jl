@@ -26,8 +26,60 @@ _freeze(x::Dict{Tuple{Int,Int},Float64}) =
     _Storage(:dict_quadratic, (), Tuple(values(x)), Tuple(keys(x)), ())
 _freeze(x) = throw(ArgumentError("unsupported objective storage $(typeof(x))"))
 
-_floats(t::Tuple) = Float64[t...]
-_ints(t::Tuple) = Int[t...]
+function _floats(@nospecialize(t::Tuple))
+    out = Vector{Float64}(undef, length(t))
+    for i in eachindex(out)
+        out[i] = t[i]::Float64
+    end
+    return out
+end
+
+function _ints(@nospecialize(t::Tuple))
+    out = Vector{Int}(undef, length(t))
+    for i in eachindex(out)
+        out[i] = Int(t[i])
+    end
+    return out
+end
+
+function _deepcopy_tuple(@nospecialize(t::Tuple), dict::IdDict)
+    n = length(t)
+    n == 0 && return ()
+    out = Vector{Any}(undef, n)
+    for i in 1:n
+        out[i] = Base.deepcopy_internal(t[i], dict)
+    end
+    return Tuple(out)
+end
+
+Base.deepcopy_internal(s::_Storage, ::IdDict) = s
+
+function _all_isfinite(@nospecialize(t::Tuple))
+    for i in 1:length(t)
+        isfinite(t[i]::Float64) || return false
+    end
+    return true
+end
+
+function _thaw_dict_linear(@nospecialize(indices::Tuple), @nospecialize(values::Tuple))
+    n = length(indices)
+    d = Dict{Int,Float64}()
+    sizehint!(d, n)
+    for k in 1:n
+        d[indices[k]::Int] = values[k]::Float64
+    end
+    return QT.DictLinearForm{Float64}(d)
+end
+
+function _thaw_dict_quadratic(@nospecialize(indices::Tuple), @nospecialize(values::Tuple))
+    n = length(indices)
+    d = Dict{Tuple{Int,Int},Float64}()
+    sizehint!(d, n)
+    for k in 1:n
+        d[indices[k]::Tuple{Int,Int}] = values[k]::Float64
+    end
+    return QT.DictQuadraticForm{Float64}(d)
+end
 
 function _thaw(s::_Storage)
     if s.kind === :dense_linear
@@ -42,9 +94,9 @@ function _thaw(s::_Storage)
         data = SparseMatrixCSC(s.shape..., _ints(s.pointers), _ints(s.indices), _floats(s.values))
         return QT.SparseQuadraticForm{Float64}(data)
     elseif s.kind === :dict_linear
-        return QT.DictLinearForm{Float64}(Dict{Int,Float64}(zip(s.indices, s.values)))
+        return _thaw_dict_linear(s.indices, s.values)
     else
-        return QT.DictQuadraticForm{Float64}(Dict{Tuple{Int,Int},Float64}(zip(s.indices, s.values)))
+        return _thaw_dict_quadratic(s.indices, s.values)
     end
 end
 
@@ -60,10 +112,35 @@ struct _Snapshot
     domain::QT.Domain
 end
 
-function _validate_label_copy(labels, owned)
-    all(i -> isequal(labels[i], owned[i]) && isequal(owned[i], labels[i]) &&
-             hash(labels[i]) == hash(owned[i]), eachindex(labels)) ||
-        throw(ArgumentError("labels must preserve equality and hash under deepcopy"))
+function Base.deepcopy_internal(s::_Snapshot, dict::IdDict)
+    haskey(dict, s) && return dict[s]::_Snapshot
+    return _Snapshot(
+        _deepcopy_tuple(s.labels, dict),
+        s.label_type,
+        s.state_type,
+        Base.deepcopy_internal(s.linear, dict),
+        Base.deepcopy_internal(s.quadratic, dict),
+        s.scale,
+        s.offset,
+        s.sense,
+        s.domain,
+    )
+end
+
+function _labels_vector(s::_Snapshot)
+    out = Vector{s.label_type}(undef, length(s.labels))
+    for i in eachindex(out)
+        out[i] = s.labels[i]
+    end
+    return _owned_labels(out)
+end
+
+function _validate_label_copy(@nospecialize(labels), @nospecialize(owned))
+    for i in 1:length(labels)
+        (isequal(labels[i], owned[i]) && isequal(owned[i], labels[i]) &&
+         hash(labels[i]) == hash(owned[i])) ||
+            throw(ArgumentError("labels must preserve equality and hash under deepcopy"))
+    end
     return owned
 end
 
@@ -88,7 +165,7 @@ function _snapshot(model::QT.Model{V,Float64,U}) where {V,U}
     (isempty(l.shape) || l.shape == (n,)) &&
         (isempty(q.shape) || q.shape == (n,n)) ||
         throw(ArgumentError("objective storage dimensions disagree with labels"))
-    all(isfinite, l.values) && all(isfinite, q.values) &&
+    _all_isfinite(l.values) && _all_isfinite(q.values) &&
         isfinite(QT.scale(model)) && isfinite(QT.offset(model)) ||
         throw(ArgumentError("coefficients, scale and offset must be finite Float64 values"))
     for (i, _) in QT.linear_terms(model)
@@ -208,8 +285,7 @@ end
 
 """`original_variables(ws_or_export)` returns owned labels in original index order."""
 function original_variables(x::Union{Workspace,ExportResult})
-    s = x._snapshot
-    return _owned_labels(s.label_type[s.labels...])
+    return _labels_vector(x._snapshot)
 end
 
 """`index_map(ws_or_export)` returns an owned original-index → residual-index vector."""

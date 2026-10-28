@@ -2,6 +2,16 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+function _label_index_dict(@nospecialize(labels::Tuple))
+    n = length(labels)
+    d = Dict{Any,Int}()
+    sizehint!(d, n)
+    for i in 1:n
+        d[labels[i]] = i
+    end
+    return d
+end
+
 function _incremental(s::_Snapshot;rules=:identity)
     n = length(s.labels)
     adjacency = [Pair{Int,_Exact}[] for _ in 1:n]
@@ -54,7 +64,7 @@ function _incremental(s::_Snapshot;rules=:identity)
     rel_queue = Int[i for i in 1:n if degrees[i] >= 1]
     rel_queued = BitVector(degrees[i] >= 1 for i in 1:n)
     m_init = sum(degrees; init=0) ÷ 2
-    return _Incremental(Dict{Any,Int}(v=>i for (i,v) in enumerate(s.labels)),
+    return _Incremental(_label_index_dict(s.labels),
                         adjacency, adj_pos, fields, _Exact(s.offset), fill(Int8(2), n),
                         queue, queued, _UndoEntry[], 0, uuid4(),rules,lower,upper,1,
                         Int[],Int[],zeros(Int,n),0,0,0,0,0,0,dual_fields,dual_constant,
@@ -215,27 +225,47 @@ function _fix!(ws::Workspace,i::Int,v::Int;proof=nothing,max_work=typemax(Int),d
     updated = _NeighborRecord[]
     old_dual = Pair{Int,_Exact}[]
     updated_dual = Pair{Int,_Exact}[]
+    sizehint!(old, length(edges))
+    sizehint!(updated, length(edges))
+    sizehint!(old_dual, length(edges))
+    sizehint!(updated_dual, length(edges))
     visits = 0
     for (j,q) in edges
         _expired(deadline_ns) && return UpdateReport(:deadline, visits, 0)
         visits += 1
         st.fixed[j] == 2 || continue
-        field = st.fields[j] + q*v
-        dual_q = is_bool ? (q // 4) : (4 * q)
+        field = v == 0 ? st.fields[j] : (v == 1 ? (st.fields[j] + q) : (st.fields[j] - q))
+        df_new = if dual_v == 0
+            st.dual_fields[j]
+        else
+            dual_q = is_bool ? (q // 4) : (4 * q)
+            dual_v == 1 ? (st.dual_fields[j] + dual_q) : (st.dual_fields[j] - dual_q)
+        end
         push!(old_dual, j => st.dual_fields[j])
-        push!(updated_dual, j => (st.dual_fields[j] + dual_q * dual_v))
+        push!(updated_dual, j => df_new)
         if st.lower === nothing
             push!(old,(j,st.fields[j],st.fields[j],st.fields[j]))
             push!(updated,(j,field,field,field))
         else
-            a = is_bool ? min(0,q) : -abs(q)
-            b = is_bool ? max(0,q) : abs(q)
+            new_lo, new_hi = if is_bool
+                if v == 0
+                    q >= 0 ? (st.lower[j], st.upper[j] - q) : (st.lower[j] - q, st.upper[j])
+                else
+                    q >= 0 ? (st.lower[j] + q, st.upper[j]) : (st.lower[j], st.upper[j] + q)
+                end
+            else
+                if (v == 1 && q >= 0) || (v == -1 && q <= 0)
+                    (st.lower[j] + 2 * abs(q), st.upper[j])
+                else
+                    (st.lower[j], st.upper[j] - 2 * abs(q))
+                end
+            end
             push!(old,(j,st.fields[j],st.lower[j],st.upper[j]))
-            push!(updated,(j,field,st.lower[j]+q*v-a,st.upper[j]+q*v-b))
+            push!(updated,(j,field,new_lo,new_hi))
         end
     end
-    constant = st.constant + st.fields[i]*v
-    dual_constant = st.dual_constant + st.dual_fields[i]*dual_v
+    constant = v == 0 ? st.constant : (v == 1 ? (st.constant + st.fields[i]) : (st.constant - st.fields[i]))
+    dual_constant = dual_v == 0 ? st.dual_constant : (dual_v == 1 ? (st.dual_constant + st.dual_fields[i]) : (st.dual_constant - st.dual_fields[i]))
     _expired(deadline_ns) && return UpdateReport(:deadline, visits, 0)
     st.serial == typemax(UInt64) && throw(ArgumentError("trail serial exhausted; reset workspace"))
     # Complete allocation before committing field, queue and trail changes.
@@ -825,13 +855,42 @@ struct ConditionedExport{T}
     _map::Union{Nothing,DomainGaugeMap}
 end
 generation(r::ConditionedExport) = r.generation
-original_variables(r::ConditionedExport) = _owned_labels(r._snapshot.label_type[r._snapshot.labels...])
-function index_map(r::ConditionedExport)
-    map = zeros(Int, length(r._fixed))
-    for (j,i) in enumerate(r._free)
-        map[i] = j
+original_variables(r::ConditionedExport) = _labels_vector(r._snapshot)
+
+function Base.deepcopy_internal(r::ConditionedExport{T}, dict::IdDict) where T
+    haskey(dict, r) && return dict[r]::ConditionedExport{T}
+    cert_copy = (
+        scope=r.certificate.scope,
+        assumptions=_deepcopy_tuple(r.certificate.assumptions, dict),
+        reduction_chain=_deepcopy_tuple(r.certificate.reduction_chain, dict),
+        unchanged_representation=r.certificate.unchanged_representation,
+        proof=Base.deepcopy_internal(r.certificate.proof, dict),
+    )
+    return ConditionedExport{T}(
+        Base.deepcopy_internal(r._snapshot, dict),
+        r.generation,
+        r.status,
+        cert_copy,
+        _deepcopy_tuple(r._fixed, dict),
+        _deepcopy_tuple(r._free, dict),
+        _deepcopy_tuple(r._linear, dict),
+        _deepcopy_tuple(r._quadratic, dict),
+        Base.deepcopy_internal(r._constant, dict),
+        Base.deepcopy_internal(r._scale, dict),
+        Base.deepcopy_internal(r._map, dict),
+    )
+end
+
+function _fill_index_map!(map::Vector{Int}, @nospecialize(free::Tuple))
+    for j in 1:length(free)
+        map[free[j]::Int] = j
     end
     return map
+end
+
+function index_map(r::ConditionedExport)
+    map = zeros(Int, length(r._fixed))
+    return _fill_index_map!(map, r._free)
 end
 
 function _transport(::Type{Float64}, q::_Exact)
@@ -867,35 +926,62 @@ function _conditioned_export(ws::Workspace, ::Type{T}; map::Union{Nothing,Domain
         _transport(T, c_export), _transport(T,_Exact(s.scale)), owned_map)
 end
 
+function _build_export_linear(::Type{T}, @nospecialize(lin::Tuple)) where T
+    n = length(lin)
+    d = Dict{Int,T}()
+    sizehint!(d, n)
+    for i in 1:n
+        d[i] = deepcopy(lin[i]::T)
+    end
+    return QT.DictLinearForm{T}(d)
+end
+
+function _build_export_quadratic(::Type{T}, @nospecialize(quad::Tuple)) where T
+    m = length(quad)
+    d = Dict{Tuple{Int,Int},T}()
+    sizehint!(d, m)
+    for k in 1:m
+        item = quad[k]::Tuple{Int,Int,T}
+        d[(item[1], item[2])] = deepcopy(item[3])
+    end
+    return QT.DictQuadraticForm{T}(d)
+end
+
 function export_model(r::ConditionedExport{T}) where T
     s = r._snapshot
     V, U = s.label_type, s.state_type
-    labels = original_variables(r)[collect(r._free)]
+    labels = original_variables(r)[_ints(r._free)]
     vm = QT.VariableMap{V}(Dict{V,Int}(v=>i for (i,v) in enumerate(labels)), labels)
-    lf = QT.DictLinearForm{T}(Dict{Int,T}(i=>deepcopy(v) for (i,v) in enumerate(r._linear)))
-    qf = QT.DictQuadraticForm{T}(Dict{Tuple{Int,Int},T}((i,j)=>deepcopy(q) for (i,j,q) in r._quadratic))
+    lf = _build_export_linear(T, r._linear)
+    qf = _build_export_quadratic(T, r._quadratic)
     dom = r._map === nothing ? s.domain : _qt_domain(r._map.target_domain)
     f = QT.Form{T}(length(labels), lf, qf, deepcopy(r._scale), deepcopy(r._constant);
                    sense=s.sense, domain=dom)
     return QT.Model{V,T,U}(vm, f)
 end
 
-function _lift_state(r::ConditionedExport, y::AbstractVector)
+function _lift_state_impl(
+    r::ConditionedExport,
+    y::AbstractVector,
+    @nospecialize(free::Tuple),
+    @nospecialize(steps::Tuple),
+)
     Base.require_one_based_indexing(y)
-    length(y) == length(r._free) || throw(ArgumentError("state must cover every free variable"))
+    n_free = length(free)
+    length(y) == n_free || throw(ArgumentError("state must cover every free variable"))
     is_bool = r._snapshot.domain === QT.BoolDomain
     low_orig = is_bool ? 0 : -1
     target_dom = r._map === nothing ? _domain_symbol(r._snapshot.domain) : r._map.target_domain
     low = target_dom === :bool ? 0 : -1
-    state = Int[r._fixed...]
-    for (j,i) in enumerate(r._free)
+    state = _ints(r._fixed)
+    for j in 1:n_free
+        i = free[j]::Int
         v = y[j]
         v isa Real && isfinite(v) && (v == low || v == 1) ||
             throw(ArgumentError("state value is outside the residual domain"))
         iv = Int(v)
         state[i] = r._map === nothing ? iv : _lift_index_value(r._map, i, iv)
     end
-    steps = r.certificate.reduction_chain
     for k in length(steps):-1:1
         step = steps[k]
         if step isa Union{DominanceStep,ProbingStep,RoofDualityStep,SubmodularCutStep}
@@ -935,6 +1021,9 @@ function _lift_state(r::ConditionedExport, y::AbstractVector)
         throw(ArgumentError("incomplete reconstruction chain for removed variables"))
     return state
 end
+
+_lift_state(r::ConditionedExport, y::AbstractVector) =
+    _lift_state_impl(r, y, r._free, r.certificate.reduction_chain)
 function reconstruct(r::ConditionedExport,y::AbstractVector)
     state = _lift_state(r,y)
     return _evaluate_state(r,state,_source_evaluator(r._snapshot))
