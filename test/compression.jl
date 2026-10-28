@@ -358,5 +358,39 @@ import QUBOTools as QT
             @test att_rel_np.stop_reason === :not_strict
             @test att_rel_np.certificate === nothing
         end
+
+        # 8. Full sweep-bound coverage (mt > 0, n_cands >= 16), BigInt _enclose, and :identity rules:
+        ws_lg_mc = Workspace(m_lg; rules=:mixed)
+        rep_lg_mc = apply_maxcut!(ws_lg_mc; max_triangles=2)
+        @test rep_lg_mc.stop_reason in (:quiescent, :no_persistency)
+        @test rep_lg_mc.candidates >= n_lg
+        enc_big = QUBOPreprocessing._enclose(((BigInt(3) << 1100) + 1) // (BigInt(2) << 1100))
+        @test enc_big[1] <= 1.5 <= enc_big[2]
+        ws_id_sp = Workspace(m_ovf; rules=:identity)
+        @test prove_dominance(ws_id_sp, 1).stop_reason === :not_strict
+        @test prove_probing(ws_id_sp, 5, [-1, -1, -1, -1, -1]; max_rounds=0).stop_reason === :proved
+        m_bool_pr = QT.Model(
+            Dict(1 => 10.0, 2 => 10.0, 3 => 1.0),
+            Dict((1, 2) => 10.0);
+            sense=:min,
+            domain=:bool,
+        )
+        for rmode in (:identity, :mixed)
+            ws_bp = Workspace(m_bool_pr; rules=rmode)
+            @test prove_probing(ws_bp, 3, [0, 0, 0]; max_rounds=0).stop_reason === :proved
+            @test prove_probing(ws_bp, 3, [1, 1, 1]; max_rounds=0).stop_reason === :not_strict
+        end
+        ws_mc0 = Workspace(
+            QT.Model(Dict(1 => 1.5, 2 => -2.0), Dict((1, 2) => -1.0); sense=:min, domain=:spin);
+            rules=:mixed,
+        )
+        dir0 = QUBOPreprocessing._direction(ws_mc0._snapshot)
+        @test iszero(QUBOPreprocessing._ws_mc_J(ws_mc0, 1, 1, dir0))
+        @test QUBOPreprocessing._ws_mc_J(ws_mc0, 0, 1, dir0) == QUBOPreprocessing._ws_mc_J(ws_mc0, 1, 0, dir0)
+        w0_ref = Ref{Union{Nothing,Rational{BigInt}}}(nothing)
+        w0_a = QUBOPreprocessing._ws_mc_total_abs_weight(ws_mc0, 0, dir0; w0_cache=w0_ref)
+        w0_b = QUBOPreprocessing._ws_mc_total_abs_weight(ws_mc0, 0, dir0; w0_cache=w0_ref)
+        w0_c = QUBOPreprocessing._ws_mc_total_abs_weight(ws_mc0, 0, dir0)
+        @test w0_a[1] && w0_b[1] && w0_c[1] && w0_a[3] == w0_b[3] == w0_c[3]
     end
 end
