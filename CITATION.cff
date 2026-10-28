@@ -1,0 +1,53 @@
+cff-version: 1.2.0
+message: "For general use, cite the preferred QUBO.jl ecosystem article; also cite the exact QUBOPreprocessing.jl software version used."
+title: "QUBOPreprocessing.jl"
+type: software
+abstract: "Certified strict-dominance, pair-relation, elimination, roof-duality, submodular-cut, probing, and Max-Cut preprocessing for QUBO models in Julia."
+authors:
+  - given-names: "David E."
+    family-names: "Bernal Neira"
+    email: "dbernaln@purdue.edu"
+    affiliation: "Purdue University"
+    orcid: "https://orcid.org/0000-0002-8308-5016"
+repository-code: "https://github.com/JuliaQUBO/QUBOPreprocessing.jl"
+url: "https://juliaqubo.github.io/QUBOPreprocessing.jl/"
+license: MPL-2.0
+version: "0.1.2"
+date-released: "2026-10-28"
+keywords:
+  - "Julia"
+  - "QUBO"
+  - "quadratic unconstrained binary optimization"
+  - "pseudo-Boolean optimization"
+  - "preprocessing"
+  - "persistency"
+references:
+  - type: data
+    title: "QUBOLib benchmark corpus"
+    authors:
+      - given-names: "Pedro"
+        family-names: "Maciel Xavier"
+      - given-names: "David E."
+        family-names: "Bernal Neira"
+    doi: "10.5281/zenodo.23027943"
+    url: "https://doi.org/10.5281/zenodo.23027943"
+    year: 2026
+preferred-citation:
+  type: article
+  title: "QUBO.jl: a Julia ecosystem for quadratic unconstrained binary optimization"
+  authors:
+    - given-names: "Pedro"
+      family-names: "Maciel Xavier"
+    - given-names: "Pedro"
+      family-names: "Ripper"
+    - given-names: "Tiago"
+      family-names: "Andrade"
+    - given-names: "Joaquim"
+      family-names: "Dias Garcia"
+    - given-names: "Nelson"
+      family-names: "Maculan"
+    - given-names: "David E."
+      family-names: "Bernal Neira"
+  doi: "10.1080/10556788.2026.2702926"
+  journal: "Optimization Methods and Software"
+  year: 2026

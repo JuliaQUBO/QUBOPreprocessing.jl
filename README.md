@@ -43,7 +43,8 @@ and [branch search example](examples/branch_search.jl). Load QUBODrivers to acti
 the optional direct sampler and MOI optimizer; the [consumer manual](docs/src/consumers.md)
 and [ToQUBO example](examples/consumer.jl) explain budgets, solver guarantees and
 sampling limits. Core workspace use does not load QUBODrivers, MOI, JuMP or ToQUBO.
-See the [performance envelope](docs/src/performance.md) before selecting repeated
+See the [performance envelope](docs/src/performance.md) and
+[QUBOLib & QOBLIB corpus benchmarks](docs/src/benchmarks.md) before selecting repeated
 or one-shot preprocessing, and [release notes](CHANGELOG.md) for supported scope.
 
 Tests, documentation builds and contribution policy are in [CONTRIBUTING.md](CONTRIBUTING.md).

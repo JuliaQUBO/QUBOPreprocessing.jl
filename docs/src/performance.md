@@ -96,4 +96,6 @@ arithmetic bit complexity and hashing/sorting overhead; elapsed times include th
 
 Choose reuse for the measured repeated sparse regime, preserve cheap off/bounded
 paths for one-shot callers, and measure a new consumer before changing its default.
-No universal speed ratio or noisy timing threshold is enforced by CI.
+No universal speed ratio or noisy timing threshold is enforced by CI. For corpus-wide
+size reductions and solution audits across 6,263 benchmark instances, see the
+[QUBOLib & QOBLIB corpus benchmarks](benchmarks.md).
