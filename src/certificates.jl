@@ -1128,6 +1128,7 @@ function _elimination_witness(ws::Workspace, u::Int;
 end
 
 function _extract_witness_state(ws::Workspace, witness, map::Union{Nothing,DomainGaugeMap}=nothing)
+    witness === nothing && return _coercive_field_witness_orig(ws; map)
     s, st = ws._snapshot, ws._state
     n = length(s.labels)
     is_bool = s.domain === QT.BoolDomain
@@ -2125,7 +2126,7 @@ function prove_elimination(ws::Workspace, label;
 end
 
 """
-    prove_probing(ws, label, witness; map=nothing, value=nothing,
+    prove_probing(ws, label, witness=nothing; map=nothing, value=nothing,
                   max_rounds=1, max_trial_fixes=typemax(Int),
                   max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing)
 
@@ -2133,13 +2134,14 @@ Prove one certified probing restriction `label => value` without mutating `ws`
 by temporarily conditioning on the opposite branch, propagating bounded trial
 unary dominance (`max_rounds`, `max_trial_fixes`), and strictly refuting the
 branch lower bound (`branch_lower > witness_upper`) against the verified
-parent-scope feasible `witness` (an original-order vector, label dictionary, or
-[`Reconstruction`](@ref)). All trial mutations are rolled back before returning.
+parent-scope feasible `witness` (an original-order vector, label dictionary,
+[`Reconstruction`](@ref), or `nothing` to synthesize
+[`coercive_field_witness`](@ref)). All trial mutations are rolled back before returning.
 """
 function prove_probing(
     ws::Workspace,
     label,
-    witness;
+    witness=nothing;
     map::Union{Nothing,DomainGaugeMap}=nothing,
     value=nothing,
     max_rounds=1,
