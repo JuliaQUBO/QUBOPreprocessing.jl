@@ -185,6 +185,185 @@ function _snapshot(model::QT.Model{V,Float64,U}) where {V,U}
 end
 _snapshot(model) = throw(ArgumentError("expected a QUBOTools.Model with Float64 objective data"))
 
+function _check_integerize_kwargs(max_decimals::Integer, atol::Real)
+    (!(max_decimals isa Bool) && max_decimals >= 0) ||
+        throw(ArgumentError("max_decimals must be a nonnegative integer; got $(repr(max_decimals))"))
+    (!(atol isa Bool) && isfinite(atol) && atol >= 0) ||
+        throw(ArgumentError("atol must be a finite nonnegative real; got $(repr(atol))"))
+    return nothing
+end
+
+function _is_integer_snapshot(s::_Snapshot)::Bool
+    (isfinite(s.offset) && isinteger(s.offset)) || return false
+    for i in 1:length(s.linear.values)
+        v = s.linear.values[i]::Float64
+        (isfinite(v) && isinteger(v)) || return false
+    end
+    if s.quadratic.kind === :dense_quadratic
+        n = s.quadratic.shape[1]::Int
+        for col in 1:n, row in 1:(col - 1)
+            v = s.quadratic.values[(col - 1) * n + row]::Float64
+            (isfinite(v) && isinteger(v)) || return false
+        end
+    else
+        for i in 1:length(s.quadratic.values)
+            v = s.quadratic.values[i]::Float64
+            (isfinite(v) && isinteger(v)) || return false
+        end
+    end
+    return true
+end
+
+function _scale_storage(st::_Storage, m::Float64)::_Storage
+    len = length(st.values)
+    len == 0 && return st
+    if st.kind === :dense_quadratic
+        n = st.shape[1]::Int
+        scaled = zeros(Float64, len)
+        for col in 1:n, row in 1:(col - 1)
+            idx = (col - 1) * n + row
+            v = st.values[idx]::Float64
+            scaled[idx] = iszero(v) ? 0.0 : Float64(round(v * m))
+        end
+        return _Storage(st.kind, st.shape, Tuple(scaled), st.indices, st.pointers)
+    else
+        scaled = Vector{Float64}(undef, len)
+        for i in 1:len
+            v = st.values[i]::Float64
+            scaled[i] = iszero(v) ? 0.0 : Float64(round(v * m))
+        end
+        return _Storage(st.kind, st.shape, Tuple(scaled), st.indices, st.pointers)
+    end
+end
+
+function _integerize_snapshot(s::_Snapshot; max_decimals::Integer=9, atol::Real=1e-12)::_Snapshot
+    _check_integerize_kwargs(max_decimals, atol)
+    (_is_integer_snapshot(s) || !isfinite(s.scale) || iszero(s.scale) || !isfinite(s.offset)) && return s
+
+    vals = Float64[]
+    !iszero(s.offset) && push!(vals, s.offset)
+    for i in 1:length(s.linear.values)
+        v = s.linear.values[i]::Float64
+        !iszero(v) && push!(vals, v)
+    end
+    if s.quadratic.kind === :dense_quadratic
+        n = s.quadratic.shape[1]::Int
+        for col in 1:n, row in 1:(col - 1)
+            v = s.quadratic.values[(col - 1) * n + row]::Float64
+            !iszero(v) && push!(vals, v)
+        end
+    else
+        for i in 1:length(s.quadratic.values)
+            v = s.quadratic.values[i]::Float64
+            !iszero(v) && push!(vals, v)
+        end
+    end
+    isempty(vals) && return s
+
+    max_d = min(Int(max_decimals), 300)
+    max_int = Float64(maxintfloat(Float64))
+    atol_f = Float64(atol)
+
+    candidates = Tuple{Float64,Int,Int}[]
+    for a in 0:max_d, b in 0:max_d
+        (a == 0 && b == 0) && continue
+        m = (2.0^a) * (5.0^b)
+        (isfinite(m) && m <= max_int) && push!(candidates, (m, a, b))
+    end
+    sort!(candidates; by = x -> (x[1], x[3], x[2]))
+
+    for (m, a, b) in candidates
+        α_new = s.scale / m
+        (!isfinite(α_new) || iszero(α_new) || issubnormal(α_new)) && continue
+
+        ok = true
+        has_odd = false
+        has_non5 = false
+        for v in vals
+            y = v * m
+            if !isfinite(y)
+                ok = false
+                break
+            end
+            r = round(y)
+            if iszero(r) || abs(r) > max_int
+                ok = false
+                break
+            end
+            if b == 0
+                if r != y
+                    ok = false
+                    break
+                end
+            else
+                err = abs(y - r)
+                if !(err < 0.5 && err <= atol_f * abs(r))
+                    ok = false
+                    break
+                end
+            end
+            has_odd |= !iszero(rem(r, 2))
+            has_non5 |= !iszero(rem(r, 5))
+        end
+
+        if ok && (a == 0 || has_odd) && (b == 0 || has_non5)
+            l_new = _scale_storage(s.linear, m)
+            q_new = _scale_storage(s.quadratic, m)
+            offset_new = iszero(s.offset) ? 0.0 : Float64(round(s.offset * m))
+            return _Snapshot(s.labels, s.label_type, s.state_type, l_new, q_new,
+                             α_new, offset_new, s.sense, s.domain)
+        end
+    end
+
+    return s
+end
+
+"""
+    is_integer_scaled(model_or_workspace)::Bool
+
+Return `true` iff every linear coefficient, quadratic coefficient, and constant
+offset of `model_or_workspace` is a finite exact integer (with arbitrary finite
+model `scale`). On a [`Workspace`](@ref), checks the currently conditioned
+residual objective (`conditioned_constant`, `effective_field`, and
+`incident_couplings` over all free variables).
+"""
+function is_integer_scaled(model::QT.Model{V,Float64,U})::Bool where {V,U}
+    return _is_integer_snapshot(_snapshot(model))
+end
+is_integer_scaled(model) = throw(ArgumentError("expected a QUBOTools.Model with Float64 objective data or a Workspace"))
+
+"""
+    integerize_scale(model; max_decimals::Integer=9, atol::Real=1e-12)
+
+Return an owned copy of `model` where the smallest multiplier ``m = 2^a \\cdot 5^b``
+(with ``0 \\le a, b \\le \\text{max\\_decimals}``) that scales all linear coefficients,
+quadratic coefficients, and `offset` to exact integers is factored into
+`scale(model) / m`. Pure dyadic multipliers (``b = 0``) require exact binary
+products (`v * m == round(v * m)`), preserving sub-ulp near-tie perturbations;
+decimal multipliers (``b \\ge 1``) accept non-zero products within relative
+tolerance `atol * abs(round(v * m))` provided ``(a, b)`` is irreducible.
+"""
+function integerize_scale(
+    model::QT.Model{V,Float64,U};
+    max_decimals::Integer=9,
+    atol::Real=1e-12,
+) where {V,U}
+    s = _integerize_snapshot(_snapshot(model); max_decimals, atol)
+    labels = _labels_vector(s)
+    vm = QT.VariableMap{V}(Dict{V,Int}(v => i for (i, v) in enumerate(labels)), labels)
+    f = QT.Form{Float64}(length(labels), _thaw(s.linear), _thaw(s.quadratic),
+                         s.scale, s.offset; sense=s.sense, domain=s.domain)
+    return QT.Model{V,Float64,U,typeof(f)}(
+        vm,
+        f,
+        deepcopy(QT.metadata(model)),
+        deepcopy(QT.solution(model)),
+        deepcopy(model.start),
+    )
+end
+integerize_scale(model; max_decimals::Integer=9, atol::Real=1e-12) =
+    throw(ArgumentError("expected a QUBOTools.Model with Float64 objective data"))
+
 """
     Generation
 
@@ -197,11 +376,14 @@ struct Generation
 end
 
 """
-    Workspace(model; rules=:identity)
+    Workspace(model; rules=:identity, integerize_scale::Bool=false, max_decimals::Integer=9, atol::Real=1e-12)
 
 Privately snapshot a finite Float64 QUBOTools model and its ordered labels.
 `:identity` performs no inference; `:dominance` prepares exact bound caches and
-a deterministic queue for [`propagate!`](@ref). Explicit caller assumptions and
+a deterministic queue for [`propagate!`](@ref). When `integerize_scale=true`,
+the snapshot factors any common decimal/dyadic denominator ``m = 2^a \\cdot 5^b``
+into `scale(model) / m` via [`integerize_scale`](@ref) before building exact
+rational state. Explicit caller assumptions and
 certified deductions have separate provenance and can be rolled back. Source edits never change the snapshot; use
 [`reset!`](@ref) to accept a new source. Labels must have stable equality/hash
 semantics and preserve equality/hash under owned deep copies. Use each workspace
@@ -213,9 +395,17 @@ mutable struct Workspace
     _state::_Incremental
     # Internal staging constructor for transactional non-LIFO replay.
     Workspace(snapshot::_Snapshot, token::Generation, state::_Incremental) = new(snapshot, token, state)
-    function Workspace(model; rules=:identity)
+    function Workspace(
+        model;
+        rules=:identity,
+        integerize_scale::Bool=false,
+        max_decimals::Integer=9,
+        atol::Real=1e-12,
+    )
         _check_rules(rules)
-        snapshot = _snapshot(model)
+        _check_integerize_kwargs(max_decimals, atol)
+        raw_snapshot = _snapshot(model)
+        snapshot = integerize_scale ? _integerize_snapshot(raw_snapshot; max_decimals, atol) : raw_snapshot
         state = _incremental(snapshot;rules)
         return new(snapshot, Generation(uuid4(), uuid4()), state)
     end
@@ -226,15 +416,37 @@ _check_rules(rules) = rules in (:identity,:dominance,:elimination,:relations,:mi
 """`generation(ws_or_export)` returns its immutable source/workspace identity."""
 generation(ws::Workspace) = ws._generation
 
+function is_integer_scaled(ws::Workspace)::Bool
+    st = ws._state
+    denominator(st.constant) == 1 || return false
+    for i in eachindex(st.fixed)
+        st.fixed[i] == 2 || continue
+        denominator(st.fields[i]) == 1 || return false
+        for (j, q) in st.adjacency[i]
+            (st.fixed[j] == 2 && i < j) || continue
+            denominator(q) == 1 || return false
+        end
+    end
+    return true
+end
+
 """
-    reset!(ws, model)
+    reset!(ws, model; integerize_scale::Bool=false, max_decimals::Integer=9, atol::Real=1e-12)
 
 Validate a fresh snapshot before committing it. Failed validation preserves the
 old workspace. Success creates a fresh generation, including for an identical
 source. Owned exports remain evidence for their historical generation.
 """
-function reset!(ws::Workspace, model)
-    snapshot = _snapshot(model)
+function reset!(
+    ws::Workspace,
+    model;
+    integerize_scale::Bool=false,
+    max_decimals::Integer=9,
+    atol::Real=1e-12,
+)
+    _check_integerize_kwargs(max_decimals, atol)
+    raw_snapshot = _snapshot(model)
+    snapshot = integerize_scale ? _integerize_snapshot(raw_snapshot; max_decimals, atol) : raw_snapshot
     state = _incremental(snapshot;rules=ws._state.rules)
     token = Generation(generation(ws).workspace, uuid4())
     ws._snapshot = snapshot
@@ -374,15 +586,24 @@ struct IdentityReport
 end
 
 """
-    preprocess(model; rules=:identity)
+    preprocess(model; rules=:identity, integerize_scale::Bool=(rules !== :identity), max_decimals::Integer=9, atol::Real=1e-12, kwargs...)
 
 Return `(workspace, report)` using the same snapshot path as Workspace.
 `:identity` returns a no-inference `IdentityReport`; `:dominance` runs
 [`propagate!`](@ref) with forwarded keyword limits and returns its report.
+When `rules !== :identity`, `integerize_scale` defaults to `true` so decimal and
+dyadic floating-point denominators are factored into `scale` before reduction.
 No model is materialized implicitly.
 """
-function preprocess(model; rules=:identity, kwargs...)
-    ws = Workspace(model; rules)
+function preprocess(
+    model;
+    rules=:identity,
+    integerize_scale::Bool=(rules !== :identity),
+    max_decimals::Integer=9,
+    atol::Real=1e-12,
+    kwargs...,
+)
+    ws = Workspace(model; rules, integerize_scale, max_decimals, atol)
     rules === :dominance && return ws, propagate!(ws;kwargs...)
     rules === :elimination && return ws, eliminate_low_degree!(ws;kwargs...)
     rules === :relations && return ws, contract_relations!(ws;kwargs...)
