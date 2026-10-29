@@ -199,22 +199,41 @@ function _is_integer_snapshot(s::_Snapshot)::Bool
         v = s.linear.values[i]::Float64
         (isfinite(v) && isinteger(v)) || return false
     end
-    for i in 1:length(s.quadratic.values)
-        v = s.quadratic.values[i]::Float64
-        (isfinite(v) && isinteger(v)) || return false
+    if s.quadratic.kind === :dense_quadratic
+        n = s.quadratic.shape[1]::Int
+        for col in 1:n, row in 1:(col - 1)
+            v = s.quadratic.values[(col - 1) * n + row]::Float64
+            (isfinite(v) && isinteger(v)) || return false
+        end
+    else
+        for i in 1:length(s.quadratic.values)
+            v = s.quadratic.values[i]::Float64
+            (isfinite(v) && isinteger(v)) || return false
+        end
     end
     return true
 end
 
 function _scale_storage(st::_Storage, m::Float64)::_Storage
-    n = length(st.values)
-    n == 0 && return st
-    scaled = Vector{Float64}(undef, n)
-    for i in 1:n
-        v = st.values[i]::Float64
-        scaled[i] = iszero(v) ? 0.0 : Float64(round(v * m))
+    len = length(st.values)
+    len == 0 && return st
+    if st.kind === :dense_quadratic
+        n = st.shape[1]::Int
+        scaled = zeros(Float64, len)
+        for col in 1:n, row in 1:(col - 1)
+            idx = (col - 1) * n + row
+            v = st.values[idx]::Float64
+            scaled[idx] = iszero(v) ? 0.0 : Float64(round(v * m))
+        end
+        return _Storage(st.kind, st.shape, Tuple(scaled), st.indices, st.pointers)
+    else
+        scaled = Vector{Float64}(undef, len)
+        for i in 1:len
+            v = st.values[i]::Float64
+            scaled[i] = iszero(v) ? 0.0 : Float64(round(v * m))
+        end
+        return _Storage(st.kind, st.shape, Tuple(scaled), st.indices, st.pointers)
     end
-    return _Storage(st.kind, st.shape, Tuple(scaled), st.indices, st.pointers)
 end
 
 function _integerize_snapshot(s::_Snapshot; max_decimals::Integer=9, atol::Real=1e-12)::_Snapshot
@@ -227,9 +246,17 @@ function _integerize_snapshot(s::_Snapshot; max_decimals::Integer=9, atol::Real=
         v = s.linear.values[i]::Float64
         !iszero(v) && push!(vals, v)
     end
-    for i in 1:length(s.quadratic.values)
-        v = s.quadratic.values[i]::Float64
-        !iszero(v) && push!(vals, v)
+    if s.quadratic.kind === :dense_quadratic
+        n = s.quadratic.shape[1]::Int
+        for col in 1:n, row in 1:(col - 1)
+            v = s.quadratic.values[(col - 1) * n + row]::Float64
+            !iszero(v) && push!(vals, v)
+        end
+    else
+        for i in 1:length(s.quadratic.values)
+            v = s.quadratic.values[i]::Float64
+            !iszero(v) && push!(vals, v)
+        end
     end
     isempty(vals) && return s
 

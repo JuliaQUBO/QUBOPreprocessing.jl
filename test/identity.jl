@@ -277,7 +277,21 @@ end
     @test QT.scale(m_near_out) == 1.0
     @test Dict(QT.linear_terms(m_near_out)) == Dict(QT.linear_terms(m_near))
 
-    # 3. Validation of kwargs and unsupported inputs
+    # 3. DenseQuadraticForm with non-integer entries in the masked lower triangle of UpperTriangular(A)
+    A_int_upper = [0.0 2.0; 1.0 / 3.0 0.0]
+    m_masked_int = fixture([:x1, :x2], [1.0, -3.0], A_int_upper; kind=:dense)
+    @test is_integer_scaled(m_masked_int)
+    @test is_integer_scaled(Workspace(m_masked_int))
+
+    A_dyadic_upper = [0.0 0.5; 1.0 / 3.0 0.0]
+    m_masked_dyadic = fixture([:x1, :x2], [0.25, -0.5], A_dyadic_upper; kind=:dense)
+    @test !is_integer_scaled(m_masked_dyadic)
+    m_masked_dyadic_int = integerize_scale(m_masked_dyadic)
+    @test is_integer_scaled(m_masked_dyadic_int)
+    @test QT.scale(m_masked_dyadic_int) == 0.25
+    @test is_integer_scaled(Workspace(m_masked_dyadic; integerize_scale=true))
+
+    # 4. Validation of kwargs and unsupported inputs
     m_ok = fixture([:x, :y], [0.5, -0.25], [0.0 0.75; 0.0 0.0]; offset=0.5, scale=2.0)
     @test is_integer_scaled(integerize_scale(m_ok))
     @test QT.scale(integerize_scale(m_ok)) == 0.5
