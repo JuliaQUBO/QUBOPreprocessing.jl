@@ -298,6 +298,245 @@ function _cut_capacity(net::_FlowNetwork, in_S::BitVector)
     return cap
 end
 
+@inline _lit_complement(a::Int) = isodd(a) ? (a + 1) : (a - 1)
+@inline _lit_var(a::Int) = (a + 1) >> 1
+@inline _lit_spin(a::Int) = isodd(a) ? 1 : -1
+
+function _symmetrized_residual_cap(net::_FlowNetwork, a::Int, idx::Int, e::_FlowEdge)
+    b = e.to
+    n_lit = net.n_verts - 2
+    (1 <= a <= n_lit && 1 <= b <= n_lit && _lit_var(a) != _lit_var(b)) || return _Exact(0)
+    r_ab = e.cap - e.flow
+    bar_a = _lit_complement(a)
+    bar_b = _lit_complement(b)
+    adj_bar_a = net.adj[bar_a]
+    r_dual = _Exact(0)
+    if idx <= length(adj_bar_a) && adj_bar_a[idx].to == bar_b
+        e_bar_a = adj_bar_a[idx]
+        dual_e = net.adj[bar_b][e_bar_a.rev]
+        r_dual = dual_e.cap - dual_e.flow
+    else
+        for de in net.adj[bar_b]
+            if de.to == bar_a
+                r_dual = de.cap - de.flow
+                break
+            end
+        end
+    end
+    return r_ab + r_dual
+end
+
+function _half_integral_literals(net::_FlowNetwork, R_S::BitVector, R_T::BitVector, active_var_fn)
+    n_lit = net.n_verts - 2
+    n = n_lit >> 1
+    in_half = falses(n_lit)
+    for u in 1:n
+        active_var_fn(u) || continue
+        a_pos = 2 * u - 1
+        a_neg = 2 * u
+        if !R_S[a_pos] && !R_T[a_pos] && !R_S[a_neg] && !R_T[a_neg]
+            in_half[a_pos] = true
+            in_half[a_neg] = true
+        end
+    end
+    return in_half
+end
+
+function _tarjan_residual_sccs(
+    net::_FlowNetwork,
+    in_half::BitVector,
+    min_sym_cap::_Exact;
+    max_work::Int=typemax(Int),
+    deadline_ns=nothing,
+)
+    n_lit = length(in_half)
+    disc = zeros(Int, n_lit)
+    low = zeros(Int, n_lit)
+    on_stack = falses(n_lit)
+    scc_id = zeros(Int, n_lit)
+    sccs = Vector{Int}[]
+    tarjan_stack = Int[]
+    call_u = Int[]
+    call_idx = Int[]
+    timer = 0
+    visits = 0
+    for start in 1:n_lit
+        (in_half[start] && disc[start] == 0) || continue
+        _expired(deadline_ns) && return (false, :deadline, scc_id, sccs, visits)
+        visits < max_work || return (false, :work_limit, scc_id, sccs, visits)
+        visits += 1
+        timer += 1
+        disc[start] = low[start] = timer
+        push!(tarjan_stack, start)
+        on_stack[start] = true
+        push!(call_u, start)
+        push!(call_idx, 1)
+        while !isempty(call_u)
+            _expired(deadline_ns) && return (false, :deadline, scc_id, sccs, visits)
+            u = call_u[end]
+            idx = call_idx[end]
+            adj_u = net.adj[u]
+            if idx <= length(adj_u)
+                call_idx[end] = idx + 1
+                visits < max_work || return (false, :work_limit, scc_id, sccs, visits)
+                visits += 1
+                e = adj_u[idx]
+                v = e.to
+                (1 <= v <= n_lit && in_half[v]) || continue
+                rc = _symmetrized_residual_cap(net, u, idx, e)
+                rc > min_sym_cap || continue
+                if disc[v] == 0
+                    timer += 1
+                    disc[v] = low[v] = timer
+                    push!(tarjan_stack, v)
+                    on_stack[v] = true
+                    push!(call_u, v)
+                    push!(call_idx, 1)
+                elseif on_stack[v]
+                    low[u] = min(low[u], disc[v])
+                end
+            else
+                pop!(call_u)
+                pop!(call_idx)
+                if !isempty(call_u)
+                    p = call_u[end]
+                    low[p] = min(low[p], low[u])
+                end
+                if low[u] == disc[u]
+                    comp = Int[]
+                    cid = length(sccs) + 1
+                    while true
+                        w = pop!(tarjan_stack)
+                        on_stack[w] = false
+                        scc_id[w] = cid
+                        push!(comp, w)
+                        w == u && break
+                    end
+                    sort!(comp)
+                    push!(sccs, comp)
+                end
+            end
+        end
+    end
+    return (true, :ok, scc_id, sccs, visits)
+end
+
+function _is_closed_residual_scc(
+    net::_FlowNetwork,
+    in_half::BitVector,
+    scc_id::Vector{Int},
+    K::Vector{Int},
+)
+    length(K) >= 2 || return false
+    cid = scc_id[K[1]]
+    n_lit = length(in_half)
+    for a in K
+        scc_id[_lit_complement(a)] == cid && return false
+        adj_a = net.adj[a]
+        for (idx, e) in enumerate(adj_a)
+            b = e.to
+            (1 <= b <= n_lit && in_half[b]) || continue
+            # Check outgoing residual capacity a -> b and incoming residual capacity b -> a:
+            # Since R_sym(b -> a) = R_sym(_lit_complement(a) -> _lit_complement(b)), we can check both!
+            rc_out = _symmetrized_residual_cap(net, a, idx, e)
+            if rc_out > 0 && scc_id[b] != cid
+                return false
+            end
+            bar_a = _lit_complement(a)
+            bar_b = _lit_complement(b)
+            adj_bar_a = net.adj[bar_a]
+            if idx <= length(adj_bar_a) && adj_bar_a[idx].to == bar_b
+                rc_in = _symmetrized_residual_cap(net, bar_a, idx, adj_bar_a[idx])
+                if rc_in > 0 && scc_id[b] != cid
+                    return false
+                end
+            else
+                for (b_idx, be) in enumerate(net.adj[b])
+                    if be.to == a
+                        rc_in = _symmetrized_residual_cap(net, b, b_idx, be)
+                        if rc_in > 0 && scc_id[b] != cid
+                            return false
+                        end
+                        break
+                    end
+                end
+            end
+        end
+    end
+    return true
+end
+
+function _widest_scc_path(
+    net::_FlowNetwork,
+    scc_id::Vector{Int},
+    cid::Int,
+    K::Vector{Int},
+    src::Int,
+    dst::Int,
+    min_sym_cap::_Exact,
+)
+    src == dst && return _Exact(0)
+    (scc_id[src] == cid && scc_id[dst] == cid) || return _Exact(0)
+    n_lit = length(scc_id)
+    best = Dict{Int,_Exact}()
+    visited = Set{Int}()
+    for x in K
+        best[x] = _Exact(0)
+    end
+    # Initialize from src's outgoing edges in K
+    for (idx, e) in enumerate(net.adj[src])
+        y = e.to
+        (1 <= y <= n_lit && scc_id[y] == cid) || continue
+        rc = _symmetrized_residual_cap(net, src, idx, e)
+        if rc > min_sym_cap && rc > best[y]
+            best[y] = rc
+        end
+    end
+    push!(visited, src)
+    while length(visited) < length(K)
+        best_u = 0
+        best_val = _Exact(0)
+        for x in K
+            x in visited && continue
+            v = best[x]
+            if v > best_val
+                best_val = v
+                best_u = x
+            end
+        end
+        best_u == 0 && break
+        best_u == dst && return best_val
+        push!(visited, best_u)
+        for (idx, e) in enumerate(net.adj[best_u])
+            y = e.to
+            (1 <= y <= n_lit && scc_id[y] == cid && !(y in visited)) || continue
+            rc = _symmetrized_residual_cap(net, best_u, idx, e)
+            rc > min_sym_cap || continue
+            cand = min(best_val, rc)
+            if cand > best[y]
+                best[y] = cand
+            end
+        end
+    end
+    return get(best, dst, _Exact(0))
+end
+
+function _scc_cycle_bottleneck(
+    net::_FlowNetwork,
+    scc_id::Vector{Int},
+    cid::Int,
+    K::Vector{Int},
+    a::Int,
+    b::Int,
+    min_sym_cap::_Exact,
+)
+    b1 = _widest_scc_path(net, scc_id, cid, K, a, b, min_sym_cap)
+    b1 > min_sym_cap || return _Exact(0)
+    b2 = _widest_scc_path(net, scc_id, cid, K, b, a, min_sym_cap)
+    b2 > min_sym_cap || return _Exact(0)
+    return min(b1, b2)
+end
+
 function _build_implication_network(
     ws::Workspace;
     max_work::Int=typemax(Int),

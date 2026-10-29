@@ -30,6 +30,26 @@ end
 DominanceStep(i,v,lo,hi,c,p,m) = DominanceStep(i,v,lo,hi,c,p,m,-1,:strong)
 DominanceStep(i,v,lo,hi,c,p,m,s) = DominanceStep(i,v,lo,hi,c,p,m,s,:strong)
 
+struct _ProbingPairWitness
+    assume_var_1::Int
+    assume_val_1::Int
+    branch_steps_1::Tuple{Vararg{DominanceStep}}
+    assume_var_2::Int
+    assume_val_2::Int
+    branch_steps_2::Tuple{Vararg{DominanceStep}}
+end
+
+struct _RoofSCCPairWitness
+    roof_lower::_Exact
+    max_flow::_Exact
+    flow_edges::Tuple{Vararg{Tuple{Int,Int,_Exact}}}
+    witness_upper::_Exact
+    witness_state::Tuple{Vararg{Int}}
+    scc_literals::Tuple{Vararg{Int}}
+    batch_contractions::Tuple{Vararg{Tuple{Int,Int,Int}}}
+    batch_index::Int
+end
+
 """
     RelationStep
 
@@ -47,6 +67,12 @@ cross-endpoint flip margins ruling out the two violating states
 ``(t_u, t_v) \\in \\{(-\\sigma, +1), (+\\sigma, -1)\\}``.
 For `method === :coflip_pair`, `lower` and `upper` record the exact shared-neighborhood
 co-flip bounds ``-\\sigma \\tilde{J}_{uv} \\mp \\frac{1}{2}(|\\tilde{h}_u - \\sigma \\tilde{h}_v| + \\sum_{w \\notin \\{u,v\\}} |\\tilde{J}_{uw} - \\sigma \\tilde{J}_{vw}|)``.
+For `method === :probing_pair`, `lower` and `upper` record the ordered bottleneck spin
+dominance margins of the two trial dominance cascades in `witness::_ProbingPairWitness`
+refuting the two violating assignments ``(s_u, s_v) \\in \\{(-1, +\\sigma_{\\text{orig}}), (+1, -\\sigma_{\\text{orig}})\\}``.
+For `method === :roof_scc_pair`, `lower` and `upper` record the exact residual cycle
+bottleneck flip margin ``B_{\\text{cycle}} - \\Delta > 0`` certified by the roof-duality
+implication-network residual SCC in `witness::_RoofSCCPairWitness`.
 `persistency` is `:strong` when `lower > 0` and `:weak` when `lower == 0`.
 """
 struct RelationStep <: _ProofRecord
@@ -61,9 +87,11 @@ struct RelationStep <: _ProofRecord
     method::Symbol
     scope_length::Int
     persistency::Symbol
+    witness::Union{Nothing,_ProbingPairWitness,_RoofSCCPairWitness}
 end
-RelationStep(u,v,s,os,lo,hi,c,p,m) = RelationStep(u,v,s,os,lo,hi,c,p,m,-1,:strong)
-RelationStep(u,v,s,os,lo,hi,c,p,m,sc) = RelationStep(u,v,s,os,lo,hi,c,p,m,sc,:strong)
+RelationStep(u,v,s,os,lo,hi,c,p,m) = RelationStep(u,v,s,os,lo,hi,c,p,m,-1,:strong,nothing)
+RelationStep(u,v,s,os,lo,hi,c,p,m,sc) = RelationStep(u,v,s,os,lo,hi,c,p,m,sc,:strong,nothing)
+RelationStep(u,v,s,os,lo,hi,c,p,m,sc,pers) = RelationStep(u,v,s,os,lo,hi,c,p,m,sc,pers,nothing)
 
 """
     EliminationStep
@@ -96,13 +124,16 @@ EliminationStep(u,nbrs,tbl,cd,ld,qd,c,p) = EliminationStep(u,nbrs,tbl,cd,ld,qd,c
 """
     ProbingStep
 
-Compact trial-branch probing witness certifying `variable == value` by refuting
-the opposite assignment `variable == probed_value` against a verified parent-scope
-feasible witness `witness_state` with normalized energy `witness_upper`. After
-temporarily conditioning on `variable == probed_value` and applying the certified
-trial deductions `branch_steps`, `branch_lower` bounds the normalized trial-branch
-objective from below and strictly exceeds `witness_upper` (`branch_lower > witness_upper`,
-`persistency === :strong`).
+Compact trial-branch probing witness certifying `variable == value`. For
+`method in (:interval, :exact)`, refutes the opposite assignment
+`variable == probed_value` (`probed_variable == variable`) against a verified
+parent-scope feasible witness `witness_state` with normalized energy
+`witness_upper` (`branch_lower > witness_upper`, `persistency === :strong`).
+For `method === :double_probe`, certifies a witness-free common unary deduction
+`variable == value` reached under both branches of `probed_variable`
+(`probed_variable => low_orig` in `branch_steps` with bottleneck spin margin
+`branch_lower > 0`, and `probed_variable => 1` in `alt_branch_steps` with
+bottleneck spin margin `witness_upper > 0`).
 """
 struct ProbingStep <: _ProofRecord
     variable::Int
@@ -117,11 +148,15 @@ struct ProbingStep <: _ProofRecord
     method::Symbol
     scope_length::Int
     persistency::Symbol
+    probed_variable::Int
+    alt_branch_steps::Tuple{Vararg{DominanceStep}}
 end
 ProbingStep(i, v, pv, blo, wup, ws, bs, c, p, m) =
-    ProbingStep(i, v, pv, blo, wup, ws, bs, c, p, m, -1, :strong)
+    ProbingStep(i, v, pv, blo, wup, ws, bs, c, p, m, -1, :strong, i, ())
 ProbingStep(i, v, pv, blo, wup, ws, bs, c, p, m, sc) =
-    ProbingStep(i, v, pv, blo, wup, ws, bs, c, p, m, sc, :strong)
+    ProbingStep(i, v, pv, blo, wup, ws, bs, c, p, m, sc, :strong, i, ())
+ProbingStep(i, v, pv, blo, wup, ws, bs, c, p, m, sc, pers) =
+    ProbingStep(i, v, pv, blo, wup, ws, bs, c, p, m, sc, pers, i, ())
 
 """
     RoofDualityStep
@@ -243,6 +278,50 @@ end
 DominanceCertificate(g,cp,a,s,src) = DominanceCertificate(g,cp,a,s,src,nothing)
 generation(c::DominanceCertificate) = c.generation
 
+function Base.deepcopy_internal(w::_ProbingPairWitness, dict::IdDict)
+    haskey(dict, w) && return dict[w]::_ProbingPairWitness
+    return _ProbingPairWitness(
+        w.assume_var_1,
+        w.assume_val_1,
+        _deepcopy_tuple(w.branch_steps_1, dict),
+        w.assume_var_2,
+        w.assume_val_2,
+        _deepcopy_tuple(w.branch_steps_2, dict),
+    )
+end
+
+function Base.deepcopy_internal(w::_RoofSCCPairWitness, dict::IdDict)
+    haskey(dict, w) && return dict[w]::_RoofSCCPairWitness
+    return _RoofSCCPairWitness(
+        Base.deepcopy_internal(w.roof_lower, dict),
+        Base.deepcopy_internal(w.max_flow, dict),
+        _deepcopy_tuple(w.flow_edges, dict),
+        Base.deepcopy_internal(w.witness_upper, dict),
+        _deepcopy_tuple(w.witness_state, dict),
+        _deepcopy_tuple(w.scc_literals, dict),
+        _deepcopy_tuple(w.batch_contractions, dict),
+        w.batch_index,
+    )
+end
+
+function Base.deepcopy_internal(s::RelationStep, dict::IdDict)
+    haskey(dict, s) && return dict[s]::RelationStep
+    return RelationStep(
+        s.eliminated,
+        s.representative,
+        s.sign,
+        s.orig_sign,
+        Base.deepcopy_internal(s.lower, dict),
+        Base.deepcopy_internal(s.upper, dict),
+        Base.deepcopy_internal(s.constant, dict),
+        s.predecessors,
+        s.method,
+        s.scope_length,
+        s.persistency,
+        s.witness === nothing ? nothing : Base.deepcopy_internal(s.witness, dict),
+    )
+end
+
 function Base.deepcopy_internal(s::EliminationStep, dict::IdDict)
     haskey(dict, s) && return dict[s]::EliminationStep
     return EliminationStep(
@@ -274,6 +353,8 @@ function Base.deepcopy_internal(s::ProbingStep, dict::IdDict)
         s.method,
         s.scope_length,
         s.persistency,
+        s.probed_variable,
+        _deepcopy_tuple(s.alt_branch_steps, dict),
     )
 end
 
@@ -440,7 +521,8 @@ end
 
 """Certified roof-duality proof attempt with optional `certificate`, `stop_reason`,
 `method`, exact normalized `lower_bound`, scaled `objective_bound`, implication-network
-`max_flow`, strongly persistent `fixings`, and phase-separated work counters."""
+`max_flow`, strongly persistent `fixings`, phase-separated work counters, and optional
+residual SCC pair `contractions` (`contracted_count`)."""
 struct RoofDualityAttempt{V,S}
     certificate::Union{Nothing,DominanceCertificate}
     stop_reason::Symbol
@@ -454,7 +536,11 @@ struct RoofDualityAttempt{V,S}
     verification_work::Int
     edge_visits::Int
     exact_work::Int
+    contracted_count::Int
+    contractions::Vector{Tuple{V,V,Int}}
 end
+RoofDualityAttempt{V,S}(cert, sr, m, lb, ob, mf, fx, gw, fw, vw, ev, ew) where {V,S} =
+    RoofDualityAttempt{V,S}(cert, sr, m, lb, ob, mf, fx, gw, fw, vw, ev, ew, 0, Tuple{V,V,Int}[])
 
 """Certified gauge-submodular component cut proof attempt with optional `certificate`,
 `stop_reason`, `method`, exact normalized `component_opt`, `max_flow`, discovered
@@ -1326,12 +1412,209 @@ function _extract_witness_state(ws::Workspace, witness, map::Union{Nothing,Domai
     return w
 end
 
+function _dominance_step_spin_margin(
+    s_domain::QT.Domain,
+    bs::DominanceStep,
+    active_map::Union{Nothing,DomainGaugeMap}=nothing,
+)
+    dom_sym = active_map === nothing ? _domain_symbol(s_domain) : active_map.target_domain
+    lo_s = dom_sym === :bool ? (bs.lower // 2) : bs.lower
+    hi_s = dom_sym === :bool ? (bs.upper // 2) : bs.upper
+    return max(lo_s, -hi_s)
+end
+
+function _branch_steps_spin_margin(
+    s_domain::QT.Domain,
+    steps,
+    active_map::Union{Nothing,DomainGaugeMap}=nothing,
+)
+    isempty(steps) && return _Exact(0)
+    m = _dominance_step_spin_margin(s_domain, steps[1], active_map)
+    for k in 2:length(steps)
+        mk = _dominance_step_spin_margin(s_domain, steps[k], active_map)
+        mk < m && (m = mk)
+    end
+    return m
+end
+
+function _run_trial_dominance_branch!(
+    ws::Workspace,
+    assume_var::Int,
+    assume_val::Int;
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+    max_rounds::Int=1,
+    max_trial_fixes::Int=typemax(Int),
+    max_work::Int=typemax(Int),
+    max_exact_work::Int=typemax(Int),
+    deadline_ns=nothing,
+    scope_length::Int=-1,
+    target_var::Int=0,
+)
+    st, s = ws._state, ws._snapshot
+    direction = _direction(s)
+    probe_cp = checkpoint(ws)
+    saved_star_hint = st.star_hint
+    saved_rel_hint = st.rel_hint
+    visits = 0
+    fallbacks = 0
+    exact_work = 0
+    branch_steps = DominanceStep[]
+    try
+        rep = _fix!(ws, assume_var, assume_val; proof=nothing, max_work=max_work, deadline_ns=deadline_ns)
+        visits += rep.edge_visits
+        rep.stop_reason === :applied || return (false, rep.stop_reason, :none, branch_steps, visits, fallbacks, exact_work)
+        trial_candidates = Int[j for (j, _) in st.adjacency[assume_var] if st.fixed[j] == 2]
+        sort!(trial_candidates)
+        for _ in 1:max_rounds
+            isempty(trial_candidates) && break
+            length(branch_steps) < max_trial_fixes || break
+            next_candidates = Int[]
+            next_seen = Set{Int}()
+            for u in trial_candidates
+                length(branch_steps) < max_trial_fixes || break
+                st.fixed[u] == 2 || continue
+                _expired(deadline_ns) && return (false, :deadline, :interval, branch_steps, visits, fallbacks, exact_work)
+                if map === nothing && st.lower !== nothing && st.upper !== nothing
+                    deg_u = length(st.adjacency[u])
+                    if deg_u <= max_work - visits
+                        lo_u, hi_u = direction > 0 ? (st.lower[u], st.upper[u]) : (-st.upper[u], -st.lower[u])
+                        if !(lo_u > 0 || hi_u < 0)
+                            _, lo_u_hi = _enclose(lo_u)
+                            hi_u_lo, _ = _enclose(hi_u)
+                            if isfinite(lo_u_hi) && isfinite(hi_u_lo) && lo_u_hi < 0.0 && hi_u_lo > 0.0
+                                visits += deg_u
+                                continue
+                            end
+                        end
+                    end
+                end
+                b_step, b_reason, b_method, b_visits, b_fb, b_exact = _dominance_witness(
+                    ws, u; map=map, allow_weak=false,
+                    max_work=max_work - visits, max_exact_work=max_exact_work - exact_work,
+                    deadline_ns=deadline_ns, predecessors=length(branch_steps), scope_length=scope_length,
+                )
+                visits += b_visits
+                fallbacks += b_fb
+                exact_work += b_exact
+                if b_reason in (:deadline, :work_limit, :verification_limit)
+                    return (false, b_reason, b_method === :none ? :interval : b_method, branch_steps, visits, fallbacks, exact_work)
+                end
+                if b_step !== nothing
+                    f_rep = _fix!(ws, u, b_step.value; proof=b_step, max_work=max_work - visits, deadline_ns=deadline_ns)
+                    visits += f_rep.edge_visits
+                    f_rep.stop_reason === :applied ||
+                        return (false, f_rep.stop_reason, b_method, branch_steps, visits, fallbacks, exact_work)
+                    push!(branch_steps, b_step)
+                    u == target_var && return (true, :ok, b_method, branch_steps, visits, fallbacks, exact_work)
+                    for (w_nbr, _) in st.adjacency[u]
+                        if st.fixed[w_nbr] == 2 && !(w_nbr in next_seen)
+                            push!(next_candidates, w_nbr)
+                            push!(next_seen, w_nbr)
+                        end
+                    end
+                end
+            end
+            sort!(next_candidates)
+            trial_candidates = next_candidates
+        end
+        return (true, :ok, isempty(branch_steps) ? :interval : branch_steps[end].method, branch_steps, visits, fallbacks, exact_work)
+    finally
+        if length(st.trail) > probe_cp._depth
+            rollback!(ws, probe_cp)
+        end
+        st.star_hint = saved_star_hint
+        st.rel_hint = saved_rel_hint
+    end
+end
+
+function _double_probe_witness_for_var(
+    ws::Workspace,
+    target_var::Int;
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+    req_orig::Union{Nothing,Int}=nothing,
+    max_rounds::Int=1,
+    max_trial_fixes::Int=typemax(Int),
+    max_work::Int=typemax(Int),
+    max_exact_work::Int=typemax(Int),
+    deadline_ns=nothing,
+    predecessors::Int=0,
+    scope_length::Int=-1,
+)
+    st, s = ws._state, ws._snapshot
+    low_orig = s.domain === QT.BoolDomain ? 0 : -1
+    c_parent = deepcopy(_mapped_constant(ws, map))
+    ball = Int[]
+    seen = Set{Int}([target_var])
+    frontier = Int[target_var]
+    for _ in 1:max_rounds
+        isempty(frontier) && break
+        next_f = Int[]
+        for u in frontier
+            for (w, q) in st.adjacency[u]
+                (st.fixed[w] == 2 && !iszero(q) && !(w in seen)) || continue
+                push!(seen, w)
+                push!(ball, w)
+                push!(next_f, w)
+            end
+        end
+        frontier = next_f
+    end
+    sort!(ball)
+    visits = 0
+    fallbacks = 0
+    exact_work = 0
+    for p_var in ball
+        st.fixed[p_var] == 2 || continue
+        _expired(deadline_ns) && return (nothing, :deadline, :double_probe, visits, fallbacks, exact_work)
+        ok_low, r_low, _, steps_low, v_low, fb_low, ex_low = _run_trial_dominance_branch!(
+            ws, p_var, low_orig;
+            map=map, max_rounds=max_rounds, max_trial_fixes=max_trial_fixes,
+            max_work=max_work - visits, max_exact_work=max_exact_work - exact_work,
+            deadline_ns=deadline_ns, scope_length=scope_length, target_var=target_var,
+        )
+        visits += v_low
+        fallbacks += fb_low
+        exact_work += ex_low
+        ok_low || return (nothing, r_low, :double_probe, visits, fallbacks, exact_work)
+        k_low = findfirst(bs -> bs.variable == target_var, steps_low)
+        k_low === nothing && continue
+        val_low = steps_low[k_low].value
+        (req_orig === nothing || val_low == req_orig) || continue
+        ok_high, r_high, _, steps_high, v_high, fb_high, ex_high = _run_trial_dominance_branch!(
+            ws, p_var, 1;
+            map=map, max_rounds=max_rounds, max_trial_fixes=max_trial_fixes,
+            max_work=max_work - visits, max_exact_work=max_exact_work - exact_work,
+            deadline_ns=deadline_ns, scope_length=scope_length, target_var=target_var,
+        )
+        visits += v_high
+        fallbacks += fb_high
+        exact_work += ex_high
+        ok_high || return (nothing, r_high, :double_probe, visits, fallbacks, exact_work)
+        k_high = findfirst(bs -> bs.variable == target_var, steps_high)
+        (k_high !== nothing && steps_high[k_high].value == val_low) || continue
+        prefix_low = Tuple(steps_low[1:k_low])
+        prefix_high = Tuple(steps_high[1:k_high])
+        M_low = _branch_steps_spin_margin(s.domain, prefix_low, map)
+        M_high = _branch_steps_spin_margin(s.domain, prefix_high, map)
+        step = ProbingStep(
+            target_var, val_low, low_orig,
+            deepcopy(M_low), deepcopy(M_high),
+            (), prefix_low,
+            c_parent, predecessors, :double_probe, scope_length, :strong,
+            p_var, prefix_high,
+        )
+        return (step, :proved, :double_probe, visits, fallbacks, exact_work)
+    end
+    return (nothing, :not_strict, :double_probe, visits, fallbacks, exact_work)
+end
+
 function _probing_witness(
     ws::Workspace,
     i::Int,
     witness;
     map::Union{Nothing,DomainGaugeMap}=nothing,
     value=nothing,
+    double_probe::Bool=false,
     max_rounds=1,
     max_trial_fixes=typemax(Int),
     max_work=typemax(Int),
@@ -1570,6 +1853,23 @@ function _probing_witness(
         if isfinite(hi_spin) && isfinite(hi_bpos) && isfinite(hi_bneg)
             hi_float = max(hi_spin, hi_bpos, hi_bneg)
             if _Exact(hi_float) <= U_exact
+                if double_probe
+                    rollback!(ws, probe_cp)
+                    st.star_hint = saved_star_hint
+                    st.rel_hint = saved_rel_hint
+                    dp_step, dp_reason, dp_method, dp_v, dp_fb, dp_ex = _double_probe_witness_for_var(
+                        ws, i;
+                        map=map, req_orig=req_orig, max_rounds=Int(max_rounds), max_trial_fixes=Int(max_trial_fixes),
+                        max_work=Int(max_work) - visits, max_exact_work=Int(max_exact_work) - exact_work,
+                        deadline_ns=deadline_ns, predecessors=predecessors, scope_length=scope_length,
+                    )
+                    visits += dp_v
+                    fallbacks += dp_fb
+                    exact_work += dp_ex
+                    dp_step !== nothing && return (dp_step, :proved, dp_method, visits, fallbacks, exact_work)
+                    dp_reason in (:deadline, :work_limit, :verification_limit) &&
+                        return (nothing, dp_reason, dp_method, visits, fallbacks, exact_work)
+                end
                 return (nothing, :not_strict, :interval, visits, fallbacks, exact_work)
             end
         end
@@ -1647,6 +1947,23 @@ function _probing_witness(
             )
             return (step, :proved, :exact, visits, fallbacks, exact_work)
         else
+            if double_probe
+                rollback!(ws, probe_cp)
+                st.star_hint = saved_star_hint
+                st.rel_hint = saved_rel_hint
+                dp_step, dp_reason, dp_method, dp_v, dp_fb, dp_ex = _double_probe_witness_for_var(
+                    ws, i;
+                    map=map, req_orig=req_orig, max_rounds=Int(max_rounds), max_trial_fixes=Int(max_trial_fixes),
+                    max_work=Int(max_work) - visits, max_exact_work=Int(max_exact_work) - exact_work,
+                    deadline_ns=deadline_ns, predecessors=predecessors, scope_length=scope_length,
+                )
+                visits += dp_v
+                fallbacks += dp_fb
+                exact_work += dp_ex
+                dp_step !== nothing && return (dp_step, :proved, dp_method, visits, fallbacks, exact_work)
+                dp_reason in (:deadline, :work_limit, :verification_limit) &&
+                    return (nothing, dp_reason, dp_method, visits, fallbacks, exact_work)
+            end
             return (nothing, :not_strict, :exact, visits, fallbacks, exact_work)
         end
     finally
@@ -1656,6 +1973,331 @@ function _probing_witness(
         st.star_hint = saved_star_hint
         st.rel_hint = saved_rel_hint
     end
+end
+
+function _probing_relation_witness(
+    ws::Workspace,
+    u::Int,
+    v::Int;
+    sign::Union{Nothing,Int}=nothing,
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+    max_rounds=1,
+    max_trial_fixes=typemax(Int),
+    max_work=typemax(Int),
+    max_exact_work=typemax(Int),
+    deadline_ns=nothing,
+    predecessors=0,
+    scope_length=-1,
+)
+    _limits(max_work, deadline_ns)
+    _limits(max_exact_work, deadline_ns)
+    _limits(max_rounds, nothing)
+    _limits(max_trial_fixes, nothing)
+    map === nothing || _validate_domain_map(ws, map)
+    sign === nothing || (!(sign isa Bool) && sign in (-1, 1)) ||
+        throw(ArgumentError("relation sign must be -1, +1 or nothing"))
+    u != v || throw(ArgumentError("relation requires two distinct variables"))
+    st, s = ws._state, ws._snapshot
+    (st.fixed[u] == 2 && st.fixed[v] == 2) || return (nothing, :already_fixed, :none, 0, 0, 0)
+    direction = _direction(s)
+    direction != 0 || return (nothing, :zero_scale, :none, 0, 0, 0)
+    _expired(deadline_ns) && return (nothing, :deadline, :none, 0, 0, 0)
+    g_u = map === nothing ? 1 : map.gauge[u]
+    g_v = map === nothing ? 1 : map.gauge[v]
+    low_orig = s.domain === QT.BoolDomain ? 0 : -1
+    mr = Int(max_rounds)
+    mtf = Int(max_trial_fixes)
+    mw = Int(max_work)
+    mex = Int(max_exact_work)
+    visits = 0
+    fallbacks = 0
+    exact_work = 0
+    ok_ul, r_ul, _, steps_ul, v_ul, fb_ul, ex_ul = _run_trial_dominance_branch!(
+        ws, u, low_orig;
+        map=map, max_rounds=mr, max_trial_fixes=mtf,
+        max_work=mw - visits, max_exact_work=mex - exact_work,
+        deadline_ns=deadline_ns, scope_length=scope_length, target_var=v,
+    )
+    visits += v_ul
+    fallbacks += fb_ul
+    exact_work += ex_ul
+    ok_ul || return (nothing, r_ul, :probing_pair, visits, fallbacks, exact_work)
+    k_ul = findfirst(bs -> bs.variable == v, steps_ul)
+
+    ok_uh, r_uh, _, steps_uh, v_uh, fb_uh, ex_uh = _run_trial_dominance_branch!(
+        ws, u, 1;
+        map=map, max_rounds=mr, max_trial_fixes=mtf,
+        max_work=mw - visits, max_exact_work=mex - exact_work,
+        deadline_ns=deadline_ns, scope_length=scope_length, target_var=v,
+    )
+    visits += v_uh
+    fallbacks += fb_uh
+    exact_work += ex_uh
+    ok_uh || return (nothing, r_uh, :probing_pair, visits, fallbacks, exact_work)
+    k_uh = findfirst(bs -> bs.variable == v, steps_uh)
+
+    cand_orig_signs = sign === nothing ? (1, -1) : (g_u * g_v * Int(sign),)
+    steps_vl_cache = nothing
+    steps_vh_cache = nothing
+    for orig_σ in cand_orig_signs
+        xv_1 = orig_σ == 1 ? 1 : low_orig       # s_v = +orig_σ
+        xv_2 = orig_σ == 1 ? low_orig : 1       # s_v = -orig_σ
+        # Violation 1: (s_u = -1, s_v = +orig_σ), i.e., (x_u = low_orig, x_v = xv_1)
+        avar_1, aval_1 = 0, 0
+        bsteps_1 = nothing
+        if k_ul !== nothing && steps_ul[k_ul].value == xv_2
+            avar_1, aval_1 = u, low_orig
+            bsteps_1 = Tuple(steps_ul[1:k_ul])
+        else
+            if xv_1 == low_orig
+                if steps_vl_cache === nothing
+                    ok_vl, r_vl, _, s_vl, v_vl, fb_vl, ex_vl = _run_trial_dominance_branch!(
+                        ws, v, low_orig;
+                        map=map, max_rounds=mr, max_trial_fixes=mtf,
+                        max_work=mw - visits, max_exact_work=mex - exact_work,
+                        deadline_ns=deadline_ns, scope_length=scope_length, target_var=u,
+                    )
+                    visits += v_vl
+                    fallbacks += fb_vl
+                    exact_work += ex_vl
+                    ok_vl || return (nothing, r_vl, :probing_pair, visits, fallbacks, exact_work)
+                    steps_vl_cache = s_vl
+                end
+                k_v1 = findfirst(bs -> bs.variable == u, steps_vl_cache)
+                if k_v1 !== nothing && steps_vl_cache[k_v1].value == 1
+                    avar_1, aval_1 = v, low_orig
+                    bsteps_1 = Tuple(steps_vl_cache[1:k_v1])
+                end
+            else
+                if steps_vh_cache === nothing
+                    ok_vh, r_vh, _, s_vh, v_vh, fb_vh, ex_vh = _run_trial_dominance_branch!(
+                        ws, v, 1;
+                        map=map, max_rounds=mr, max_trial_fixes=mtf,
+                        max_work=mw - visits, max_exact_work=mex - exact_work,
+                        deadline_ns=deadline_ns, scope_length=scope_length, target_var=u,
+                    )
+                    visits += v_vh
+                    fallbacks += fb_vh
+                    exact_work += ex_vh
+                    ok_vh || return (nothing, r_vh, :probing_pair, visits, fallbacks, exact_work)
+                    steps_vh_cache = s_vh
+                end
+                k_v1 = findfirst(bs -> bs.variable == u, steps_vh_cache)
+                if k_v1 !== nothing && steps_vh_cache[k_v1].value == 1
+                    avar_1, aval_1 = v, 1
+                    bsteps_1 = Tuple(steps_vh_cache[1:k_v1])
+                end
+            end
+        end
+        bsteps_1 === nothing && continue
+
+        # Violation 2: (s_u = +1, s_v = -orig_σ), i.e., (x_u = 1, x_v = xv_2)
+        avar_2, aval_2 = 0, 0
+        bsteps_2 = nothing
+        if k_uh !== nothing && steps_uh[k_uh].value == xv_1
+            avar_2, aval_2 = u, 1
+            bsteps_2 = Tuple(steps_uh[1:k_uh])
+        else
+            if xv_2 == low_orig
+                if steps_vl_cache === nothing
+                    ok_vl, r_vl, _, s_vl, v_vl, fb_vl, ex_vl = _run_trial_dominance_branch!(
+                        ws, v, low_orig;
+                        map=map, max_rounds=mr, max_trial_fixes=mtf,
+                        max_work=mw - visits, max_exact_work=mex - exact_work,
+                        deadline_ns=deadline_ns, scope_length=scope_length, target_var=u,
+                    )
+                    visits += v_vl
+                    fallbacks += fb_vl
+                    exact_work += ex_vl
+                    ok_vl || return (nothing, r_vl, :probing_pair, visits, fallbacks, exact_work)
+                    steps_vl_cache = s_vl
+                end
+                k_v2 = findfirst(bs -> bs.variable == u, steps_vl_cache)
+                if k_v2 !== nothing && steps_vl_cache[k_v2].value == low_orig
+                    avar_2, aval_2 = v, low_orig
+                    bsteps_2 = Tuple(steps_vl_cache[1:k_v2])
+                end
+            else
+                if steps_vh_cache === nothing
+                    ok_vh, r_vh, _, s_vh, v_vh, fb_vh, ex_vh = _run_trial_dominance_branch!(
+                        ws, v, 1;
+                        map=map, max_rounds=mr, max_trial_fixes=mtf,
+                        max_work=mw - visits, max_exact_work=mex - exact_work,
+                        deadline_ns=deadline_ns, scope_length=scope_length, target_var=u,
+                    )
+                    visits += v_vh
+                    fallbacks += fb_vh
+                    exact_work += ex_vh
+                    ok_vh || return (nothing, r_vh, :probing_pair, visits, fallbacks, exact_work)
+                    steps_vh_cache = s_vh
+                end
+                k_v2 = findfirst(bs -> bs.variable == u, steps_vh_cache)
+                if k_v2 !== nothing && steps_vh_cache[k_v2].value == low_orig
+                    avar_2, aval_2 = v, 1
+                    bsteps_2 = Tuple(steps_vh_cache[1:k_v2])
+                end
+            end
+        end
+        bsteps_2 === nothing && continue
+
+        M_1 = _branch_steps_spin_margin(s.domain, bsteps_1, map)
+        M_2 = _branch_steps_spin_margin(s.domain, bsteps_2, map)
+        lo_p, hi_p = minmax(M_1, M_2)
+        σ = g_u * g_v * orig_σ
+        c_val = _mapped_constant(ws, map)
+        wit = _ProbingPairWitness(avar_1, aval_1, bsteps_1, avar_2, aval_2, bsteps_2)
+        step = RelationStep(
+            u, v, σ, orig_σ, deepcopy(lo_p), deepcopy(hi_p), deepcopy(c_val),
+            predecessors, :probing_pair, scope_length, :strong, wit,
+        )
+        return (step, :proved, :probing_pair, visits, fallbacks, exact_work)
+    end
+    return (nothing, :not_strict, :probing_pair, visits, fallbacks, exact_work)
+end
+
+function _roof_scc_relation_witness(
+    ws::Workspace,
+    u::Int,
+    v::Int;
+    sign::Union{Nothing,Int}=nothing,
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+    witness=nothing,
+    max_work=typemax(Int),
+    max_exact_work=typemax(Int),
+    deadline_ns=nothing,
+    predecessors=0,
+    scope_length=-1,
+)
+    _limits(max_work, deadline_ns)
+    _limits(max_exact_work, deadline_ns)
+    map === nothing || _validate_domain_map(ws, map)
+    sign === nothing || (!(sign isa Bool) && sign in (-1, 1)) ||
+        throw(ArgumentError("relation sign must be -1, +1 or nothing"))
+    u != v || throw(ArgumentError("relation requires two distinct variables"))
+    st, s = ws._state, ws._snapshot
+    (st.fixed[u] == 2 && st.fixed[v] == 2) || return (nothing, :already_fixed, :none, 0, 0, 0)
+    direction = _direction(s)
+    direction != 0 || return (nothing, :zero_scale, :none, 0, 0, 0)
+    _expired(deadline_ns) && return (nothing, :deadline, :none, 0, 0, 0)
+    mw = Int(max_work)
+    mex = Int(max_exact_work)
+    ok, reason, net, C_base, graph_work, exact_work = _build_implication_network(
+        ws; max_work=mw, max_exact_work=mex, deadline_ns=deadline_ns,
+    )
+    ok || return (nothing, reason, :roof_scc_pair, graph_work, 1, exact_work)
+    ok_flow, flow_reason, total_flow, flow_work, flow_exact = _dinic_max_flow!(
+        net;
+        max_work=mw - graph_work,
+        max_exact_work=mex - exact_work,
+        deadline_ns=deadline_ns,
+    )
+    exact_work += flow_exact
+    total_visits = graph_work + flow_work
+    ok_flow || return (nothing, flow_reason, :roof_scc_pair, total_visits, 1, exact_work)
+    R_S, R_T, ver_work = _residual_reachability(net)
+    _expired(deadline_ns) && return (nothing, :deadline, :roof_scc_pair, total_visits + ver_work, 1, exact_work)
+    total_visits + ver_work <= mw || return (nothing, :work_limit, :roof_scc_pair, mw, 1, exact_work)
+    total_visits += ver_work
+
+    in_half = _half_integral_literals(net, R_S, R_T, idx -> st.fixed[idx] == 2)
+    a = 2 * u - 1
+    (in_half[a] && in_half[2 * v - 1]) ||
+        return (nothing, :not_strict, :roof_scc_pair, total_visits, 1, exact_work)
+    g_u = map === nothing ? 1 : map.gauge[u]
+    g_v = map === nothing ? 1 : map.gauge[v]
+    flow_edges = _extract_flow_edges(net)
+    L_roof = C_base + total_flow
+    c_val = _mapped_constant(ws, map)
+
+    # Case 1: Witness-free closed residual SCC (Δ = 0)
+    ok_scc, scc_reason, scc_id_0, sccs_0, scc_w = _tarjan_residual_sccs(
+        net, in_half, _Exact(0); max_work=mw - total_visits, deadline_ns=deadline_ns,
+    )
+    total_visits += scc_w
+    ok_scc || return (nothing, scc_reason, :roof_scc_pair, total_visits, 1, exact_work)
+    cid_0 = scc_id_0[a]
+    if cid_0 > 0
+        K_0 = sccs_0[cid_0]
+        if length(K_0) >= 2 && _is_closed_residual_scc(net, in_half, scc_id_0, K_0)
+            b_0 = scc_id_0[2 * v - 1] == cid_0 ? (2 * v - 1) : (scc_id_0[2 * v] == cid_0 ? (2 * v) : 0)
+            if b_0 > 0
+                orig_σ = b_0 == 2 * v - 1 ? 1 : -1
+                σ = g_u * g_v * orig_σ
+                if sign === nothing || σ == Int(sign)
+                    B_cycle = _scc_cycle_bottleneck(net, scc_id_0, cid_0, K_0, a, b_0, _Exact(0))
+                    if B_cycle > 0
+                        wit = _RoofSCCPairWitness(
+                            deepcopy(L_roof), deepcopy(total_flow), flow_edges,
+                            deepcopy(L_roof), (), Tuple(K_0),
+                            ((u, v, orig_σ),), 1,
+                        )
+                        step = RelationStep(
+                            u, v, σ, orig_σ, deepcopy(B_cycle), deepcopy(B_cycle),
+                            deepcopy(c_val), predecessors, :roof_scc_pair, scope_length, :strong, wit,
+                        )
+                        return (step, :proved, :roof_scc_pair, total_visits, 1, exact_work)
+                    end
+                end
+            end
+        end
+    end
+
+    # Case 2: Witness-bounded residual bottleneck SCC (Δ = U_witness - L_roof >= 0)
+    w_vec = _extract_witness_state(ws, witness, map)
+    is_bool = s.domain === QT.BoolDomain
+    s_u_w = is_bool ? (2 * w_vec[u] - 1) : w_vec[u]
+    s_v_w = is_bool ? (2 * w_vec[v] - 1) : w_vec[v]
+    orig_σ = s_u_w * s_v_w
+    σ = g_u * g_v * orig_σ
+    if sign !== nothing && σ != Int(sign)
+        return (nothing, :not_strict, :roof_scc_pair, total_visits, 1, exact_work)
+    end
+    n = length(s.labels)
+    w_energy = st.constant
+    for idx in 1:n
+        st.fixed[idx] == 2 || continue
+        _expired(deadline_ns) && return (nothing, :deadline, :roof_scc_pair, total_visits, 1, exact_work)
+        exact_work < mex || return (nothing, :verification_limit, :roof_scc_pair, total_visits, 1, exact_work)
+        w_energy += st.fields[idx] * w_vec[idx]
+        exact_work += 1
+        for (nbr, q) in st.adjacency[idx]
+            _expired(deadline_ns) && return (nothing, :deadline, :roof_scc_pair, total_visits, 1, exact_work)
+            total_visits < mw || return (nothing, :work_limit, :roof_scc_pair, total_visits, 1, exact_work)
+            total_visits += 1
+            (st.fixed[nbr] == 2 && idx < nbr) || continue
+            exact_work < mex || return (nothing, :verification_limit, :roof_scc_pair, total_visits, 1, exact_work)
+            w_energy += q * (w_vec[idx] * w_vec[nbr])
+            exact_work += 1
+        end
+    end
+    U_exact = direction * w_energy
+    Δ = U_exact - L_roof
+    Δ >= 0 || return (nothing, :not_strict, :roof_scc_pair, total_visits, 1, exact_work)
+    ok_sccd, scc_reasond, scc_id_d, sccs_d, scc_wd = _tarjan_residual_sccs(
+        net, in_half, Δ; max_work=mw - total_visits, deadline_ns=deadline_ns,
+    )
+    total_visits += scc_wd
+    ok_sccd || return (nothing, scc_reasond, :roof_scc_pair, total_visits, 1, exact_work)
+    b_d = orig_σ == 1 ? (2 * v - 1) : (2 * v)
+    cid_d = scc_id_d[a]
+    if cid_d > 0 && scc_id_d[b_d] == cid_d
+        K_d = sccs_d[cid_d]
+        B_cycle = _scc_cycle_bottleneck(net, scc_id_d, cid_d, K_d, a, b_d, Δ)
+        margin = B_cycle - Δ
+        if margin > 0
+            wit = _RoofSCCPairWitness(
+                deepcopy(L_roof), deepcopy(total_flow), flow_edges,
+                deepcopy(U_exact), Tuple(w_vec), Tuple(K_d),
+                ((u, v, orig_σ),), 1,
+            )
+            step = RelationStep(
+                u, v, σ, orig_σ, deepcopy(margin), deepcopy(margin),
+                deepcopy(c_val), predecessors, :roof_scc_pair, scope_length, :strong, wit,
+            )
+            return (step, :proved, :roof_scc_pair, total_visits, 1, exact_work)
+        end
+    end
+    return (nothing, :not_strict, :roof_scc_pair, total_visits, 1, exact_work)
 end
 
 function _convert_step_bounds(s::_Snapshot, step::DominanceStep,
@@ -2021,10 +2663,29 @@ function _transport_one_step(
     elseif step isa RelationStep
         new_sign = already_in_target ? step.sign : (to_map === nothing ? step.orig_sign :
             (to_map.gauge[step.eliminated] * to_map.gauge[step.representative] * step.orig_sign))
+        new_wit = if step.witness === nothing || already_in_target || step.witness isa _RoofSCCPairWitness
+            step.witness === nothing ? nothing : Base.deepcopy_internal(step.witness, IdDict())
+        else
+            w_p = step.witness::_ProbingPairWitness
+            p_1 = deepcopy(p)
+            _poly_fix!(p_1, w_p.assume_var_1, w_p.assume_val_1)
+            nb_1 = Tuple(
+                _transport_one_step(s, p_1, bstep, from_map, to_map; already_in_target=false)
+                for bstep in w_p.branch_steps_1
+            )
+            p_2 = deepcopy(p)
+            _poly_fix!(p_2, w_p.assume_var_2, w_p.assume_val_2)
+            nb_2 = Tuple(
+                _transport_one_step(s, p_2, bstep, from_map, to_map; already_in_target=false)
+                for bstep in w_p.branch_steps_2
+            )
+            _ProbingPairWitness(w_p.assume_var_1, w_p.assume_val_1, nb_1, w_p.assume_var_2, w_p.assume_val_2, nb_2)
+        end
         out = RelationStep(
             step.eliminated, step.representative, new_sign, step.orig_sign,
             deepcopy(step.lower), deepcopy(step.upper), deepcopy(c_to),
             step.predecessors, step.method, step.scope_length, step.persistency,
+            new_wit,
         )
         cd, fd, qd = _poly_relation_deltas(p, step.eliminated, step.representative, step.orig_sign)
         _poly_apply_deltas!(p, step.eliminated, cd, fd, qd)
@@ -2035,10 +2696,22 @@ function _transport_one_step(
             _deepcopy_tuple(pstep.branch_steps, IdDict())
         else
             p_trial = deepcopy(p)
-            _poly_fix!(p_trial, pstep.variable, pstep.probed_value)
+            _poly_fix!(p_trial, pstep.probed_variable, pstep.probed_value)
             Tuple(
                 _transport_one_step(s, p_trial, bstep, from_map, to_map; already_in_target=false)
                 for bstep in pstep.branch_steps
+            )
+        end
+        new_alt_bsteps = if isempty(pstep.alt_branch_steps)
+            ()
+        elseif already_in_target
+            _deepcopy_tuple(pstep.alt_branch_steps, IdDict())
+        else
+            p_alt = deepcopy(p)
+            _poly_fix!(p_alt, pstep.probed_variable, 1)
+            Tuple(
+                _transport_one_step(s, p_alt, bstep, from_map, to_map; already_in_target=false)
+                for bstep in pstep.alt_branch_steps
             )
         end
         out = ProbingStep(
@@ -2046,6 +2719,7 @@ function _transport_one_step(
             deepcopy(pstep.branch_lower), deepcopy(pstep.witness_upper),
             pstep.witness_state, new_bsteps, deepcopy(c_to),
             pstep.predecessors, pstep.method, pstep.scope_length, pstep.persistency,
+            pstep.probed_variable, new_alt_bsteps,
         )
         _poly_fix!(p, pstep.variable, pstep.value)
         return out
@@ -2186,17 +2860,27 @@ end
 
 """
     prove_relation(ws, eliminated, representative; sign=nothing, map=nothing,
-                   allow_weak=false, max_work=typemax(Int), max_exact_work=typemax(Int),
+                   allow_weak=false, enable_probing=false, enable_roof_scc=false,
+                   witness=nothing, max_rounds=1, max_trial_fixes=typemax(Int),
+                   max_work=typemax(Int), max_exact_work=typemax(Int),
                    deadline_ns=nothing)
 
 Prove a signed pair relation ``t_{\\text{eliminated}} = \\sigma t_{\\text{representative}}``
 without mutating `ws`. When `sign` is omitted, the candidate sign opposing the
-effective coupling between `eliminated` and `representative` is tested.
+effective coupling between `eliminated` and `representative` is tested. When
+`enable_probing=true`, 2-SAT trial probing cascades (`:probing_pair`) are also
+tested. When `enable_roof_scc=true`, roof-duality implication-network residual
+SCC equivalences (`:roof_scc_pair`) are also tested.
 """
 function prove_relation(ws::Workspace, eliminated, representative;
                         sign::Union{Nothing,Int}=nothing,
                         map::Union{Nothing,DomainGaugeMap}=nothing,
                         allow_weak::Bool=false,
+                        enable_probing::Bool=false,
+                        enable_roof_scc::Bool=false,
+                        witness=nothing,
+                        max_rounds=1,
+                        max_trial_fixes=typemax(Int),
                         max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing)
     map === nothing || _validate_domain_map(ws, map; full=true)
     u = _variable(ws, eliminated)
@@ -2205,6 +2889,32 @@ function prove_relation(ws::Workspace, eliminated, representative;
         ws, u, v; sign, map, allow_weak, max_work, max_exact_work, deadline_ns,
         predecessors=ws._state.proof_count, scope_length=length(ws._state.callers),
     )
+    if step === nothing && reason === :not_strict && enable_probing
+        p_step, p_reason, p_method, p_v, p_fb, p_ex = _probing_relation_witness(
+            ws, u, v;
+            sign=sign, map=map, max_rounds=max_rounds, max_trial_fixes=max_trial_fixes,
+            max_work=max_work - visits, max_exact_work=max_exact_work - exact_work,
+            deadline_ns=deadline_ns, predecessors=ws._state.proof_count,
+            scope_length=length(ws._state.callers),
+        )
+        visits += p_v
+        fallbacks += p_fb
+        exact_work += p_ex
+        step, reason, method = p_step, p_reason, p_method
+    end
+    if step === nothing && reason in (:not_strict, :no_persistency) && enable_roof_scc
+        r_step, r_reason, r_method, r_v, r_fb, r_ex = _roof_scc_relation_witness(
+            ws, u, v;
+            sign=sign, map=map, witness=witness,
+            max_work=max_work - visits, max_exact_work=max_exact_work - exact_work,
+            deadline_ns=deadline_ns, predecessors=ws._state.proof_count,
+            scope_length=length(ws._state.callers),
+        )
+        visits += r_v
+        fallbacks += r_fb
+        exact_work += r_ex
+        step, reason, method = r_step, r_reason, r_method
+    end
     if step === nothing
         return RelationAttempt(nothing, reason, method, visits, fallbacks, exact_work)
     end
@@ -2248,7 +2958,7 @@ end
 
 """
     prove_probing(ws, label, witness=nothing; map=nothing, value=nothing,
-                  max_rounds=1, max_trial_fixes=typemax(Int),
+                  double_probe=false, max_rounds=1, max_trial_fixes=typemax(Int),
                   max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing)
 
 Prove one certified probing restriction `label => value` without mutating `ws`
@@ -2257,7 +2967,9 @@ unary dominance (`max_rounds`, `max_trial_fixes`), and strictly refuting the
 branch lower bound (`branch_lower > witness_upper`) against the verified
 parent-scope feasible `witness` (an original-order vector, label dictionary,
 [`Reconstruction`](@ref), or `nothing` to synthesize
-[`coercive_field_witness`](@ref)). All trial mutations are rolled back before returning.
+[`coercive_field_witness`](@ref)). When `double_probe=true`, also checks whether
+both branches of a neighboring variable deduce `label => value` (`:double_probe`).
+All trial mutations are rolled back before returning.
 """
 function prove_probing(
     ws::Workspace,
@@ -2265,6 +2977,7 @@ function prove_probing(
     witness=nothing;
     map::Union{Nothing,DomainGaugeMap}=nothing,
     value=nothing,
+    double_probe::Bool=false,
     max_rounds=1,
     max_trial_fixes=typemax(Int),
     max_work=typemax(Int),
@@ -2275,7 +2988,7 @@ function prove_probing(
     i = _variable(ws, label)
     step, reason, method, visits, fallbacks, exact_work = _probing_witness(
         ws, i, witness;
-        map, value, max_rounds, max_trial_fixes,
+        map, value, double_probe, max_rounds, max_trial_fixes,
         max_work, max_exact_work, deadline_ns,
         predecessors=ws._state.proof_count, scope_length=length(ws._state.callers),
     )
@@ -2302,6 +3015,219 @@ function _resolve_roof_candidates(ws::Workspace, candidates)
     return out
 end
 
+const _RoofSCCSpec = Tuple{Int,Int,Int,_Exact,_Exact,Tuple{Vararg{Int}},Tuple{Vararg{Int}}}
+
+function _extract_roof_scc_specs(
+    ws::Workspace,
+    cand_indices::Vector{Int},
+    net::_FlowNetwork,
+    L_roof::_Exact,
+    R_S::BitVector,
+    R_T::BitVector;
+    witness=nothing,
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+    max_work::Int=typemax(Int),
+    max_exact_work::Int=typemax(Int),
+    deadline_ns=nothing,
+)
+    s, st = ws._snapshot, ws._state
+    direction = _direction(s)
+    specs = _RoofSCCSpec[]
+    in_half = _half_integral_literals(net, R_S, R_T, idx -> st.fixed[idx] == 2)
+    any(in_half) || return (true, :ok, specs, 0, 0)
+    ok_scc, scc_reason, scc_id_0, sccs_0, scc_w = _tarjan_residual_sccs(
+        net, in_half, _Exact(0); max_work=max_work, deadline_ns=deadline_ns,
+    )
+    ok_scc || return (false, scc_reason, specs, scc_w, 0)
+    ver_w = scc_w
+    ex_w = 0
+    used_vars = Set{Int}()
+    cand_set = Set{Int}(cand_indices)
+    for K in sccs_0
+        length(K) >= 2 || continue
+        _is_closed_residual_scc(net, in_half, scc_id_0, K) || continue
+        vars_K = Int[]
+        for lit in K
+            v_var = _lit_var(lit)
+            !(v_var in used_vars) && !(v_var in vars_K) && push!(vars_K, v_var)
+        end
+        length(vars_K) >= 2 || continue
+        sort!(vars_K; by = v -> (v in cand_set ? 1 : 0, v))
+        rep = vars_K[1]
+        for u in vars_K
+            (u != rep && (u in cand_set)) || continue
+            a = 2 * u - 1
+            cid_u = scc_id_0[a]
+            K_u = sccs_0[cid_u]
+            b = scc_id_0[2 * rep - 1] == cid_u ? (2 * rep - 1) : (2 * rep)
+            orig_σ = b == 2 * rep - 1 ? 1 : -1
+            B_cycle = _scc_cycle_bottleneck(net, scc_id_0, cid_u, K_u, a, b, _Exact(0))
+            if B_cycle > 0
+                push!(specs, (u, rep, orig_σ, B_cycle, L_roof, (), Tuple(K_u)))
+            end
+        end
+        for v_var in vars_K
+            push!(used_vars, v_var)
+        end
+    end
+
+    has_open_cand = false
+    for K in sccs_0
+        length(K) >= 2 || continue
+        n_unused = 0
+        has_c = false
+        for lit in K
+            vv = _lit_var(lit)
+            if !(vv in used_vars)
+                n_unused += 1
+                (vv in cand_set) && (has_c = true)
+            end
+        end
+        if n_unused >= 2 && has_c
+            has_open_cand = true
+            break
+        end
+    end
+
+    if has_open_cand
+        w_vec = _extract_witness_state(ws, witness, map)
+        n = length(s.labels)
+        w_energy = st.constant
+        for idx in 1:n
+            st.fixed[idx] == 2 || continue
+            _expired(deadline_ns) && return (false, :deadline, specs, ver_w, ex_w)
+            ex_w < max_exact_work || return (false, :verification_limit, specs, ver_w, ex_w)
+            w_energy += st.fields[idx] * w_vec[idx]
+            ex_w += 1
+            for (nbr, q) in st.adjacency[idx]
+                _expired(deadline_ns) && return (false, :deadline, specs, ver_w, ex_w)
+                ver_w < max_work || return (false, :work_limit, specs, ver_w, ex_w)
+                ver_w += 1
+                (st.fixed[nbr] == 2 && idx < nbr) || continue
+                ex_w < max_exact_work || return (false, :verification_limit, specs, ver_w, ex_w)
+                w_energy += q * (w_vec[idx] * w_vec[nbr])
+                ex_w += 1
+            end
+        end
+        U_exact = direction * w_energy
+        Δ = U_exact - L_roof
+        if Δ >= 0
+            ok_sccd, scc_reasond, scc_id_d, sccs_d, scc_wd = _tarjan_residual_sccs(
+                net, in_half, Δ; max_work=max_work - ver_w, deadline_ns=deadline_ns,
+            )
+            ver_w += scc_wd
+            ok_sccd || return (false, scc_reasond, specs, ver_w, ex_w)
+            w_tuple = Tuple(w_vec)
+            for K_d in sccs_d
+                length(K_d) >= 2 || continue
+                vars_K = Int[]
+                for lit in K_d
+                    v_var = _lit_var(lit)
+                    !(v_var in used_vars) && !(v_var in vars_K) && push!(vars_K, v_var)
+                end
+                length(vars_K) >= 2 || continue
+                sort!(vars_K; by = v -> (v in cand_set ? 1 : 0, v))
+                rep = vars_K[1]
+                for u in vars_K
+                    (u != rep && (u in cand_set)) || continue
+                    a = 2 * u - 1
+                    cid_u = scc_id_d[a]
+                    K_u = sccs_d[cid_u]
+                    b = scc_id_d[2 * rep - 1] == cid_u ? (2 * rep - 1) : (2 * rep)
+                    orig_σ = b == 2 * rep - 1 ? 1 : -1
+                    B_cycle = _scc_cycle_bottleneck(net, scc_id_d, cid_u, K_u, a, b, Δ)
+                    margin = B_cycle - Δ
+                    if margin > 0
+                        push!(specs, (u, rep, orig_σ, margin, U_exact, w_tuple, Tuple(K_u)))
+                    end
+                end
+                for v_var in vars_K
+                    push!(used_vars, v_var)
+                end
+            end
+        end
+    end
+    sort!(specs; by = first)
+    return (true, :ok, specs, ver_w, ex_w)
+end
+
+function _commit_roof_scc_specs!(
+    ws::Workspace,
+    specs::Vector{_RoofSCCSpec},
+    L_roof::_Exact,
+    total_flow::_Exact,
+    flow_edges::Tuple{Vararg{Tuple{Int,Int,_Exact}}};
+    max_fill::Int=typemax(Int),
+    max_work::Int=typemax(Int),
+    deadline_ns=nothing,
+)
+    isempty(specs) && return (true, :ok, RelationStep[], Tuple{Int,Int,Int}[], 0, false)
+    st = ws._state
+    scope_len = length(st.callers)
+    mat_visits = 0
+    fill_skipped = false
+    accepted_specs = if max_fill == typemax(Int)
+        specs
+    else
+        cp_sim = checkpoint(ws)
+        saved_star = st.star_hint
+        saved_rel = st.rel_hint
+        acc = _RoofSCCSpec[]
+        try
+            for spec in specs
+                _expired(deadline_ns) && return (false, :deadline, RelationStep[], Tuple{Int,Int,Int}[], mat_visits, false)
+                u, rep, orig_σ, margin, w_upper, w_tuple, K_tuple = spec
+                (st.fixed[u] == 2 && st.fixed[rep] == 2) || continue
+                f_uv = _contraction_fill(st, u, rep)
+                if f_uv > max_fill
+                    fill_skipped = true
+                    continue
+                end
+                push!(acc, spec)
+                dummy_wit = _RoofSCCPairWitness(L_roof, total_flow, flow_edges, w_upper, w_tuple, K_tuple, ((u, rep, orig_σ),), 1)
+                dummy_step = RelationStep(u, rep, orig_σ, orig_σ, margin, margin, st.constant, st.proof_count, :roof_scc_pair, scope_len, :strong, dummy_wit)
+                cd, fd, qd = _relation_deltas(ws, u, rep, orig_σ)
+                rep_sim = _apply_reduction!(ws, u, Int8(3), dummy_step, cd, fd, qd; max_work=max_work - mat_visits, deadline_ns=deadline_ns, precharged_visits=0)
+                mat_visits += rep_sim.edge_visits
+                rep_sim.stop_reason === :applied || return (false, rep_sim.stop_reason, RelationStep[], Tuple{Int,Int,Int}[], mat_visits, fill_skipped)
+            end
+        finally
+            if length(st.trail) > cp_sim._depth
+                rollback!(ws, cp_sim)
+            end
+            st.star_hint = saved_star
+            st.rel_hint = saved_rel
+        end
+        acc
+    end
+    isempty(accepted_specs) && return (true, :ok, RelationStep[], Tuple{Int,Int,Int}[], mat_visits, fill_skipped)
+    batch_contractions = Tuple((u, rep, orig_σ) for (u, rep, orig_σ, _, _, _, _) in accepted_specs)
+    scc_steps = Vector{RelationStep}(undef, length(accepted_specs))
+    for (r, (u, rep, orig_σ, margin, w_upper, w_tuple, K_tuple)) in enumerate(accepted_specs)
+        _expired(deadline_ns) && return (false, :deadline, RelationStep[], Tuple{Int,Int,Int}[], mat_visits, fill_skipped)
+        c_before = deepcopy(st.constant)
+        wit_r = _RoofSCCPairWitness(
+            deepcopy(L_roof), deepcopy(total_flow), flow_edges,
+            deepcopy(w_upper), w_tuple, K_tuple,
+            batch_contractions, r,
+        )
+        step_r = RelationStep(
+            u, rep, orig_σ, orig_σ, deepcopy(margin), deepcopy(margin),
+            c_before, st.proof_count, :roof_scc_pair, scope_len, :strong, wit_r,
+        )
+        scc_steps[r] = step_r
+        cd, fd, qd = _relation_deltas(ws, u, rep, orig_σ)
+        rep_apply = _apply_reduction!(
+            ws, u, Int8(3), step_r, cd, fd, qd;
+            max_work=max_work - mat_visits, deadline_ns=deadline_ns, precharged_visits=0,
+        )
+        mat_visits += rep_apply.edge_visits
+        rep_apply.stop_reason === :applied ||
+            return (false, rep_apply.stop_reason, RelationStep[], Tuple{Int,Int,Int}[], mat_visits, fill_skipped)
+    end
+    return (true, :ok, scc_steps, collect(Tuple{Int,Int,Int}, batch_contractions), mat_visits, fill_skipped)
+end
+
 function _roof_duality_pass(
     ws::Workspace,
     cand_indices::Vector{Int};
@@ -2314,13 +3240,13 @@ function _roof_duality_pass(
     st = ws._state
     direction = _direction(s)
     direction != 0 ||
-        return (Pair{Int,Int}[], (), nothing, nothing, nothing, :zero_scale, :none, 0, 0, 0, 0, 0)
+        return (Pair{Int,Int}[], (), nothing, nothing, nothing, :zero_scale, :none, 0, 0, 0, 0, 0, nothing, BitVector(), BitVector())
     ok, reason, net, C_base, graph_work, exact_work = _build_implication_network(
         ws; max_work=max_work, max_exact_work=max_exact_work, deadline_ns=deadline_ns,
     )
     ok || return (
         Pair{Int,Int}[], (), nothing, nothing, nothing,
-        reason, :exact, graph_work, 0, 0, graph_work, exact_work,
+        reason, :exact, graph_work, 0, 0, graph_work, exact_work, nothing, BitVector(), BitVector(),
     )
     ok_flow, flow_reason, total_flow, flow_work, flow_exact = _dinic_max_flow!(
         net;
@@ -2332,19 +3258,19 @@ function _roof_duality_pass(
     total_visits = graph_work + flow_work
     ok_flow || return (
         Pair{Int,Int}[], (), nothing, nothing, nothing,
-        flow_reason, :exact, graph_work, flow_work, 0, total_visits, exact_work,
+        flow_reason, :exact, graph_work, flow_work, 0, total_visits, exact_work, nothing, BitVector(), BitVector(),
     )
     R_S, R_T, ver_work = _residual_reachability(net)
     if _expired(deadline_ns)
         return (
             Pair{Int,Int}[], (), nothing, nothing, nothing,
-            :deadline, :exact, graph_work, flow_work, ver_work, total_visits + ver_work, exact_work,
+            :deadline, :exact, graph_work, flow_work, ver_work, total_visits + ver_work, exact_work, nothing, BitVector(), BitVector(),
         )
     end
     if total_visits + ver_work > max_work
         return (
             Pair{Int,Int}[], (), nothing, nothing, nothing,
-            :work_limit, :exact, graph_work, flow_work, max_work - total_visits, max_work, exact_work,
+            :work_limit, :exact, graph_work, flow_work, max_work - total_visits, max_work, exact_work, nothing, BitVector(), BitVector(),
         )
     end
     total_visits += ver_work
@@ -2366,7 +3292,7 @@ function _roof_duality_pass(
     stop = isempty(batch_pairs) ? (value_filter === nothing ? :no_persistency : :not_strict) : :proved
     return (
         batch_pairs, flow_edges, L_roof, obj_bound, total_flow,
-        stop, :exact, graph_work, flow_work, ver_work, total_visits, exact_work,
+        stop, :exact, graph_work, flow_work, ver_work, total_visits, exact_work, net, R_S, R_T,
     )
 end
 
@@ -2378,20 +3304,34 @@ function _build_roof_certificate(
     total_flow::_Exact,
     map::Union{Nothing,DomainGaugeMap},
     max_work::Int,
-    deadline_ns,
+    deadline_ns;
+    contract_scc::Bool=false,
+    cand_indices::Vector{Int}=Int[],
+    net::Union{Nothing,_FlowNetwork}=nothing,
+    R_S::BitVector=BitVector(),
+    R_T::BitVector=BitVector(),
+    witness=nothing,
+    max_fill::Int=typemax(Int),
+    max_exact_work::Int=typemax(Int),
 )
     st = ws._state
     scope_len = length(st.callers)
     base_preds = st.proof_count
     batch_tuple = Tuple(batch_pairs)
-    raw_steps = Vector{RoofDualityStep}(undef, length(batch_pairs))
+    raw_steps = _ProofRecord[]
+    contractions_orig = Tuple{Int,Int,Int}[]
     cp = checkpoint(ws)
     saved_star_hint = st.star_hint
     saved_rel_hint = st.rel_hint
     mat_visits = 0
+    extra_gw = 0
+    extra_fw = 0
+    extra_vw = 0
+    extra_ex = 0
+    fill_skipped = false
     try
         for (r, (u, orig_val)) in enumerate(batch_pairs)
-            _expired(deadline_ns) && return (nothing, :deadline, mat_visits)
+            _expired(deadline_ns) && return (nothing, :deadline, mat_visits, contractions_orig, extra_gw, extra_fw, extra_vw, extra_ex, fill_skipped)
             c_before = deepcopy(st.constant)
             step_r = RoofDualityStep(
                 u, orig_val,
@@ -2400,10 +3340,67 @@ function _build_roof_certificate(
                 c_before, base_preds + r - 1,
                 :exact, scope_len, :strong,
             )
-            raw_steps[r] = step_r
+            push!(raw_steps, step_r)
             rep = _fix!(ws, u, orig_val; proof=step_r, max_work=max_work - mat_visits, deadline_ns=deadline_ns)
             mat_visits += rep.edge_visits
-            rep.stop_reason === :applied || return (nothing, rep.stop_reason, mat_visits)
+            rep.stop_reason === :applied || return (nothing, rep.stop_reason, mat_visits, contractions_orig, extra_gw, extra_fw, extra_vw, extra_ex, fill_skipped)
+        end
+        if contract_scc
+            scc_net = net
+            scc_L = L_roof
+            scc_tf = total_flow
+            scc_fe = flow_edges
+            scc_RS = R_S
+            scc_RT = R_T
+            if !isempty(batch_pairs) || scc_net === nothing
+                ok_n, r_n, net2, C_base2, gw2, ex2 = _build_implication_network(
+                    ws; max_work=max_work - mat_visits, max_exact_work=max_exact_work - extra_ex, deadline_ns=deadline_ns,
+                )
+                extra_gw += gw2
+                extra_ex += ex2
+                ok_n || return (nothing, r_n, mat_visits, contractions_orig, extra_gw, extra_fw, extra_vw, extra_ex, fill_skipped)
+                ok_f2, r_f2, tf2, fw2, fex2 = _dinic_max_flow!(
+                    net2;
+                    max_work=max_work - mat_visits - extra_gw,
+                    max_exact_work=max_exact_work - extra_ex,
+                    deadline_ns=deadline_ns,
+                )
+                extra_fw += fw2
+                extra_ex += fex2
+                ok_f2 || return (nothing, r_f2, mat_visits, contractions_orig, extra_gw, extra_fw, extra_vw, extra_ex, fill_skipped)
+                RS2, RT2, vw2 = _residual_reachability(net2)
+                _expired(deadline_ns) && return (nothing, :deadline, mat_visits, contractions_orig, extra_gw, extra_fw, extra_vw + vw2, extra_ex, fill_skipped)
+                mat_visits + extra_gw + extra_fw + vw2 <= max_work ||
+                    return (nothing, :work_limit, mat_visits, contractions_orig, extra_gw, extra_fw, max_work - mat_visits - extra_gw - extra_fw, extra_ex, fill_skipped)
+                extra_vw += vw2
+                scc_net = net2
+                scc_L = C_base2 + tf2
+                scc_tf = tf2
+                scc_fe = _extract_flow_edges(net2)
+                scc_RS = RS2
+                scc_RT = RT2
+            end
+            rem_w_scc = max_work - mat_visits - extra_gw - extra_fw - extra_vw
+            rem_ex_scc = max_exact_work - extra_ex
+            ok_sp, r_sp, specs, vw_sp, ex_sp = _extract_roof_scc_specs(
+                ws, cand_indices, scc_net, scc_L, scc_RS, scc_RT;
+                witness=witness, map=map, max_work=rem_w_scc, max_exact_work=rem_ex_scc, deadline_ns=deadline_ns,
+            )
+            extra_vw += vw_sp
+            extra_ex += ex_sp
+            ok_sp || return (nothing, r_sp, mat_visits, contractions_orig, extra_gw, extra_fw, extra_vw, extra_ex, fill_skipped)
+            if !isempty(specs)
+                rem_w_commit = max_work - mat_visits - extra_gw - extra_fw - extra_vw
+                ok_cm, r_cm, scc_steps, c_orig, cm_visits, f_skip = _commit_roof_scc_specs!(
+                    ws, specs, scc_L, scc_tf, scc_fe;
+                    max_fill=max_fill, max_work=rem_w_commit, deadline_ns=deadline_ns,
+                )
+                mat_visits += cm_visits
+                fill_skipped = f_skip
+                ok_cm || return (nothing, r_cm, mat_visits, contractions_orig, extra_gw, extra_fw, extra_vw, extra_ex, fill_skipped)
+                append!(raw_steps, scc_steps)
+                contractions_orig = c_orig
+            end
         end
     finally
         if length(st.trail) > cp._depth
@@ -2411,6 +3408,9 @@ function _build_roof_certificate(
         end
         st.star_hint = saved_star_hint
         st.rel_hint = saved_rel_hint
+    end
+    if isempty(raw_steps)
+        return (nothing, fill_skipped ? :fill_limit : :no_persistency, mat_visits, contractions_orig, extra_gw, extra_fw, extra_vw, extra_ex, fill_skipped)
     end
     source = deepcopy(ws._snapshot)
     _validate_label_copy(ws._snapshot.labels, source.labels)
@@ -2420,56 +3420,70 @@ function _build_roof_certificate(
     raw_all = Tuple(raw_vec)
     steps = owned_map === nothing ? raw_all :
         _transport_steps(ws, _caller_scope(ws), raw_all, nothing, owned_map)
-    _expired(deadline_ns) && return (nothing, :deadline, mat_visits)
+    _expired(deadline_ns) && return (nothing, :deadline, mat_visits, contractions_orig, extra_gw, extra_fw, extra_vw, extra_ex, fill_skipped)
     cert = DominanceCertificate(generation(ws), checkpoint(ws), _caller_scope(ws), steps, source, owned_map)
-    return (cert, :proved, mat_visits)
+    return (cert, :proved, mat_visits, contractions_orig, extra_gw, extra_fw, extra_vw, extra_ex, fill_skipped)
 end
 
 """
     prove_roof_duality(ws; candidates=nothing, map=nothing,
+                       contract_scc=false, witness=nothing, max_fill=typemax(Int),
                        max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing)
     prove_roof_duality(ws, label; map=nothing, value=nothing,
                        max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing)
 
 Compute the exact rational implication-network (posiform / roof-duality) lower
 bound and extract strongly persistent variable assignments without mutating `ws`.
+When `contract_scc=true`, also extracts strongly persistent signed pair
+contractions from nontrivial residual SCCs (`:roof_scc_pair`).
 Returns a [`RoofDualityAttempt`](@ref) containing the exact normalized
 `lower_bound`, scaled model `objective_bound`, maximum `S`-`T` flow `max_flow`,
-strongly persistent `fixings`, phase-separated work counters, and (when at least
-one candidate is strongly fixed) a locally verifiable [`DominanceCertificate`](@ref)
-carrying [`RoofDualityStep`](@ref) witnesses.
+strongly persistent `fixings`, `contracted_count`, `contractions`, phase-separated
+work counters, and (when at least one reduction is proved) a locally verifiable
+[`DominanceCertificate`](@ref).
 """
 function prove_roof_duality(
     ws::Workspace;
     candidates=nothing,
     map::Union{Nothing,DomainGaugeMap}=nothing,
+    contract_scc::Bool=false,
+    witness=nothing,
+    max_fill=typemax(Int),
     max_work=typemax(Int),
     max_exact_work=typemax(Int),
     deadline_ns=nothing,
 )
     _limits(max_work, deadline_ns)
     _limits(max_exact_work, deadline_ns)
+    max_fill isa Integer && !(max_fill isa Bool) && 0 <= max_fill <= typemax(Int) ||
+        throw(ArgumentError("max_fill must be a nonnegative machine-sized integer"))
     map === nothing || _validate_domain_map(ws, map; full=true)
     s = ws._snapshot
     V = s.label_type
     S = s.state_type
     cand_indices = _resolve_roof_candidates(ws, candidates)
     batch_pairs, flow_edges, L_roof, obj_bound, total_flow,
-        stop, method, graph_work, flow_work, ver_work, total_visits, exact_work = _roof_duality_pass(
+        stop, method, graph_work, flow_work, ver_work, total_visits, exact_work, net, R_S, R_T = _roof_duality_pass(
         ws, cand_indices;
-        max_work=max_work, max_exact_work=max_exact_work, deadline_ns=deadline_ns,
+        max_work=Int(max_work), max_exact_work=Int(max_exact_work), deadline_ns=deadline_ns,
     )
-    if isempty(batch_pairs)
+    if isempty(batch_pairs) && (!contract_scc || net === nothing)
         return RoofDualityAttempt{V,S}(
             nothing, stop, method, L_roof, obj_bound, total_flow,
             Pair{V,S}[], graph_work, flow_work, ver_work, total_visits, exact_work,
         )
     end
-    cert, cert_reason, mat_visits = _build_roof_certificate(
+    cert, cert_reason, mat_visits, contractions_orig, extra_gw, extra_fw, extra_vw, extra_ex, _ = _build_roof_certificate(
         ws, batch_pairs, flow_edges, L_roof, total_flow,
-        map, max_work - total_visits, deadline_ns,
+        map, Int(max_work) - total_visits, deadline_ns;
+        contract_scc=contract_scc, cand_indices=cand_indices, net=net, R_S=R_S, R_T=R_T,
+        witness=witness, max_fill=Int(max_fill), max_exact_work=Int(max_exact_work) - exact_work,
     )
-    total_visits += mat_visits
+    graph_work += extra_gw
+    flow_work += extra_fw
+    ver_work += extra_vw
+    exact_work += extra_ex
+    total_visits += mat_visits + extra_gw + extra_fw + extra_vw
     if cert === nothing
         return RoofDualityAttempt{V,S}(
             nothing, cert_reason, method, L_roof, obj_bound, total_flow,
@@ -2480,9 +3494,18 @@ function prove_roof_duality(
         deepcopy(s.labels[u]) => S(map === nothing ? orig_val : _map_index_value(map, u, orig_val))
         for (u, orig_val) in batch_pairs
     ]
+    contractions = Tuple{V,V,Int}[
+        (
+            deepcopy(s.labels[u]),
+            deepcopy(s.labels[rep]),
+            map === nothing ? orig_σ : (map.gauge[u] * map.gauge[rep] * orig_σ),
+        )
+        for (u, rep, orig_σ) in contractions_orig
+    ]
     return RoofDualityAttempt{V,S}(
         cert, :proved, method, L_roof, obj_bound, total_flow,
         fixings, graph_work, flow_work, ver_work, total_visits, exact_work,
+        length(contractions), contractions,
     )
 end
 
@@ -2516,9 +3539,9 @@ function prove_roof_duality(
         )
     end
     batch_pairs, flow_edges, L_roof, obj_bound, total_flow,
-        stop, method, graph_work, flow_work, ver_work, total_visits, exact_work = _roof_duality_pass(
+        stop, method, graph_work, flow_work, ver_work, total_visits, exact_work, _, _, _ = _roof_duality_pass(
         ws, [i];
-        value_filter=req_orig, max_work=max_work, max_exact_work=max_exact_work, deadline_ns=deadline_ns,
+        value_filter=req_orig, max_work=Int(max_work), max_exact_work=Int(max_exact_work), deadline_ns=deadline_ns,
     )
     if isempty(batch_pairs)
         return RoofDualityAttempt{V,S}(
@@ -2526,9 +3549,9 @@ function prove_roof_duality(
             Pair{V,S}[], graph_work, flow_work, ver_work, total_visits, exact_work,
         )
     end
-    cert, cert_reason, mat_visits = _build_roof_certificate(
+    cert, cert_reason, mat_visits, _, _, _, _, _, _ = _build_roof_certificate(
         ws, batch_pairs, flow_edges, L_roof, total_flow,
-        map, max_work - total_visits, deadline_ns,
+        map, Int(max_work) - total_visits, deadline_ns,
     )
     total_visits += mat_visits
     if cert === nothing
@@ -3249,10 +4272,65 @@ function _verify_dominance_step(
     return (true, :verified, cost)
 end
 
+function _verify_poly_witness_state(
+    p::_PolyState,
+    w::Tuple{Vararg{Int}},
+    assumptions_prefix,
+    prefix_steps,
+    deadline,
+)
+    is_bool = p.domain === QT.BoolDomain
+    low_orig = is_bool ? 0 : -1
+    length(w) == p.n && all(v -> v in (low_orig, 1), w) ||
+        return (false, :invalid_witness, _Exact(0))
+    for (idx, val) in assumptions_prefix
+        w[idx] == val || return (false, :invalid_witness, _Exact(0))
+    end
+    for pstep in prefix_steps
+        if pstep isa Union{DominanceStep,ProbingStep,RoofDualityStep,SubmodularCutStep}
+            w[pstep.variable] == pstep.value || return (false, :invalid_witness, _Exact(0))
+        elseif pstep isa MaxCutStep
+            if pstep.representative == 0
+                w[pstep.eliminated] == pstep.value || return (false, :invalid_witness, _Exact(0))
+            else
+                s_elim = is_bool ? (2 * w[pstep.eliminated] - 1) : w[pstep.eliminated]
+                s_rep = is_bool ? (2 * w[pstep.representative] - 1) : w[pstep.representative]
+                s_elim == pstep.orig_sign * s_rep || return (false, :invalid_witness, _Exact(0))
+            end
+        elseif pstep isa RelationStep
+            s_elim = is_bool ? (2 * w[pstep.eliminated] - 1) : w[pstep.eliminated]
+            s_rep = is_bool ? (2 * w[pstep.representative] - 1) : w[pstep.representative]
+            s_elim == pstep.orig_sign * s_rep || return (false, :invalid_witness, _Exact(0))
+        elseif pstep isa EliminationStep
+            idx = 1
+            for (bit_pos, nbr) in enumerate(pstep.neighbors)
+                w[nbr] == 1 && (idx += 1 << (bit_pos - 1))
+            end
+            w[pstep.variable] == pstep.table[idx] || return (false, :invalid_witness, _Exact(0))
+        end
+    end
+    w_energy = p.constant
+    for v_idx in 1:p.n
+        _expired(deadline) && return (false, :deadline, _Exact(0))
+        p.active[v_idx] || continue
+        w_energy += p.fields[v_idx] * w[v_idx]
+        for (nbr, q) in p.adj[v_idx]
+            (p.active[nbr] && v_idx < nbr) || continue
+            w_energy += q * w[v_idx] * w[nbr]
+        end
+    end
+    return (true, :verified, _direction_poly(p) * w_energy)
+end
+
 function _verify_relation_step(
     p::_PolyState,
     step::RelationStep,
     active_map::Union{Nothing,DomainGaugeMap},
+    assumptions_prefix,
+    prefix_steps,
+    all_steps,
+    step_idx::Int,
+    later_assumptions,
     cost::Int,
     deadline,
 )
@@ -3263,7 +4341,8 @@ function _verify_relation_step(
     expected_sign = active_map === nothing ? step.orig_sign :
         (active_map.gauge[u] * active_map.gauge[v] * step.orig_sign)
     step.sign == expected_sign || return (false, :invalid_value, 0)
-    step.method in (:interval, :exact, :glk_pair, :coflip_pair) && step.persistency in (:strong, :weak) ||
+    step.method in (:interval, :exact, :glk_pair, :coflip_pair, :probing_pair, :roof_scc_pair) &&
+        step.persistency in (:strong, :weak) ||
         return (false, :invalid_method, 0)
     direction = _direction_poly(p)
     direction != 0 || return (false, :zero_scale, 0)
@@ -3271,6 +4350,168 @@ function _verify_relation_step(
     _expired(deadline) && return (false, :deadline, cost)
     c_expected == step.constant || return (false, :invalid_constant, cost)
     is_bool = p.domain === QT.BoolDomain
+    low_orig = is_bool ? 0 : -1
+    if step.method === :probing_pair
+        step.persistency === :strong || return (false, :invalid_method, 0)
+        isempty(later_assumptions) || return (false, :invalid_scope, cost)
+        wit = step.witness
+        wit isa _ProbingPairWitness || return (false, :invalid_witness, cost)
+        (!isempty(wit.branch_steps_1) && !isempty(wit.branch_steps_2)) ||
+            return (false, :invalid_witness, cost)
+        xv_1 = step.orig_sign == 1 ? 1 : low_orig
+        xv_2 = step.orig_sign == 1 ? low_orig : 1
+        ok_pat_1 = (wit.assume_var_1 == u && wit.assume_val_1 == low_orig &&
+                    wit.branch_steps_1[end].variable == v && wit.branch_steps_1[end].value == xv_2) ||
+                   (wit.assume_var_1 == v && wit.assume_val_1 == xv_1 &&
+                    wit.branch_steps_1[end].variable == u && wit.branch_steps_1[end].value == 1)
+        ok_pat_2 = (wit.assume_var_2 == u && wit.assume_val_2 == 1 &&
+                    wit.branch_steps_2[end].variable == v && wit.branch_steps_2[end].value == xv_1) ||
+                   (wit.assume_var_2 == v && wit.assume_val_2 == xv_2 &&
+                    wit.branch_steps_2[end].variable == u && wit.branch_steps_2[end].value == low_orig)
+        (ok_pat_1 && ok_pat_2) || return (false, :invalid_witness, cost)
+        p_trial_1 = deepcopy(p)
+        _poly_fix!(p_trial_1, wit.assume_var_1, wit.assume_val_1)
+        for (b_idx, bstep) in enumerate(wit.branch_steps_1)
+            bstep isa DominanceStep && bstep.predecessors == b_idx - 1 &&
+                bstep.method in (:interval, :exact) && bstep.persistency === :strong ||
+                return (false, :invalid_step, cost)
+            b_ok, b_reason, _ = _verify_dominance_step(p_trial_1, bstep, active_map, (), 0, deadline)
+            b_ok || return (false, b_reason, cost)
+        end
+        p_trial_2 = deepcopy(p)
+        _poly_fix!(p_trial_2, wit.assume_var_2, wit.assume_val_2)
+        for (b_idx, bstep) in enumerate(wit.branch_steps_2)
+            bstep isa DominanceStep && bstep.predecessors == b_idx - 1 &&
+                bstep.method in (:interval, :exact) && bstep.persistency === :strong ||
+                return (false, :invalid_step, cost)
+            b_ok, b_reason, _ = _verify_dominance_step(p_trial_2, bstep, active_map, (), 0, deadline)
+            b_ok || return (false, b_reason, cost)
+        end
+        M_1 = _branch_steps_spin_margin(p.domain, wit.branch_steps_1, active_map)
+        M_2 = _branch_steps_spin_margin(p.domain, wit.branch_steps_2, active_map)
+        lo_p, hi_p = minmax(M_1, M_2)
+        (step.lower == lo_p && step.upper == hi_p && step.lower > 0) ||
+            return (false, :invalid_bound, cost)
+        cd, fd, qd = _poly_relation_deltas(p, u, v, step.orig_sign)
+        _poly_apply_deltas!(p, u, cd, fd, qd)
+        return (true, :verified, cost)
+    elseif step.method === :roof_scc_pair
+        step.persistency === :strong || return (false, :invalid_method, 0)
+        isempty(later_assumptions) || return (false, :invalid_scope, cost)
+        wit = step.witness
+        wit isa _RoofSCCPairWitness || return (false, :invalid_witness, cost)
+        m = length(wit.batch_contractions)
+        (1 <= wit.batch_index <= m && wit.batch_contractions[wit.batch_index] == (u, v, step.orig_sign)) ||
+            return (false, :invalid_step, cost)
+        if wit.batch_index == 1
+            step_idx + m - 1 <= length(all_steps) || return (false, :invalid_step, cost)
+            elim_set = Set{Int}()
+            for r in 1:m
+                s_r = all_steps[step_idx + r - 1]
+                (s_r isa RelationStep &&
+                 s_r.method === :roof_scc_pair &&
+                 s_r.persistency === :strong &&
+                 s_r.scope_length == step.scope_length &&
+                 s_r.witness isa _RoofSCCPairWitness) ||
+                    return (false, :invalid_step, cost)
+                w_r = s_r.witness::_RoofSCCPairWitness
+                (w_r.batch_index == r &&
+                 w_r.batch_contractions == wit.batch_contractions &&
+                 w_r.roof_lower == wit.roof_lower &&
+                 w_r.max_flow == wit.max_flow &&
+                 w_r.flow_edges == wit.flow_edges &&
+                 wit.batch_contractions[r] == (s_r.eliminated, s_r.representative, s_r.orig_sign)) ||
+                    return (false, :invalid_step, cost)
+                u_r, v_r, orig_σ_r = wit.batch_contractions[r]
+                (1 <= u_r <= p.n && 1 <= v_r <= p.n && u_r != v_r &&
+                 p.active[u_r] && p.active[v_r] && orig_σ_r in (-1, 1) && !(u_r in elim_set)) ||
+                    return (false, :invalid_step, cost)
+                push!(elim_set, u_r)
+            end
+            for (_, v_r, _) in wit.batch_contractions
+                !(v_r in elim_set) || return (false, :invalid_step, cost)
+            end
+            built = _build_poly_implication_network(p, deadline)
+            built === nothing && return (false, :deadline, cost)
+            net, C_base, _ = built
+            ok_flow, flow_reason, _, R_S, R_T = _verify_flow_and_reachability!(
+                net, wit.flow_edges, wit.max_flow, deadline,
+            )
+            ok_flow || return (false, flow_reason, cost)
+            wit.roof_lower == C_base + wit.max_flow || return (false, :invalid_bound, cost)
+            in_half = _half_integral_literals(net, R_S, R_T, idx -> p.active[idx])
+            ok_scc0, scc_reason0, scc_id_0, sccs_0, _ = _tarjan_residual_sccs(
+                net, in_half, _Exact(0); deadline_ns=deadline,
+            )
+            ok_scc0 || return (false, scc_reason0, cost)
+            scc_delta_cache = Dict{_Exact,Tuple{Vector{Int},Vector{Vector{Int}}}}()
+            for r in 1:m
+                s_r = all_steps[step_idx + r - 1]::RelationStep
+                w_r = s_r.witness::_RoofSCCPairWitness
+                u_r, v_r, orig_σ_r = wit.batch_contractions[r]
+                a_r = 2 * u_r - 1
+                b_r = orig_σ_r == 1 ? (2 * v_r - 1) : (2 * v_r)
+                (in_half[a_r] && in_half[b_r]) || return (false, :invalid_bound, cost)
+                if isempty(w_r.witness_state)
+                    w_r.witness_upper == wit.roof_lower || return (false, :invalid_witness, cost)
+                    cid_0 = scc_id_0[a_r]
+                    (cid_0 > 0 && scc_id_0[b_r] == cid_0) || return (false, :invalid_bound, cost)
+                    K_0 = sccs_0[cid_0]
+                    (w_r.scc_literals == Tuple(K_0) && _is_closed_residual_scc(net, in_half, scc_id_0, K_0)) ||
+                        return (false, :invalid_bound, cost)
+                    B_cycle = _scc_cycle_bottleneck(net, scc_id_0, cid_0, K_0, a_r, b_r, _Exact(0))
+                    (B_cycle > 0 && s_r.lower == B_cycle && s_r.upper == B_cycle) ||
+                        return (false, :invalid_bound, cost)
+                else
+                    ok_w, w_reason, U_exact = _verify_poly_witness_state(
+                        p, w_r.witness_state, assumptions_prefix, prefix_steps, deadline,
+                    )
+                    ok_w || return (false, w_reason, cost)
+                    w_r.witness_upper == U_exact || return (false, :invalid_witness, cost)
+                    s_u_w = is_bool ? (2 * w_r.witness_state[u_r] - 1) : w_r.witness_state[u_r]
+                    s_v_w = is_bool ? (2 * w_r.witness_state[v_r] - 1) : w_r.witness_state[v_r]
+                    s_u_w == orig_σ_r * s_v_w || return (false, :invalid_witness, cost)
+                    Δ = U_exact - wit.roof_lower
+                    Δ >= 0 || return (false, :invalid_bound, cost)
+                    scc_id_d, sccs_d = if haskey(scc_delta_cache, Δ)
+                        scc_delta_cache[Δ]
+                    else
+                        ok_sccd, scc_reasond, id_d, list_d, _ = _tarjan_residual_sccs(
+                            net, in_half, Δ; deadline_ns=deadline,
+                        )
+                        ok_sccd || return (false, scc_reasond, cost)
+                        scc_delta_cache[Δ] = (id_d, list_d)
+                        (id_d, list_d)
+                    end
+                    cid_d = scc_id_d[a_r]
+                    (cid_d > 0 && scc_id_d[b_r] == cid_d) || return (false, :invalid_bound, cost)
+                    K_d = sccs_d[cid_d]
+                    w_r.scc_literals == Tuple(K_d) || return (false, :invalid_bound, cost)
+                    B_cycle = _scc_cycle_bottleneck(net, scc_id_d, cid_d, K_d, a_r, b_r, Δ)
+                    margin = B_cycle - Δ
+                    (margin > 0 && s_r.lower == margin && s_r.upper == margin) ||
+                        return (false, :invalid_bound, cost)
+                end
+            end
+        else
+            !isempty(prefix_steps) || return (false, :invalid_step, cost)
+            prev = prefix_steps[end]
+            (prev isa RelationStep &&
+             prev.method === :roof_scc_pair &&
+             prev.witness isa _RoofSCCPairWitness &&
+             prev.witness.batch_index == wit.batch_index - 1 &&
+             prev.witness.batch_contractions == wit.batch_contractions &&
+             prev.witness.roof_lower == wit.roof_lower &&
+             prev.witness.max_flow == wit.max_flow &&
+             prev.witness.flow_edges == wit.flow_edges &&
+             prev.scope_length == step.scope_length) ||
+                return (false, :invalid_step, cost)
+        end
+        cd, fd, qd = _poly_relation_deltas(p, u, v, step.orig_sign)
+        _poly_apply_deltas!(p, u, cd, fd, qd)
+        return (true, :verified, cost)
+    end
+    step.witness === nothing || return (false, :invalid_witness, 0)
     g_u = active_map === nothing ? 1 : active_map.gauge[u]
     h_u = direction * g_u * p.h_spin[u]
     rad_u_other = _Exact(0)
@@ -3489,9 +4730,7 @@ function _verify_probing_step(
     1 <= u <= p.n && p.active[u] || return (false, :invalid_step, 0)
     is_bool = p.domain === QT.BoolDomain
     low_orig = is_bool ? 0 : -1
-    step.value in (low_orig, 1) && step.probed_value in (low_orig, 1) && step.value != step.probed_value ||
-        return (false, :invalid_value, 0)
-    step.method in (:interval, :exact) && step.persistency === :strong ||
+    step.method in (:interval, :exact, :double_probe) && step.persistency === :strong ||
         return (false, :invalid_method, 0)
     isempty(later_assumptions) || return (false, :invalid_scope, cost)
     direction = _direction_poly(p)
@@ -3499,47 +4738,49 @@ function _verify_probing_step(
     c_expected = _poly_mapped_constant(p, active_map)
     _expired(deadline) && return (false, :deadline, cost)
     c_expected == step.constant || return (false, :invalid_constant, cost)
+    if step.method === :double_probe
+        pv = step.probed_variable
+        (1 <= pv <= p.n && pv != u && p.active[pv]) || return (false, :invalid_step, 0)
+        (step.value in (low_orig, 1) && step.probed_value == low_orig) ||
+            return (false, :invalid_value, 0)
+        isempty(step.witness_state) || return (false, :invalid_witness, cost)
+        (!isempty(step.branch_steps) && !isempty(step.alt_branch_steps)) ||
+            return (false, :invalid_step, cost)
+        (step.branch_steps[end].variable == u && step.branch_steps[end].value == step.value &&
+         step.alt_branch_steps[end].variable == u && step.alt_branch_steps[end].value == step.value) ||
+            return (false, :invalid_step, cost)
+        p_low = deepcopy(p)
+        _poly_fix!(p_low, pv, low_orig)
+        for (b_idx, bstep) in enumerate(step.branch_steps)
+            bstep isa DominanceStep && bstep.predecessors == b_idx - 1 &&
+                bstep.method in (:interval, :exact) && bstep.persistency === :strong ||
+                return (false, :invalid_step, cost)
+            b_ok, b_reason, _ = _verify_dominance_step(p_low, bstep, active_map, (), 0, deadline)
+            b_ok || return (false, b_reason, cost)
+        end
+        p_high = deepcopy(p)
+        _poly_fix!(p_high, pv, 1)
+        for (b_idx, bstep) in enumerate(step.alt_branch_steps)
+            bstep isa DominanceStep && bstep.predecessors == b_idx - 1 &&
+                bstep.method in (:interval, :exact) && bstep.persistency === :strong ||
+                return (false, :invalid_step, cost)
+            b_ok, b_reason, _ = _verify_dominance_step(p_high, bstep, active_map, (), 0, deadline)
+            b_ok || return (false, b_reason, cost)
+        end
+        M_low = _branch_steps_spin_margin(p.domain, step.branch_steps, active_map)
+        M_high = _branch_steps_spin_margin(p.domain, step.alt_branch_steps, active_map)
+        (step.branch_lower == M_low && step.witness_upper == M_high && M_low > 0 && M_high > 0) ||
+            return (false, :invalid_bound, cost)
+        _poly_fix!(p, u, step.value)
+        return (true, :verified, cost)
+    end
+    (step.probed_variable == u && isempty(step.alt_branch_steps)) || return (false, :invalid_step, 0)
+    step.value in (low_orig, 1) && step.probed_value in (low_orig, 1) && step.value != step.probed_value ||
+        return (false, :invalid_value, 0)
     w = step.witness_state
-    length(w) == p.n && all(v -> v in (low_orig, 1), w) ||
-        return (false, :invalid_witness, cost)
+    ok_w, w_reason, U_exact = _verify_poly_witness_state(p, w, assumptions_prefix, prefix_steps, deadline)
+    ok_w || return (false, w_reason, cost)
     w[u] == step.value || return (false, :invalid_witness, cost)
-    for (idx, val) in assumptions_prefix
-        w[idx] == val || return (false, :invalid_witness, cost)
-    end
-    for pstep in prefix_steps
-        if pstep isa Union{DominanceStep,ProbingStep,RoofDualityStep,SubmodularCutStep}
-            w[pstep.variable] == pstep.value || return (false, :invalid_witness, cost)
-        elseif pstep isa MaxCutStep
-            if pstep.representative == 0
-                w[pstep.eliminated] == pstep.value || return (false, :invalid_witness, cost)
-            else
-                s_elim = is_bool ? (2 * w[pstep.eliminated] - 1) : w[pstep.eliminated]
-                s_rep = is_bool ? (2 * w[pstep.representative] - 1) : w[pstep.representative]
-                s_elim == pstep.orig_sign * s_rep || return (false, :invalid_witness, cost)
-            end
-        elseif pstep isa RelationStep
-            s_elim = is_bool ? (2 * w[pstep.eliminated] - 1) : w[pstep.eliminated]
-            s_rep = is_bool ? (2 * w[pstep.representative] - 1) : w[pstep.representative]
-            s_elim == pstep.orig_sign * s_rep || return (false, :invalid_witness, cost)
-        elseif pstep isa EliminationStep
-            idx = 1
-            for (bit_pos, nbr) in enumerate(pstep.neighbors)
-                w[nbr] == 1 && (idx += 1 << (bit_pos - 1))
-            end
-            w[pstep.variable] == pstep.table[idx] || return (false, :invalid_witness, cost)
-        end
-    end
-    w_energy = p.constant
-    for v_idx in 1:p.n
-        _expired(deadline) && return (false, :deadline, cost)
-        p.active[v_idx] || continue
-        w_energy += p.fields[v_idx] * w[v_idx]
-        for (nbr, q) in p.adj[v_idx]
-            (p.active[nbr] && v_idx < nbr) || continue
-            w_energy += q * w[v_idx] * w[nbr]
-        end
-    end
-    U_exact = direction * w_energy
     step.witness_upper == U_exact || return (false, :invalid_witness, cost)
     p_trial = deepcopy(p)
     _poly_fix!(p_trial, u, step.probed_value)
@@ -3922,14 +5163,26 @@ function verify_certificate(ws::Workspace, cert::DominanceCertificate;
             _poly_fix!(p, i, v)
         end
         introduced = count
-        step_cost = step isa ProbingStep ? base_step_cost * (1 + length(step.branch_steps)) : base_step_cost
+        step_cost = if step isa ProbingStep
+            base_step_cost * (1 + length(step.branch_steps) + length(step.alt_branch_steps))
+        elseif step isa RelationStep && step.witness isa _ProbingPairWitness
+            w_p = step.witness::_ProbingPairWitness
+            base_step_cost * (1 + length(w_p.branch_steps_1) + length(w_p.branch_steps_2))
+        else
+            base_step_cost
+        end
         step_cost <= max_work - cost || return VerificationResult(false,:work_limit,cost)
         _expired(deadline_ns) && return VerificationResult(false,:deadline,cost)
         valid, reason, visits = if step isa DominanceStep
             later = cert.assumptions[(count + 1):end]
             _verify_dominance_step(p, step, active_map, later, step_cost, deadline_ns)
         elseif step isa RelationStep
-            _verify_relation_step(p, step, active_map, step_cost, deadline_ns)
+            later = cert.assumptions[(count + 1):end]
+            _verify_relation_step(
+                p, step, active_map,
+                cert.assumptions[1:count], cert.steps[1:(k - 1)], cert.steps, k, later,
+                step_cost, deadline_ns,
+            )
         elseif step isa ProbingStep
             later = cert.assumptions[(count + 1):end]
             _verify_probing_step(

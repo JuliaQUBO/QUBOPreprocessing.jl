@@ -361,4 +361,121 @@
         @test r_df_roof.fixed_count == 0
         @test r_df_roof.graph_work > 0
     end
+
+    @testset "residual-SCC 2-SAT pair equivalences (:roof_scc_pair, #60)" begin
+        # 1. Witness-free closed residual SCC on zero-field ferromagnetic K_{3,3}:
+        # Bipartition {1, 2, 3} x {4, 5, 6}, all 9 edges J_{uv} = -2.0, zero fields.
+        # Every edge (u, v) has |J_{uv}| = 2 < R_u^{other} = 4, h_u = 0, and 0 shared neighbors
+        # (so single-endpoint, :glk_pair, :coflip_pair, and unary roof duality all do 0 work).
+        L_k33 = Dict(i => 0.0 for i in 1:6)
+        Q_k33 = Dict((u, v) => -2.0 for u in 1:3 for v in 4:6)
+        m_k33 = QT.Model{Int,Float64,Int}(L_k33, Q_k33; domain=:spin, sense=:min)
+        @test propagate!(Workspace(m_k33; rules=:dominance)).deductions == 0
+        ws_k33 = Workspace(m_k33; rules=:relations)
+        @test contract_relations!(ws_k33).deductions == 0
+        @test prove_roof_duality(ws_k33).stop_reason === :no_persistency
+
+        att_scc = prove_roof_duality(ws_k33; contract_scc=true)
+        @test att_scc.stop_reason === :proved
+        @test isempty(att_scc.fixings)
+        @test att_scc.contracted_count == 5
+        @test length(att_scc.contractions) == 5
+        @test all(s -> s isa RelationStep && s.method === :roof_scc_pair && persistency(s) === :strong, att_scc.certificate.steps)
+        @test verify_certificate(ws_k33, att_scc.certificate).valid
+
+        rep_scc = apply_roof_duality!(ws_k33; contract_scc=true)
+        @test rep_scc.stop_reason === :applied
+        @test rep_scc.fixed_count == 0
+        @test rep_scc.contracted_count == 5
+        @test length(unique(first.(relation_map(ws_k33)))) == 1
+        cert_k33 = export_certificate(ws_k33)
+        @test verify_certificate(ws_k33, cert_k33).valid
+
+        # Gauge and domain invariance on K_{3,3}:
+        ws_k33_g = Workspace(m_k33; rules=:relations)
+        dmap_k33 = domain_map(ws_k33_g; domain=:bool, gauge=[-1, 1, -1, 1, -1, 1])
+        att_scc_g = prove_roof_duality(ws_k33_g; contract_scc=true, map=dmap_k33)
+        @test att_scc_g.stop_reason === :proved
+        @test att_scc_g.contracted_count == 5
+        @test verify_certificate(ws_k33_g, att_scc_g.certificate; map=dmap_k33).valid
+        att_scc_g0 = prove_roof_duality(ws_k33_g; contract_scc=true)
+        tcert_k33 = transport_certificate(ws_k33_g, att_scc_g0.certificate, dmap_k33)
+        @test verify_certificate(ws_k33_g, tcert_k33; map=dmap_k33).valid
+
+        # 2. Frustrated K_3 anti-regression test:
+        # E(s) = s1*s2 + s2*s3 + s1*s3 has all 6 literals in one 0-threshold SCC (K ∩ K̄ ≠ ∅)
+        # and witness gap Δ = U - L_roof = -1 - (-3) = 2 == B_cycle, so margin = 0 (not strict!).
+        m_frust_k3 = QT.Model{Int,Float64,Int}(
+            Dict(1 => 0.0, 2 => 0.0, 3 => 0.0),
+            Dict((1, 2) => 1.0, (2, 3) => 1.0, (1, 3) => 1.0);
+            domain=:spin, sense=:min,
+        )
+        ws_fk3 = Workspace(m_frust_k3; rules=:relations)
+        @test prove_roof_duality(ws_fk3; contract_scc=true).stop_reason === :no_persistency
+        @test apply_roof_duality!(ws_fk3; contract_scc=true).stop_reason === :no_persistency
+        @test prove_relation(ws_fk3, 1, 2; enable_roof_scc=true).stop_reason === :not_strict
+
+        # 3. Open residual SCC with witness-bounded cycle bottleneck (B_cycle > Δ > 0):
+        # Ferromagnetic K_{3,3} on {1..6} with J = -5.0 (internal cycle bottleneck B_cycle = 10)
+        # coupled via weak bridge J_{6,7} = -1.0 to frustrated triangle (7, 8, 9) with J = +1.0.
+        # At Δ = 0, literals of {1..6} have an outgoing residual arc to {7, 8, 9} (so not closed),
+        # but the frustrated triangle only introduces roof gap Δ = 2 < B_cycle = 10, yielding
+        # exact margin B_cycle - Δ = 8 > 0 for all 5 contractions in {1..6}!
+        L_open = Dict(i => 0.0 for i in 1:9)
+        Q_open = Dict{Tuple{Int,Int},Float64}()
+        for u in 1:3, v in 4:6
+            Q_open[(u, v)] = -5.0
+        end
+        Q_open[(6, 7)] = -1.0
+        Q_open[(7, 8)] = 1.0
+        Q_open[(8, 9)] = 1.0
+        Q_open[(7, 9)] = 1.0
+        m_open = QT.Model{Int,Float64,Int}(L_open, Q_open; domain=:spin, sense=:min)
+        ws_open = Workspace(m_open; rules=:relations)
+        w_open = [1, 1, 1, 1, 1, 1, 1, 1, -1]
+        att_open_12 = prove_relation(ws_open, 2, 1; enable_roof_scc=true, witness=w_open)
+        @test att_open_12.stop_reason === :proved
+        @test att_open_12.method === :roof_scc_pair
+        s_open_12 = only(att_open_12.certificate.steps)::RelationStep
+        @test s_open_12.lower == 8 // 1 && s_open_12.upper == 8 // 1
+        @test !isempty(s_open_12.witness.witness_state)
+        @test verify_certificate(ws_open, att_open_12.certificate).valid
+
+        att_open_batch = prove_roof_duality(ws_open; contract_scc=true, witness=w_open)
+        @test att_open_batch.stop_reason === :proved
+        @test att_open_batch.contracted_count == 5
+        @test verify_certificate(ws_open, att_open_batch.certificate).valid
+
+        # 4. Tampering rejection & scope sensitivity on :roof_scc_pair:
+        wit_orig = s_open_12.witness
+        bad_margin = RelationStep(
+            s_open_12.eliminated, s_open_12.representative, s_open_12.sign, s_open_12.orig_sign,
+            9 // 1, 9 // 1, s_open_12.constant, 0, :roof_scc_pair, 0, :strong, wit_orig,
+        )
+        @test verify_certificate(
+            ws_open,
+            DominanceCertificate(generation(ws_open), checkpoint(ws_open), (), (bad_margin,), ws_open._snapshot),
+        ).stop_reason === :invalid_bound
+
+        bad_wit_upper = QUBOPreprocessing._RoofSCCPairWitness(
+            wit_orig.roof_lower, wit_orig.max_flow, wit_orig.flow_edges,
+            wit_orig.witness_upper - 1, wit_orig.witness_state, wit_orig.scc_literals,
+            wit_orig.batch_contractions, wit_orig.batch_index,
+        )
+        bad_step_w = RelationStep(
+            s_open_12.eliminated, s_open_12.representative, s_open_12.sign, s_open_12.orig_sign,
+            s_open_12.lower, s_open_12.upper, s_open_12.constant, 0, :roof_scc_pair, 0, :strong, bad_wit_upper,
+        )
+        @test verify_certificate(
+            ws_open,
+            DominanceCertificate(generation(ws_open), checkpoint(ws_open), (), (bad_step_w,), ws_open._snapshot),
+        ).stop_reason === :invalid_witness
+
+        # Scope sensitivity: assume! rolls back marginal :roof_scc_pair contractions
+        ws_sc_scc = Workspace(m_k33; rules=:relations)
+        @test contract_relation!(ws_sc_scc, 2, 1; enable_roof_scc=true).stop_reason === :applied
+        @test relation_map(ws_sc_scc, 2) == (1 => 1)
+        assume!(ws_sc_scc, 6, 1)
+        @test relation_map(ws_sc_scc, 2) == (2 => 1)
+    end
 end

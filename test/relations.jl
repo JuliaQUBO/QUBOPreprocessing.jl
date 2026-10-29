@@ -757,5 +757,113 @@
         @test persistency(only(att_up_glk.certificate.steps)) === :strong
         @test only(att_up_glk.certificate.steps).lower == 4 // 1
     end
+
+    @testset "2-SAT pair equivalences from double probing (:probing_pair) and roof SCCs (:roof_scc_pair) (#60)" begin
+        # 1. Two-branch probing pair equivalence (:probing_pair) on a pair (u, v) where
+        # single-endpoint, :glk_pair, and :coflip_pair all fail on (u, v) directly,
+        # but 2-round trial dominance from v cascades through mediator m to force s_u = +s_v:
+        # Variables [:u, :v, :m, :z1, :z2, :z3], zero fields:
+        # J_{u,v} = -0.5, J_{u,m} = -3.0, J_{u,z1} = 2.0 (so on (u, v), |J_{u,v}| = 0.5 < R_u^{other} = 5.0),
+        # J_{v,m} = -6.0, J_{v,z2} = 4.0, J_{v,z3} = 4.0, J_{z2,z3} = 4.0 (so R_v^{other} = 14.0),
+        # and R_coflip(u, v) = 0.5 * (|-3 - (-6)| + 2 + 4 + 4) = 6.5 > 0.5 (so :coflip_pair fails on (u, v)).
+        # Yet conditioning v = ±1 forces m = ±1 (|-6| = 6 > |J_{u,m}| = 3), which then forces u = ±1
+        # (|-3 - 0.5| = 3.5 > |J_{u,z1}| = 2.0)!
+        Q_pp = zeros(6, 6)
+        Q_pp[1, 2] = -0.5; Q_pp[1, 3] = -3.0; Q_pp[1, 4] = 2.0
+        Q_pp[2, 3] = -6.0; Q_pp[2, 5] = 4.0; Q_pp[2, 6] = 4.0
+        Q_pp[5, 6] = 4.0
+        m_pp = rel_fixture([:u, :v, :m, :z1, :z2, :z3], zeros(6), Q_pp; domain=:spin, sense=:min)
+        ws_pp = Workspace(m_pp; rules=:relations)
+        @test prove_relation(ws_pp, :u, :v; allow_weak=true).stop_reason === :not_strict
+        @test prove_relation(ws_pp, :v, :u; allow_weak=true).stop_reason === :not_strict
+
+        function check_materialized_optima(ws::Workspace, model, dom::Symbol, sense::Symbol)
+            mat = materialize(ws)
+            @test verify_certificate(ws, mat.certificate.proof).valid
+            red_model = export_model(mat)
+            red_form = QT.form(red_model)
+            orig_opt, orig_opt_states = optimal_value_and_states(model, dom, sense)
+            rem_dim = QT.dimension(red_model)
+            for y in all_states(rem_dim, dom)
+                rec = reconstruct(mat, y)
+                @test rec.energy.value ≈ QT.value(y, red_form) atol = 1e-12
+            end
+            red_opt, red_opt_states = optimal_value_and_states(red_model, dom, sense)
+            @test red_opt ≈ orig_opt atol = 1e-12
+            for y in red_opt_states
+                rec = reconstruct(mat, y)
+                @test rec.energy.value ≈ orig_opt atol = 1e-12
+                @test rec.state in orig_opt_states
+            end
+        end
+
+        att_pp = prove_relation(ws_pp, :u, :v; enable_probing=true, max_rounds=2)
+        @test att_pp.stop_reason === :proved
+        @test att_pp.method === :probing_pair
+        s_pp = only(att_pp.certificate.steps)::RelationStep
+        @test s_pp.sign == 1
+        @test s_pp.method === :probing_pair
+        @test persistency(s_pp) === :strong
+        @test 0 < s_pp.lower <= 3 // 2 && s_pp.lower == s_pp.upper
+        @test verify_certificate(ws_pp, att_pp.certificate).valid
+
+        # DomainGaugeMap invariance and transport_certificate on :probing_pair:
+        dmap_pp = domain_map(ws_pp; domain=:bool, gauge=[-1, 1, -1, 1, -1, 1])
+        att_pp_m = prove_relation(ws_pp, :u, :v; enable_probing=true, max_rounds=2, map=dmap_pp)
+        @test att_pp_m.stop_reason === :proved
+        @test att_pp_m.method === :probing_pair
+        s_pp_m = only(att_pp_m.certificate.steps)::RelationStep
+        @test s_pp_m.sign == -1
+        @test verify_certificate(ws_pp, att_pp_m.certificate; map=dmap_pp).valid
+        tcert_pp = transport_certificate(ws_pp, att_pp.certificate, dmap_pp)
+        @test verify_certificate(ws_pp, tcert_pp; map=dmap_pp).valid
+
+        # contract_relation!(..., enable_probing=true) and exhaustive optimum preservation:
+        upd_pp = contract_relation!(ws_pp, :u, :v; enable_probing=true, max_rounds=2)
+        @test upd_pp.stop_reason === :applied && upd_pp.changed == 1
+        @test verify_certificate(ws_pp, export_certificate(ws_pp)).valid
+        check_materialized_optima(ws_pp, m_pp, :spin, :min)
+
+        # Scope sensitivity: assume! rolls back marginal :probing_pair contractions
+        ws_pp_sc = Workspace(m_pp; rules=:relations)
+        @test contract_relation!(ws_pp_sc, :u, :v; enable_probing=true, max_rounds=2).stop_reason === :applied
+        @test relation_map(ws_pp_sc, :u) == (:v => 1)
+        assume!(ws_pp_sc, :z1, 1)
+        @test relation_map(ws_pp_sc, :u) == (:u => 1)
+
+        # Tampering rejection on :probing_pair RelationStep:
+        ws_pp_t = Workspace(m_pp; rules=:relations)
+        s_pp_t = only(prove_relation(ws_pp_t, :u, :v; enable_probing=true, max_rounds=2).certificate.steps)::RelationStep
+        bad_pp_bound = RelationStep(
+            s_pp_t.eliminated, s_pp_t.representative, s_pp_t.sign, s_pp_t.orig_sign,
+            2 // 1, 2 // 1, s_pp_t.constant, 0, :probing_pair, 0, :strong, s_pp_t.witness,
+        )
+        @test verify_certificate(
+            ws_pp_t,
+            DominanceCertificate(generation(ws_pp_t), checkpoint(ws_pp_t), (), (bad_pp_bound,), ws_pp_t._snapshot),
+        ).stop_reason === :invalid_bound
+
+        # 2. contract_relations!(ws; enable_probing=true) and contract_relations!(ws; enable_roof_scc=true):
+        ws_cr_prob = Workspace(m_pp; rules=:relations)
+        rep_cr_prob = contract_relations!(ws_cr_prob; enable_probing=true, max_rounds=2)
+        @test rep_cr_prob.stop_reason === :quiescent
+        @test rep_cr_prob.deductions >= 2
+        @test verify_certificate(ws_cr_prob, export_certificate(ws_cr_prob)).valid
+        check_materialized_optima(ws_cr_prob, m_pp, :spin, :min)
+
+        Q_k33_rel = zeros(6, 6)
+        for u in 1:3, v in 4:6
+            Q_k33_rel[u, v] = -2.0
+        end
+        m_k33_rel = rel_fixture([:a1, :a2, :a3, :b1, :b2, :b3], zeros(6), Q_k33_rel; domain=:spin, sense=:min)
+        ws_cr_scc = Workspace(m_k33_rel; rules=:relations)
+        @test contract_relations!(ws_cr_scc).deductions == 0
+        rep_cr_scc = contract_relations!(ws_cr_scc; enable_roof_scc=true)
+        @test rep_cr_scc.stop_reason === :quiescent
+        @test rep_cr_scc.deductions == 5
+        @test length(unique(first.(relation_map(ws_cr_scc)))) == 1
+        @test verify_certificate(ws_cr_scc, export_certificate(ws_cr_scc)).valid
+        check_materialized_optima(ws_cr_scc, m_k33_rel, :spin, :min)
+    end
 end
 

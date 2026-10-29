@@ -643,4 +643,70 @@
         @test_throws ArgumentError coercive_field_witness(ws_b; tie_break=:middle)
         @test_throws ArgumentError probe_variables!(ws_b; order=:random)
     end
+
+    @testset "two-branch common-implication double probing (:double_probe) and pair contractions (#60)" begin
+        # 1. Witness-free :double_probe unary fixing when global lower-bound refutation is blocked:
+        # Variables {1, 2, 3} with h_1 = 3.0, J_{12} = -2.0, J_{13} = -2.0, J_{23} = +5.0,
+        # plus a frustrated K_4 on {4, 5, 6, 7} of weight +10.0 that creates a large global
+        # lower-bound gap (so single-branch L > U refutation on variable 1 fails).
+        # However, conditioning variable 2 on either s_2 = -1 or s_2 = +1 forces s_3 = -s_2 via
+        # J_{23} = +5 > |J_{13}| = 2, which cancels J_{12} s_2 + J_{13} s_3 = 0 and forces s_1 = -1
+        # on BOTH branches in 2 rounds!
+        L_dp = Dict(1 => 3.0, 2 => 0.0, 3 => 0.0, 4 => 0.0, 5 => 0.0, 6 => 0.0, 7 => 0.0)
+        Q_dp = Dict(
+            (1, 2) => -2.0, (1, 3) => -2.0, (2, 3) => 5.0,
+            (4, 5) => 10.0, (4, 6) => 10.0, (4, 7) => 10.0,
+            (5, 6) => 10.0, (5, 7) => 10.0, (6, 7) => 10.0,
+        )
+        m_dp = QT.Model{Int,Float64,Int}(L_dp, Q_dp; domain=:spin, sense=:min)
+        ws_dp = Workspace(m_dp; rules=:dominance)
+        @test propagate!(ws_dp).deductions == 0
+        # Single-branch global lower-bound refutation fails because of the frustrated K_4 gap:
+        @test prove_probing(ws_dp, 1; max_rounds=2).stop_reason === :not_strict
+
+        # Double probing on variable 1 (via neighbor 2 with max_rounds=2) certifies 1 => -1:
+        att_dp = prove_probing(ws_dp, 1; double_probe=true, max_rounds=2)
+        @test att_dp.stop_reason === :proved
+        @test att_dp.method === :double_probe
+        s_dp = only(att_dp.certificate.steps)::ProbingStep
+        @test s_dp.value == -1
+        @test s_dp.method === :double_probe
+        @test s_dp.probed_variable in (2, 3)
+        @test !isempty(s_dp.branch_steps) && !isempty(s_dp.alt_branch_steps)
+        @test verify_certificate(ws_dp, att_dp.certificate).valid
+
+        # DomainGaugeMap invariance and transport_certificate on :double_probe:
+        dmap_dp = domain_map(ws_dp; domain=:bool, gauge=[-1, 1, -1, 1, 1, 1, 1])
+        att_dp_m = prove_probing(ws_dp, 1; value=1, double_probe=true, max_rounds=2, map=dmap_dp)
+        @test att_dp_m.stop_reason === :proved
+        @test only(att_dp_m.certificate.steps).value == -1  # native spin value (-1 maps to bool 1 under gauge[1] = -1)
+        @test verify_certificate(ws_dp, att_dp_m.certificate; map=dmap_dp).valid
+        tcert_dp = transport_certificate(ws_dp, att_dp.certificate, dmap_dp)
+        @test verify_certificate(ws_dp, tcert_dp; map=dmap_dp).valid
+
+        # apply_probing!(..., double_probe=true) and probe_variables!(..., double_probe=true, contract_relations=true):
+        ws_dp_app = Workspace(m_dp; rules=:dominance)
+        rep_dp_app = apply_probing!(ws_dp_app, 1; double_probe=true, max_rounds=2)
+        @test rep_dp_app.stop_reason === :applied && rep_dp_app.changed == 1
+        @test verify_certificate(ws_dp_app, export_certificate(ws_dp_app)).valid
+
+        ws_dp_batch = Workspace(m_dp; rules=:mixed)
+        rep_dp_batch = probe_variables!(ws_dp_batch; double_probe=true, contract_relations=true, max_rounds=2)
+        @test rep_dp_batch.stop_reason === :quiescent
+        @test rep_dp_batch.deductions >= 2
+        @test verify_certificate(ws_dp_batch, export_certificate(ws_dp_batch)).valid
+
+        # Tampering rejection on :double_probe ProbingStep:
+        bad_dp_bound = ProbingStep(
+            s_dp.variable, s_dp.value, s_dp.probed_value,
+            s_dp.branch_lower + 1, s_dp.witness_upper,
+            s_dp.witness_state, s_dp.branch_steps,
+            s_dp.constant, 0, :double_probe, 0, :strong,
+            s_dp.probed_variable, s_dp.alt_branch_steps,
+        )
+        @test verify_certificate(
+            ws_dp,
+            DominanceCertificate(generation(ws_dp), checkpoint(ws_dp), (), (bad_dp_bound,), ws_dp._snapshot),
+        ).stop_reason === :invalid_bound
+    end
 end

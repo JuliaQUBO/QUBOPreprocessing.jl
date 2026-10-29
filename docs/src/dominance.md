@@ -375,10 +375,20 @@ checkpoint/rollback trail and a verified parent-scope feasible witness:
    Because the bound is defined on the canonical spin representation
    ``(c_{\text{spin}}, h_{\text{spin}}, J_{\text{spin}})``, it is invariant
    under QUBO↔Ising domain conversion and `DomainGaugeMap` transformations.
-4. **Strict exclusion contract (`L > U`):** only when ``L > U`` is the opposite
-   branch refuted and ``x_i = w_i`` certified with `:strong` persistency in a
-   [`ProbingStep`](@ref) (after rolling back all trial mutations to the exact
-   pre-probe checkpoint). Equal bounds (``L = U``), inconclusive bounds
+4. **Strict exclusion contract (`L > U`) and two-branch probing (`:double_probe`, `:probing_pair`):**
+   only when ``L > U`` is the opposite branch refuted and ``x_i = w_i`` certified
+   with `:strong` persistency in a [`ProbingStep`](@ref) (after rolling back all
+   trial mutations to the exact pre-probe checkpoint). When `double_probe=true`
+   (`prove_probing`, `apply_probing!`, `probe_variables!`) or
+   `contract_relations=true` (`probe_variables!`) / `enable_probing=true`
+   (`prove_relation`, `contract_relation!`, `contract_relations!`), both trial
+   branches ``x_p = \text{low}`` and ``x_p = 1`` of an active variable are also
+   compared: if both branches deduce the same strong assignment ``x_u = v`` via
+   `DominanceStep` chains, `u => v` is certified witness-free with method
+   `:double_probe`; if both violating states ``(s_u = -1, s_v = +\sigma)`` and
+   ``(s_u = +1, s_v = -\sigma)`` are refuted by strong trial `DominanceStep`
+   chains, the 2-SAT pair equivalence ``s_u = \sigma s_v`` is certified with
+   method `:probing_pair`. Equal bounds (``L = U``), inconclusive bounds
    (``L < U``), poor witnesses, or budget/deadline interruptions (`max_candidates`,
    `max_work`, `max_exact_work`, `deadline_ns`) abstain and restore the workspace
    to its pre-probe checkpoint while charging executed work in [`ProbingAttempt`](@ref)
@@ -420,7 +430,8 @@ external C++/Python dependency or floating-point capacity clipping:
    and ``L_{\text{roof}} = C_{\text{base}} + \operatorname{MaxFlow}(G_{\text{imp}})``
    are strictly invariant under binary↔spin domain conversion and `DomainGaugeMap`
    transformations.
-2. **Exact flow witness and strong-persistency extraction:** Dinic's maximum-flow
+2. **Exact flow witness, strong-persistency extraction, and residual-SCC 2-SAT pair equivalences (`contract_scc=true`, `:roof_scc_pair`):**
+   Dinic's maximum-flow
    algorithm runs in exact `Rational{BigInt}` arithmetic under `max_work`,
    `max_exact_work`, and `deadline_ns`. From the residual network ``G_f``,
    forward reachability from ``S`` yields the mandatory source-cut set ``\mathcal{R}_S``
@@ -430,7 +441,17 @@ external C++/Python dependency or floating-point capacity clipping:
    **every** scoped optimum, and variables with
    ``\bar{x}_u \in \mathcal{R}_S \land x_u \in \mathcal{R}_T`` take ``s_u = -1`` in
    **every** scoped optimum. Multiple-optimum ties (where literals lie outside
-   ``\mathcal{R}_S \cup \mathcal{R}_T``) remain unfixed in strong mode.
+   ``\mathcal{R}_S \cup \mathcal{R}_T``) remain unfixed in strong mode. When
+   `contract_scc=true` (`prove_roof_duality`, `apply_roof_duality!`) or
+   `enable_roof_scc=true` (`prove_relation`, `contract_relation!`, `contract_relations!`),
+   Tarjan's strongly connected components are also computed on the half-integral
+   literal subgraph ``V_{1/2} = \{a \in \{1,\dots,2n\} : a \notin \mathcal{R}_S \cup \mathcal{R}_T \land \bar{a} \notin \mathcal{R}_S \cup \mathcal{R}_T\}``
+   using symmetrized residual capacities ``R(a \to b) = r_f(a \to b) + r_f(\bar{b} \to \bar{a})``:
+   any closed positive-residual SCC ``K \subseteq V_{1/2}`` (no positive residual arcs
+   leaving ``K`` into ``V_{1/2} \setminus K`` and ``K \cap \bar{K} = \emptyset``) or
+   witness-bounded bottleneck SCC with cycle bottleneck
+   ``B_{\text{cycle}}(a_u, b_v) > U_{\text{witness}} - L_{\text{roof}}`` certifies strong
+   2-SAT pair equivalences ``s_u = \sigma s_v`` (`:roof_scc_pair` [`RelationStep`](@ref)).
 3. **Independent primal–dual verification (`RoofDualityStep`):** each recorded
    [`RoofDualityStep`](@ref) stores `roof_lower`, `max_flow`, the positive flow
    arcs `flow_edges`, and `batch_fixings`. `verify_certificate` independently
