@@ -21,9 +21,9 @@
     Q_spin[4, 5] = 0.5
     Q_spin[4, 6] = 0.5
     Q_spin[4, 7] = 1.0
-    Q_spin[5, 6] = -1.0
+    Q_spin[5, 6] = 1.0
     Q_spin[5, 7] = 1.0
-    Q_spin[6, 7] = -1.0
+    Q_spin[6, 7] = 1.0
 
     for domain in (:spin, :bool), sense in (:min, :max), scale in (1.0, -2.0)
         dir = (sense === :min ? 1 : -1) * (scale < 0 ? -1 : 1)
@@ -147,7 +147,7 @@ end
     @test :relations in rep_all_off.optional_passes_disabled
 
     # Star-triangle K_4 with zero field on v1 and stop_on_disabled_optional=true:
-    Q_k4 = [0.0 1.0 -1.5 2.0; 0.0 0.0 0.5 -0.75; 0.0 0.0 0.0 1.25; 0.0 0.0 0.0 0.0]
+    Q_k4 = [0.0 1.0 1.0 1.0; 0.0 0.0 1.0 1.0; 0.0 0.0 0.0 1.0; 0.0 0.0 0.0 0.0]
     ws_k4 = Workspace(fixture([:u, :w1, :w2, :w3], [0.0, 0.25, -0.5, 0.75], Q_k4; domain=:spin); rules=:mixed)
     rep_k4_dis = schedule_reductions!(ws_k4; enable_star_triangle=false, stop_on_disabled_optional=true)
     @test rep_k4_dis.stop_reason === :optional_pass_disabled
@@ -284,8 +284,8 @@ end
     Q7 = zeros(7, 7)
     Q7[1, 2] = 1.0; Q7[2, 3] = -0.5; Q7[3, 4] = -6.0
     Q7[3, 5] = 0.5; Q7[3, 6] = 0.5; Q7[4, 5] = 0.5
-    Q7[4, 6] = 0.5; Q7[4, 7] = 1.0; Q7[5, 6] = -1.0
-    Q7[5, 7] = 1.0; Q7[6, 7] = -1.0
+    Q7[4, 6] = 0.5; Q7[4, 7] = 1.0; Q7[5, 6] = 1.0
+    Q7[5, 7] = 1.0; Q7[6, 7] = 1.0
     m7 = fixture(labels7, L7, Q7; domain=:spin)
     # Tight single-call work_limit and verification_limit across passes:
     ws_wl1 = Workspace(m7; rules=:mixed)

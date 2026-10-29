@@ -99,9 +99,10 @@ end
         model = QT.Model(L, Q; sense=:min, domain=:spin)
         ws = Workspace(model; rules=:mixed)
 
-        # Standard unary dominance, standard/GLK pair relations, roof duality, and submodular cut all fail:
+        # Standard unary dominance, single-endpoint/GLK pair relations, roof duality, and submodular cut fail,
+        # while shared-neighborhood :coflip_pair and :maxcut_triangle succeed:
         @test prove_dominance(ws, :s1).stop_reason === :not_strict
-        @test prove_relation(ws, :s1, :s2).stop_reason === :not_strict
+        @test prove_relation(ws, :s1, :s2).method === :coflip_pair
         @test prove_roof_duality(ws).stop_reason === :no_persistency
         @test prove_submodular_cut(ws).stop_reason === :frustrated_cycle
 
@@ -155,17 +156,17 @@ end
 
     @testset "Frustrated triangle co-flip relief and unary reference-triangle fixing" begin
         # 1. Frustrated triangle {1, 2, 3}: J12 = -2.5, J13 = -2.0, J23 = +0.5 (frustrated for sigma = +1),
-        #    plus J14 = +0.5, J24 = +2.5 (so anchor 2 has 2.5 - 0.5 - 2.5 = -0.5 < 0), and zero fields.
-        #    Standard relation margin on (1, 2) is 2.5 - 2.0 - 0.5 = 0 (not strict),
+        #    plus J14 = +0.5, J25 = +2.5 (so anchor 2 has 2.5 - 0.5 - 2.5 = -0.5 < 0 and rad_coflip = 2.75 > 2.5), and zero fields.
+        #    Standard/coflip relation margin on (1, 2) is <= 0 (not strict),
         #    while co-flipping c = 3 with a = 1 reduces penalty on (1, 3) from 2.0 to |J23| = 0.5,
         #    giving Max-Cut triangle margin 2.5 - 0.5 - 0.5 = +1.5 > 0!
-        L_fr = Dict{Symbol,Float64}(:s1 => 0.0, :s2 => 0.0, :s3 => 0.0, :s4 => 0.0)
+        L_fr = Dict{Symbol,Float64}(:s1 => 0.0, :s2 => 0.0, :s3 => 0.0, :s4 => 0.0, :s5 => 0.0)
         Q_fr = Dict{Tuple{Symbol,Symbol},Float64}(
             (:s1, :s2) => -2.5,
             (:s1, :s3) => -2.0,
             (:s2, :s3) => 0.5,
             (:s1, :s4) => 0.5,
-            (:s2, :s4) => 2.5,
+            (:s2, :s5) => 2.5,
         )
         model_fr = QT.Model(L_fr, Q_fr; sense=:min, domain=:spin)
         ws_fr = Workspace(model_fr; rules=:mixed)
@@ -174,7 +175,7 @@ end
         att_fr = prove_maxcut(ws_fr, :s1, :s2; sign=1)
         @test att_fr.stop_reason === :proved
         @test att_fr.method === :maxcut_triangle
-        @test att_fr.margin == 5 // 2
+        @test att_fr.margin == 3 // 2
         @test verify_certificate(ws_fr, att_fr.certificate).valid
 
         # 2. Unary fixing via reference-node triangle {u, 0, c}:

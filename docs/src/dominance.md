@@ -11,8 +11,9 @@ degree-0/1/2 exact local elimination (including arbitrary local fields, fill-edg
 merging/cancellation and optional alternating dominance/elimination cascades),
 select `Workspace(model; rules=:elimination)` or call
 `eliminate_low_degree!(ws; cascade_dominance=true, ...)`. For queue-driven
-certified pair relations and reversible signed contractions (`:interval`, `:exact`
-and Glover–Lewis–Kochenberger cross-endpoint `:glk_pair`), select
+certified pair relations and reversible signed contractions (`:interval`, `:exact`,
+Glover–Lewis–Kochenberger cross-endpoint `:glk_pair`, and shared-neighborhood
+co-flip / twin contraction `:coflip_pair`), select
 `Workspace(model; rules=:relations)` or call
 `contract_relations!(ws; max_fill=..., cascade_dominance=..., ...)` and inspect
 active representatives/parities via `relation_map(ws)`. For deterministic mixed
@@ -77,7 +78,25 @@ denote the direction-normalized spin fields and couplings, and let
    ``\text{lo}_{\text{glk}} > 0`` certifies `:strong` persistency and
    ``\text{lo}_{\text{glk}} == 0`` (when `allow_weak=true` and ``\text{center} > 0``)
    certifies `:weak` persistency.
-3. **Explicitly deferred GLK rules:** single-branch inequality implications
+3. **Shared-neighborhood co-flip pair dominance and twin/clique contraction (`:coflip_pair`, Ferizovic et al. 2020; Rehfeldt et al. 2023):**
+   on any violating state ``t_u = -\sigma t_v``, flipping ``t_u \to \sigma t_v`` or
+   ``t_v \to \sigma t_u`` yields half-energy gains ``m_u(s)`` and ``m_v(s)`` whose
+   average cancels every matched external coupling ``\tilde{J}_{uw} = \sigma \tilde{J}_{vw}``:
+   ```math
+   \frac{m_u(s) + m_v(s)}{2}
+   = -\sigma \tilde{J}_{uv} - \frac{t_v}{2}\!\left((\tilde{h}_u - \sigma \tilde{h}_v) + \sum_{w \notin \{u, v\}} (\tilde{J}_{uw} - \sigma \tilde{J}_{vw}) t_w\right)
+   \ge -\sigma \tilde{J}_{uv} - \operatorname{rad}_{\text{coflip}}(\sigma) = L_{\text{coflip}}(\sigma),
+   ```
+   where ``\operatorname{rad}_{\text{coflip}}(\sigma) = \frac{1}{2}|\tilde{h}_u - \sigma \tilde{h}_v| + \frac{1}{2}\sum_{w \notin \{u, v\}} |\tilde{J}_{uw} - \sigma \tilde{J}_{vw}|``.
+   Hence ``\max(m_u(s), m_v(s)) \ge L_{\text{coflip}}(\sigma)`` on every boundary
+   assignment: ``L_{\text{coflip}}(\sigma) > 0`` certifies `:strong` persistency
+   (including adjacent twins and uniform cliques where ``R_u, R_v > |\tilde{J}_{uv}|``
+   and ``\tilde{h}_u = \tilde{h}_v = 0`` block both Rule 1 and `:glk_pair`), while
+   ``L_{\text{coflip}}(\sigma) == 0`` with `allow_weak=true` certifies `:weak`
+   persistency (including non-adjacent exact signed twins ``\tilde{J}_{uv} = 0``,
+   ``\operatorname{rad}_{\text{coflip}}(\sigma) = 0``, discovered automatically via
+   shared 2-hop neighbors with zero fill edges).
+4. **Explicitly deferred GLK rules:** single-branch inequality implications
    (``x_u + x_v \ge 1``, ``x_u + x_v \le 1``, ``x_u \le x_v`` when only one of
    ``V_1, V_2`` is ruled out) do not induce an unconstrained parity substitution
    ``s_u = \pm s_v`` without auxiliary slack variables or penalty terms, and GLK

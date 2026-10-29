@@ -366,9 +366,9 @@ end
     @test propagate!(ws_tie; allow_weak=true).deductions == 2
 
     ws_rel_tie = Workspace(fixture([:a, :b], [0.0, 0.0], [0.0 -1.0; 0.0 0.0]; domain=:spin))
-    # Add a third neighbor :c with coupling 1.0 to :a so -J_ab - |J_ac| = 1 - 1 = 0
+    # Add a third neighbor :c with J_ac = 1.0, J_bc = -1.0 so -J_ab - |J_ac| = 1 - 1 = 0 and L_coflip = 1 - 1 = 0
     ws_rel_tie = Workspace(fixture([:a, :b, :c], [0.0, 0.0, 0.0],
-                                   [0.0 -1.0 1.0; 0.0 0.0 0.0; 0.0 0.0 0.0]; domain=:spin))
+                                   [0.0 -1.0 1.0; 0.0 0.0 -1.0; 0.0 0.0 0.0]; domain=:spin))
     @test prove_relation(ws_rel_tie, :a, :b; sign=1, allow_weak=false).stop_reason === :not_strict
     att_rel_weak = prove_relation(ws_rel_tie, :a, :b; sign=1, allow_weak=true)
     @test att_rel_weak.stop_reason === :proved
