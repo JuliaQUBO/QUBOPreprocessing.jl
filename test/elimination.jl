@@ -739,8 +739,8 @@ end
     m_comp = fixture([:r1, :r2, :u, :w1, :w2], L_comp, Q_comp; domain=:spin)
     ws_comp = Workspace(m_comp; rules=:relations)
     @test degree(ws_comp, :u) == 4
-    # Contracting relations merges :r1 and :r2, dropping :u from degree 4 to degree 3 with h_u == 0!
-    rep_rel = contract_relations!(ws_comp)
+    # Contracting :r1 and :r2 drops :u from degree 4 to degree 3 with h_u == 0!
+    rep_rel = contract_relations!(ws_comp; max_deductions=1)
     @test rep_rel.deductions >= 1
     @test degree(ws_comp, :u) == 3 && iszero(QUBOPreprocessing._spin_field(ws_comp, 3))
     # Now eliminate_low_degree!(ws_comp; max_degree=3) eliminates :u (degree 3) and cascades the rest to 0 variables!

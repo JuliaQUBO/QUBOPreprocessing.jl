@@ -2123,7 +2123,10 @@ function _try_contract_pair!(
     raw_step === nothing && return (w_reason, w_visits, w_exact, w_fb)
     d_elim = st.degrees[elim]
     adj_elim_len = length(st.adjacency[elim])
-    apply_edge_need = adj_elim_len + 2 * max(0, d_elim - 1)
+    pos_er = get(st.adj_pos[elim], rep, 0)
+    adj_er = pos_er != 0 && !iszero(st.adjacency[elim][pos_er].second)
+    n_other = adj_er ? max(0, d_elim - 1) : d_elim
+    apply_edge_need = adj_elim_len + 2 * n_other
     apply_exact_need = 1 + 3 * d_elim
     apply_edge_need <= rem_work - w_visits || return (:work_limit, w_visits, w_exact, w_fb)
     apply_exact_need <= rem_exact - w_exact || return (:verification_limit, w_visits, w_exact, w_fb)
@@ -2157,9 +2160,10 @@ end
     is_spin_dom = s.domain === QT.SpinDomain
     tot_scale = is_spin_dom ? 0.5 : 0.25
     j_scale = is_spin_dom ? 1.0 : 0.25
-    up_e_lo, _ = _enclose(st.upper[elim])
-    _, lo_e_hi = _enclose(st.lower[elim])
+    up_e_lo, up_e_hi = _enclose(st.upper[elim])
+    lo_e_lo, lo_e_hi = _enclose(st.lower[elim])
     tot_e_lo = _prevfloat_finite(tot_scale * _prevfloat_finite(up_e_lo - lo_e_hi))
+    tot_e_hi = _nextfloat_finite(tot_scale * _nextfloat_finite(up_e_hi - lo_e_lo))
     g_e = map === nothing ? 1 : map.gauge[elim]
     g_r = map === nothing ? 1 : map.gauge[rep]
     he_raw = _spin_field(ws, elim)
@@ -2169,22 +2173,56 @@ end
     q_lo, q_hi = _enclose(q)
     two_c_hi = _nextfloat_finite(2.0 * _nextfloat_finite(j_scale * max(abs(q_lo), abs(q_hi))))
     if isfinite(tot_e_lo) && isfinite(he_abs_hi) && isfinite(two_c_hi)
-        _nextfloat_finite(two_c_hi + he_abs_hi) < tot_e_lo && return false
         if _nextfloat_finite(two_c_hi - he_abs_lo) < tot_e_lo
-            iszero(he_raw) && return false
-            up_r_lo, _ = _enclose(st.upper[rep])
-            _, lo_r_hi = _enclose(st.lower[rep])
+            up_r_lo, up_r_hi = _enclose(st.upper[rep])
+            lo_r_lo, lo_r_hi = _enclose(st.lower[rep])
             tot_r_lo = _prevfloat_finite(tot_scale * _prevfloat_finite(up_r_lo - lo_r_hi))
+            tot_r_hi = _nextfloat_finite(tot_scale * _nextfloat_finite(up_r_hi - lo_r_lo))
             hr_raw = _spin_field(ws, rep)
             hrr_lo, hrr_hi = _enclose(hr_raw)
             hr_lo, hr_hi = (direction * g_r >= 0) ? (hrr_lo, hrr_hi) : (-hrr_hi, -hrr_lo)
             q_mapped_nonpos = (direction * (g_e * g_r) >= 0) ? (q < 0) : (q > 0)
             σ = q_mapped_nonpos ? 1 : -1
-            he_pos = (direction * g_e >= 0) ? (he_raw > 0) : (he_raw < 0)
-            σ_he_pos = (σ == 1) ? he_pos : !he_pos
-            req_hr_hi = σ_he_pos ? hr_hi : -hr_lo
-            if isfinite(tot_r_lo) && isfinite(req_hr_hi) && _nextfloat_finite(two_c_hi + req_hr_hi) < tot_r_lo
-                return false
+            glk_ok = !iszero(he_raw) && !(_nextfloat_finite(two_c_hi + he_abs_hi) < tot_e_lo)
+            if glk_ok
+                he_pos = (direction * g_e >= 0) ? (he_raw > 0) : (he_raw < 0)
+                σ_he_pos = (σ == 1) ? he_pos : !he_pos
+                req_hr_hi = σ_he_pos ? hr_hi : -hr_lo
+                if isfinite(tot_r_lo) && isfinite(req_hr_hi) && _nextfloat_finite(two_c_hi + req_hr_hi) < tot_r_lo
+                    glk_ok = false
+                end
+            end
+            if !glk_ok
+                he_s_lo, he_s_hi = (direction * g_e >= 0) ? (he_lo, he_hi) : (-he_hi, -he_lo)
+                hd_lo = σ == 1 ? _prevfloat_finite(he_s_lo - hr_hi) : _prevfloat_finite(he_s_lo + hr_lo)
+                hd_hi = σ == 1 ? _nextfloat_finite(he_s_hi - hr_lo) : _nextfloat_finite(he_s_hi + hr_hi)
+                hd_abs_lo = (hd_lo <= 0.0 && hd_hi >= 0.0) ? 0.0 : min(abs(hd_lo), abs(hd_hi))
+                tot_diff_lo = max(0.0, _prevfloat_finite(tot_e_lo - tot_r_hi), _prevfloat_finite(tot_r_lo - tot_e_hi))
+                if isfinite(hd_abs_lo) && isfinite(tot_diff_lo) && two_c_hi < _prevfloat_finite(hd_abs_lo + tot_diff_lo)
+                    return false
+                end
+                orig_σ = g_e * g_r * σ
+                has_compat_shared = false
+                if st.degrees[elim] >= 2 && st.degrees[rep] >= 2
+                    a_small, b_large = length(st.adjacency[elim]) <= length(st.adjacency[rep]) ? (elim, rep) : (rep, elim)
+                    for (w, q_aw) in st.adjacency[a_small]
+                        (w != elim && w != rep && st.fixed[w] == 2 && !iszero(q_aw)) || continue
+                        pos_bw = get(st.adj_pos[b_large], w, 0)
+                        if pos_bw != 0
+                            q_bw = st.adjacency[b_large][pos_bw].second
+                            if !iszero(q_bw) && ((q_aw > 0) == (orig_σ > 0 ? (q_bw > 0) : (q_bw < 0)))
+                                has_compat_shared = true
+                                break
+                            end
+                        end
+                    end
+                end
+                if !has_compat_shared
+                    two_rad_no_cancel_lo = _prevfloat_finite(hd_abs_lo + _prevfloat_finite(tot_e_lo + tot_r_lo))
+                    if isfinite(two_rad_no_cancel_lo) && _nextfloat_finite(2.0 * two_c_hi) < two_rad_no_cancel_lo
+                        return false
+                    end
+                end
             end
         end
     end
@@ -2304,6 +2342,71 @@ function _step_relation_queue!(
             min_blocked = min(min_blocked, f_vu)
         end
     end
+    if allow_weak && !isempty(nbrs)
+        d_u = length(nbrs)
+        piv_idx = 1
+        piv_deg = st.degrees[nbrs[1].first]
+        @inbounds for idx in 2:d_u
+            dw = st.degrees[nbrs[idx].first]
+            if dw < piv_deg
+                piv_deg = dw
+                piv_idx = idx
+            end
+        end
+        w_piv, q_uw_piv = nbrs[piv_idx]
+        neg_q_uw_piv = -q_uw_piv
+        h_u_spin = _spin_field(ws, u)
+        neg_h_u_spin = -h_u_spin
+        has_sum = st.lower !== nothing && st.upper !== nothing
+        tot_u_exact = has_sum ? (st.upper[u] - st.lower[u]) : _Exact(0)
+        twin_cands = Int[]
+        for (v, q_vw_piv) in st.adjacency[w_piv]
+            _expired(deadline_ns) && return (:deadline, 1, u_visits, 0, u_exact, u_fb, 0)
+            (v != u && st.fixed[v] == 2 && st.degrees[v] == d_u) || continue
+            σ_cand = q_vw_piv == q_uw_piv ? 1 : (q_vw_piv == neg_q_uw_piv ? -1 : 0)
+            σ_cand != 0 || continue
+            pos_uv = get(st.adj_pos[u], v, 0)
+            (pos_uv == 0 || iszero(st.adjacency[u][pos_uv].second)) || continue
+            has_sum && (st.upper[v] - st.lower[v]) != tot_u_exact && continue
+            h_v_spin = _spin_field(ws, v)
+            (σ_cand == 1 ? (h_v_spin == h_u_spin) : (h_v_spin == neg_h_u_spin)) || continue
+            all_match = true
+            @inbounds for (w, q_uw) in nbrs
+                pos_vw = get(st.adj_pos[v], w, 0)
+                if pos_vw == 0
+                    all_match = false
+                    break
+                end
+                q_vw = st.adjacency[v][pos_vw].second
+                if !(σ_cand == 1 ? (q_vw == q_uw) : (q_vw == -q_uw))
+                    all_match = false
+                    break
+                end
+            end
+            all_match && push!(twin_cands, v)
+        end
+        sort!(twin_cands)
+        for v in twin_cands
+            called_witness = true
+            status, dv, dx, dfb = _try_contract_pair!(
+                ws, u, v, map, allow_weak,
+                rem_work - 1 - u_visits,
+                rem_exact - u_exact,
+                deadline_ns;
+                reserve_pop=true,
+                allow_exact_fallback,
+            )
+            u_visits += dv
+            u_exact += dx
+            u_fb += dfb
+            if status === :applied
+                _pop_rel_queue!(ws)
+                return (:applied, 1, u_visits, 1, u_exact, u_fb, 0)
+            elseif status !== :not_strict
+                return (status, 1, u_visits, 0, u_exact, u_fb, 0)
+            end
+        end
+    end
     _pop_rel_queue!(ws, min_blocked, allow_weak)
     return (:continue, 1, called_witness ? u_visits : adj_u_len, 0, u_exact, u_fb, 0)
 end
@@ -2317,8 +2420,9 @@ end
 
 Run queue-driven certified pair relation detection and signed contraction on `ws`
 without scanning all vertex pairs globally. Candidate active vertices are popped
-from an incremental relation queue and their active incident edges are tested for
-certified pair equivalences or implications (`:interval`, `:exact` or `:glk_pair`).
+from an incremental relation queue and their active incident edges (plus exact
+non-adjacent twins when `allow_weak=true`) are tested for certified pair
+equivalences or implications (`:interval`, `:exact`, `:glk_pair` or `:coflip_pair`).
 Contractions that would introduce more than `max_fill` new fill edges on the
 representative are skipped. When `cascade_dominance=true` (requiring
 `Workspace(model; rules=:dominance)`, `rules=:elimination`, `rules=:relations` or

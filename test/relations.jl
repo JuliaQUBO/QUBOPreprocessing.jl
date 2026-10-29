@@ -340,23 +340,26 @@
     @testset "exploratory branch-and-bound: assume! + contract_relations! + rollback! scaling" begin
         function chain_with_pair_gadget(n::Int)
             labels = [Symbol(:v, i) for i in 1:n]
-            # Gadget on v1, v2, v3:
-            # All linear fields are 0 at the root, and every edge has |J| <= R at both endpoints,
-            # so 0 contractions apply at the root.
-            # When v1 is fixed to -1, edges (v1, v2) and (v1, v3) become fields h'_2 = -2 and h'_3 = -2,
-            # unlocking GLK Rule 2 (:glk_pair) on (v2, v3) with margin 5 + 2 - 4 = +3 > 0!
-            I_idx = [1, 1, 2, 2, 3, 4]
-            J_idx = [2, 3, 3, 4, 4, n]
-            V_val = [2.0, 2.0, -5.0, 4.0, 4.0, 9.0]
+            # Gadget on v1, v2, v3, v4:
+            # At the root, h_2 = +3, h_3 = -5 have opposite signs and J_{12} = +5, J_{13} = -3, J_{14} = +6,
+            # so every edge fails single-endpoint Rule 1, :glk_pair, and :coflip_pair (0 contractions at root).
+            # When v1 is fixed to -1, edges (v1, v2) and (v1, v3) shift fields to h'_2 = -2 and h'_3 = -2,
+            # unlocking GLK Rule 2 (:glk_pair) and :coflip_pair on (v2, v3) with margin +3 > 0!
+            I_idx = [1, 1, 1, 2, 2, 3, 4]
+            J_idx = [2, 3, 4, 3, 4, 4, n]
+            V_val = [5.0, -3.0, 6.0, -5.0, 4.0, 4.0, 9.0]
             for k in 4:(n - 1)
                 push!(I_idx, k)
                 push!(J_idx, k + 1)
                 push!(V_val, 9.0)
             end
             vm = QT.VariableMap{Symbol}(Dict{Symbol,Int}(v => i for (i, v) in enumerate(labels)), labels)
+            lin_s = spzeros(Float64, n)
+            lin_s[2] = 3.0
+            lin_s[3] = -5.0
             f = QT.Form{Float64}(
                 n,
-                QT.SparseLinearForm{Float64}(spzeros(Float64, n)),
+                QT.SparseLinearForm{Float64}(lin_s),
                 QT.SparseQuadraticForm{Float64}(sparse(I_idx, J_idx, V_val, n, n)),
                 1.0,
                 0.0;
@@ -431,12 +434,13 @@
     end
 
     @testset "GLK equality ties, allow_weak transition, non-zero parallel-edge merge, disconnected components and unfix!" begin
-        # 1. GLK equality tie (lo_glk == 0):
-        # h_u = 1, h_v = 1, J_uv = -2, J_uw = 3, J_vw = 3 => center = 2, m_u(V_2) = 2 + 1 - 3 = 0, m_v(V_1) = 2 + 1 - 3 = 0!
+        # 1. GLK equality tie (lo_glk == 0) with frustrated second neighbor :z so L_coflip < 0:
+        # h_u = 3, h_v = 3, h_w = 2, h_z = 2, J_uv = -4, J_uw = 3, J_vw = 3, J_uz = 4, J_vz = -4 =>
+        # center = 4, R_u = R_v = 7, m_u(V_2) = 4 + 3 - 7 = 0, m_v(V_1) = 4 + 3 - 7 = 0, rad_coflip = (0 + 0 + 8)/2 = 4!
         m_tie = rel_fixture(
-            [:u, :v, :w],
-            [1.0, 1.0, 0.0],
-            [0.0 -2.0 3.0; 0.0 0.0 3.0; 0.0 0.0 0.0];
+            [:u, :v, :w, :z],
+            [3.0, 3.0, 2.0, 2.0],
+            [0.0 -4.0 3.0 4.0; 0.0 0.0 3.0 -4.0; 0.0 0.0 0.0 0.0; 0.0 0.0 0.0 0.0];
             domain=:spin,
         )
         ws_tie = Workspace(m_tie; rules=:relations)
@@ -457,13 +461,13 @@
         # Component 1: [:a1, :a2, :a3], Component 2: [:b1, :b2]
         m_disc = rel_fixture(
             [:a1, :a2, :a3, :b1, :b2],
-            [0.0, 0.0, 0.0, 0.0, 0.0],
+            [0.0, -6.0, 8.0, 0.0, 0.0],
             [
-                0.0 4.0 4.0  0.0 0.0;
-                0.0 0.0 -4.0 0.0 0.0;
-                0.0 0.0 0.0  0.0 0.0;
-                0.0 0.0 0.0  0.0 4.0;
-                0.0 0.0 0.0  0.0 0.0
+                0.0 7.0 -7.0  0.0 0.0;
+                0.0 0.0 -4.0  0.0 0.0;
+                0.0 0.0  0.0  0.0 0.0;
+                0.0 0.0  0.0  0.0 4.0;
+                0.0 0.0  0.0  0.0 0.0
             ];
             domain=:spin,
         )
@@ -493,6 +497,265 @@
         @test assumptions(ws_disc) == [:b2 => 1]
         @test relation_map(ws_disc) == [:a1 => 1, :a2 => 1, :a3 => 1, :b1 => 1, :b2 => 1]
         @test degree(ws_disc, :a2) == 2 && degree(ws_disc, :a3) == 2
+    end
+
+    @testset "shared-neighborhood co-flip pair dominance (:coflip_pair) and twin/clique contraction (#58)" begin
+        function spin_to_bool_coeffs(h_spin, J_spin, c_spin)
+            n = length(h_spin)
+            l_b = zeros(Float64, n)
+            q_b = zeros(Float64, n, n)
+            c_b = Float64(c_spin) - sum(h_spin)
+            for i in 1:n
+                l_b[i] += 2.0 * h_spin[i]
+            end
+            for i in 1:n, j in (i + 1):n
+                q_b[i, j] = 4.0 * J_spin[i, j]
+                l_b[i] -= 2.0 * J_spin[i, j]
+                l_b[j] -= 2.0 * J_spin[i, j]
+                c_b += J_spin[i, j]
+            end
+            return l_b, q_b, c_b
+        end
+
+        function check_exhaustive_relation!(ws::Workspace, model, dom::Symbol, sense::Symbol; allow_weak::Bool=false)
+            cp0 = checkpoint(ws)
+            rep = contract_relations!(ws; allow_weak=allow_weak)
+            @test rep.stop_reason === :quiescent
+            @test rep.deductions >= 1
+            mat = materialize(ws)
+            @test verify_certificate(ws, mat.certificate.proof).valid
+            red_model = export_model(mat)
+            red_form = QT.form(red_model)
+            orig_opt, orig_opt_states = optimal_value_and_states(model, dom, sense)
+            rem_dim = QT.dimension(red_model)
+            for y in all_states(rem_dim, dom)
+                rec = reconstruct(mat, y)
+                @test rec.energy.value ≈ QT.value(y, red_form) atol = 1e-12
+            end
+            red_opt, red_opt_states = optimal_value_and_states(red_model, dom, sense)
+            @test red_opt ≈ orig_opt atol = 1e-12
+            for y in red_opt_states
+                rec = reconstruct(mat, y)
+                @test rec.energy.value ≈ orig_opt atol = 1e-12
+                @test rec.state in orig_opt_states
+            end
+            rollback!(ws, cp0)
+        end
+
+        # 1. Adjacent shared-neighborhood co-flip pair where both Rule 1 (:interval/:exact) and :glk_pair fail:
+        # Zero fields (h = 0), J_uv = -3, shared neighbors w (J_uw = J_vw = 4) and z (J_uz = J_vz = -4).
+        # Single-endpoint Rule 1 has center - R_u = 3 - 8 = -5 < 0; GLK has lo_glk = 3 - 0 - 8 = -5 < 0.
+        # Under joint co-flip (:coflip_pair, sigma = +1), shared external couplings cancel:
+        # rad_coflip = (|0 - 0| + |4 - 4| + |-4 - (-4)|) / 2 = 0, so L_coflip = 3 > 0 (:strong)!
+        for sense in (:min, :max), scale in (1.5, -2.0)
+            eff_dir = (sense === :min ? 1.0 : -1.0) * sign(scale)
+            s_quad = eff_dir .* [
+                0.0 -3.0  4.0 -4.0;
+                0.0  0.0  4.0 -4.0;
+                0.0  0.0  0.0  1.0;
+                0.0  0.0  0.0  0.0
+            ]
+            s_lin = eff_dir .* [0.0, 0.0, 1.0, -1.0]
+            m_spin = rel_fixture([:u, :v, :w, :z], s_lin, s_quad; sense=sense, domain=:spin, scale=scale, offset=1.25)
+            ws_spin = Workspace(m_spin; rules=:relations)
+            @test prove_dominance(ws_spin, :u).stop_reason === :not_strict
+            @test prove_dominance(ws_spin, :v).stop_reason === :not_strict
+            att = prove_relation(ws_spin, :u, :v)
+            @test att.stop_reason === :proved && att.method === :coflip_pair
+            step = only(att.certificate.steps)
+            @test step isa RelationStep && step.method === :coflip_pair
+            @test step.sign == 1 && step.orig_sign == 1
+            @test persistency(step) === :strong
+            @test step.lower == 3 // 1
+            @test verify_certificate(ws_spin, att.certificate).valid
+            check_exhaustive_relation!(ws_spin, m_spin, :spin, sense; allow_weak=false)
+
+            # Equivalent Boolean model and gauge transport:
+            b_lin, b_quad, b_off = spin_to_bool_coeffs(s_lin, s_quad, 1.25)
+            m_bool = rel_fixture([:u, :v, :w, :z], b_lin, b_quad; sense=sense, domain=:bool, scale=scale, offset=b_off)
+            ws_bool = Workspace(m_bool; rules=:relations)
+            att_b = prove_relation(ws_bool, :u, :v)
+            @test att_b.stop_reason === :proved && att_b.method === :coflip_pair
+            @test only(att_b.certificate.steps).sign == 1
+            @test verify_certificate(ws_bool, att_b.certificate).valid
+            dmap = domain_map(ws_bool; domain=:spin, gauge=[-1, 1, -1, 1])
+            att_map = prove_relation(ws_bool, :u, :v; map=dmap)
+            @test att_map.stop_reason === :proved && att_map.method === :coflip_pair
+            @test only(att_map.certificate.steps).sign == -1 # flipped because g_u * g_v = -1
+            @test only(att_map.certificate.steps).orig_sign == 1
+            @test verify_certificate(ws_bool, att_map.certificate).valid
+            @test verify_certificate(ws_bool, att_map.certificate; map=dmap).valid
+            t_cert = transport_certificate(ws_bool, att_b.certificate, dmap)
+            @test verify_certificate(ws_bool, t_cert; map=dmap).valid
+            check_exhaustive_relation!(ws_bool, m_bool, :bool, sense; allow_weak=false)
+        end
+
+        # 2. Opposite-sign fields where GLK penalizes both branches but :coflip_pair succeeds:
+        # h_u = 2, h_v = -2, J_uv = -4, J_uw = 5, J_vw = 5, J_uz = -3, J_vz = -2 =>
+        # rad_coflip(+1) = (|2 - (-2)| + |5 - 5| + |-3 - (-2)|) / 2 = 5/2 < 4 => L_coflip = 3/2 > 0!
+        m_opp = rel_fixture(
+            [:u, :v, :w, :z],
+            [2.0, -2.0, 1.0, -1.0],
+            [0.0 -4.0 5.0 -3.0; 0.0 0.0 5.0 -2.0; 0.0 0.0 0.0 1.0; 0.0 0.0 0.0 0.0];
+            domain=:spin,
+        )
+        ws_opp = Workspace(m_opp; rules=:relations)
+        att_opp = prove_relation(ws_opp, :u, :v)
+        @test att_opp.stop_reason === :proved && att_opp.method === :coflip_pair
+        @test only(att_opp.certificate.steps).lower == 3 // 2
+        @test verify_certificate(ws_opp, att_opp.certificate).valid
+        check_exhaustive_relation!(ws_opp, m_opp, :spin, :min; allow_weak=false)
+
+        # 3. Weak :coflip_pair equality tie (L_coflip == 0 with center > 0):
+        # h_u = 2, h_v = -2, J_uv = -2, J_uw = 5, J_vw = 5 => center = 2, rad_coflip = 4/2 = 2 => L_coflip = 0
+        m_coflip_tie = rel_fixture(
+            [:u, :v, :w],
+            [2.0, -2.0, 1.0],
+            [0.0 -2.0 5.0; 0.0 0.0 5.0; 0.0 0.0 0.0];
+            domain=:spin,
+        )
+        ws_coflip_tie = Workspace(m_coflip_tie; rules=:relations)
+        @test prove_relation(ws_coflip_tie, :u, :v; allow_weak=false).stop_reason === :not_strict
+        att_coflip_w = prove_relation(ws_coflip_tie, :u, :v; allow_weak=true)
+        @test att_coflip_w.stop_reason === :proved && att_coflip_w.method === :coflip_pair
+        @test persistency(only(att_coflip_w.certificate.steps)) === :weak
+        @test verify_certificate(ws_coflip_tie, att_coflip_w.certificate).valid
+        check_exhaustive_relation!(ws_coflip_tie, m_coflip_tie, :spin, :min; allow_weak=true)
+
+        # 4. Non-adjacent exact signed twin contraction (J_uv == 0, sigma in {+1, -1}):
+        # Ferromagnetic non-adjacent twin (sigma = +1): J_uv = 0, h_u = h_v = 1, J_uw1 = J_vw1 = 3, J_uw2 = J_vw2 = -3
+        m_twin_pos = rel_fixture(
+            [:u, :v, :w1, :w2],
+            [1.0, 1.0, 5.0, -5.0],
+            [
+                0.0 0.0  3.0 -3.0;
+                0.0 0.0  3.0 -3.0;
+                0.0 0.0  0.0  0.0;
+                0.0 0.0  0.0  0.0
+            ];
+            domain=:spin,
+        )
+        ws_twin_pos = Workspace(m_twin_pos; rules=:relations)
+        cp_twin_pos = checkpoint(ws_twin_pos)
+        @test prove_relation(ws_twin_pos, :u, :v; allow_weak=false).stop_reason === :not_strict
+        att_twin_pos = prove_relation(ws_twin_pos, :u, :v; allow_weak=true)
+        @test att_twin_pos.stop_reason === :proved && att_twin_pos.method === :coflip_pair
+        @test only(att_twin_pos.certificate.steps).sign == 1
+        @test persistency(only(att_twin_pos.certificate.steps)) === :weak
+        @test verify_certificate(ws_twin_pos, att_twin_pos.certificate).valid
+        @test contract_relations!(ws_twin_pos; allow_weak=false).deductions == 0
+        rep_twin_pos = contract_relations!(ws_twin_pos; allow_weak=true, max_deductions=1)
+        @test rep_twin_pos.deductions == 1
+        @test relation_map(ws_twin_pos, :u) == (:v => 1)
+        @test verify_certificate(ws_twin_pos, export_certificate(ws_twin_pos)).valid
+        rollback!(ws_twin_pos, cp_twin_pos)
+        check_exhaustive_relation!(ws_twin_pos, m_twin_pos, :spin, :min; allow_weak=true)
+
+        # Anti-ferromagnetic non-adjacent twin (sigma = -1): J_uv = 0, h_u = -h_v = 1, J_uw1 = -J_vw1 = 3, J_uw2 = -J_vw2 = -3
+        m_twin_neg = rel_fixture(
+            [:u, :v, :w1, :w2],
+            [1.0, -1.0, 5.0, -5.0],
+            [
+                0.0 0.0  3.0 -3.0;
+                0.0 0.0 -3.0  3.0;
+                0.0 0.0  0.0  0.0;
+                0.0 0.0  0.0  0.0
+            ];
+            domain=:spin,
+        )
+        ws_twin_neg = Workspace(m_twin_neg; rules=:relations)
+        @test prove_relation(ws_twin_neg, :u, :v; allow_weak=false).stop_reason === :not_strict
+        att_twin_neg = prove_relation(ws_twin_neg, :u, :v; allow_weak=true)
+        @test att_twin_neg.stop_reason === :proved && att_twin_neg.method === :coflip_pair
+        @test only(att_twin_neg.certificate.steps).sign == -1
+        @test persistency(only(att_twin_neg.certificate.steps)) === :weak
+        @test verify_certificate(ws_twin_neg, att_twin_neg.certificate).valid
+        # Also test discovery via schedule_reductions!(ws; allow_weak_relations=true):
+        ws_sched_twin = Workspace(m_twin_neg; rules=:mixed)
+        srep = schedule_reductions!(ws_sched_twin; enable_dominance=false, enable_elimination=false, allow_weak_relations=true, max_fill=0)
+        @test srep.relation_deductions >= 1 && srep.fill_edges == 0
+        @test verify_certificate(ws_sched_twin, export_certificate(ws_sched_twin)).valid
+        check_exhaustive_relation!(ws_twin_neg, m_twin_neg, :spin, :min; allow_weak=true)
+
+        # 5. Uniform ferromagnetic clique K_4 contraction:
+        # Every vertex has h_i = 1 and J_ij = -2 (so R_u = 4 > |J_uv| = 2; neither unary dominance nor Rule 1 nor GLK fires),
+        # yet :coflip_pair contracts all 3 pairs down to 1 single representative with :strong persistency!
+        m_clique = rel_fixture(
+            [:c1, :c2, :c3, :c4],
+            [1.0, 1.0, 1.0, 1.0],
+            [
+                0.0 -2.0 -2.0 -2.0;
+                0.0  0.0 -2.0 -2.0;
+                0.0  0.0  0.0 -2.0;
+                0.0  0.0  0.0  0.0
+            ];
+            domain=:spin,
+        )
+        ws_clique = Workspace(m_clique; rules=:relations)
+        cp_clique = checkpoint(ws_clique)
+        rep_clique = contract_relations!(ws_clique; cascade_dominance=false)
+        @test rep_clique.deductions == 3
+        @test QT.dimension(export_model(materialize(ws_clique))) == 1
+        @test certificate_guarantee(export_certificate(ws_clique)) === :optimum_preserving_restriction
+        @test persistency(export_certificate(ws_clique)) === :strong
+        @test verify_certificate(ws_clique, export_certificate(ws_clique)).valid
+        rollback!(ws_clique, cp_clique)
+        check_exhaustive_relation!(ws_clique, m_clique, :spin, :min; allow_weak=false)
+
+        # 6. Verifier rejects tampered :coflip_pair RelationStep certificates:
+        ws_tamper = Workspace(m_opp; rules=:relations)
+        valid_coflip = only(prove_relation(ws_tamper, :u, :v).certificate.steps)
+        # Forged tighter lower bound (lower = 2 // 1 > exact 3 // 2):
+        forged_lo = RelationStep(
+            valid_coflip.eliminated, valid_coflip.representative,
+            valid_coflip.sign, valid_coflip.orig_sign,
+            2 // 1, valid_coflip.upper, valid_coflip.constant,
+            0, :coflip_pair, 0, :strong,
+        )
+        vr_lo = verify_certificate(ws_tamper, DominanceCertificate(generation(ws_tamper), checkpoint(ws_tamper), (), (forged_lo,), ws_tamper._snapshot))
+        @test !vr_lo.valid && vr_lo.stop_reason === :invalid_bound
+
+        # Forged :strong persistency on a :weak L_coflip == 0 tie:
+        ws_tie_t = Workspace(m_coflip_tie; rules=:relations)
+        weak_coflip = only(prove_relation(ws_tie_t, :u, :v; allow_weak=true).certificate.steps)
+        forged_strong = RelationStep(
+            weak_coflip.eliminated, weak_coflip.representative,
+            weak_coflip.sign, weak_coflip.orig_sign,
+            weak_coflip.lower, weak_coflip.upper, weak_coflip.constant,
+            0, :coflip_pair, 0, :strong,
+        )
+        vr_strong = verify_certificate(ws_tie_t, DominanceCertificate(generation(ws_tie_t), checkpoint(ws_tie_t), (), (forged_strong,), ws_tie_t._snapshot))
+        @test !vr_strong.valid && vr_strong.stop_reason === :invalid_bound
+
+        # Forged :strong persistency on a non-adjacent twin (center == 0):
+        ws_twin_t = Workspace(m_twin_pos; rules=:relations)
+        twin_step = only(prove_relation(ws_twin_t, :u, :v; allow_weak=true).certificate.steps)
+        forged_twin_strong = RelationStep(
+            twin_step.eliminated, twin_step.representative,
+            twin_step.sign, twin_step.orig_sign,
+            twin_step.lower, twin_step.upper, twin_step.constant,
+            0, :coflip_pair, 0, :strong,
+        )
+        vr_twin = verify_certificate(ws_twin_t, DominanceCertificate(generation(ws_twin_t), checkpoint(ws_twin_t), (), (forged_twin_strong,), ws_twin_t._snapshot))
+        @test !vr_twin.valid && vr_twin.stop_reason === :invalid_bound
+
+        # 7. allow_weak=true does not downgrade :strong persistency when :exact or :glk_pair ties at 0:
+        # (a) :exact ties at 0 (center - R_u = 1 - 1 = 0) while :coflip_pair has lo_cf = 1//2 > 0:
+        ws_up_exact = Workspace(rel_fixture(
+            [:a, :b, :c], [0.0, 0.0, 0.0], [0.0 -1.0 1.0; 0.0 0.0 0.0; 0.0 0.0 0.0]; domain=:spin
+        ); rules=:relations)
+        att_up_ex = prove_relation(ws_up_exact, :a, :b; allow_weak=true)
+        @test att_up_ex.stop_reason === :proved && att_up_ex.method === :coflip_pair
+        @test persistency(only(att_up_ex.certificate.steps)) === :strong
+        @test only(att_up_ex.certificate.steps).lower == 1 // 2
+        # (b) :glk_pair ties at 0 (lo_glk = 4 + 3 - 7 = 0) while :coflip_pair has lo_cf = 4 > 0:
+        ws_up_glk = Workspace(rel_fixture(
+            [:u, :v, :w], [3.0, 3.0, 2.0], [0.0 -4.0 7.0; 0.0 0.0 7.0; 0.0 0.0 0.0]; domain=:spin
+        ); rules=:relations)
+        att_up_glk = prove_relation(ws_up_glk, :u, :v; allow_weak=true)
+        @test att_up_glk.stop_reason === :proved && att_up_glk.method === :coflip_pair
+        @test persistency(only(att_up_glk.certificate.steps)) === :strong
+        @test only(att_up_glk.certificate.steps).lower == 4 // 1
     end
 end
 

@@ -45,6 +45,8 @@ certificate's active coordinate representation. For `method in (:interval, :exac
 For `method === :glk_pair`, `lower` and `upper` record the exact Glover–Lewis–Kochenberger
 cross-endpoint flip margins ruling out the two violating states
 ``(t_u, t_v) \\in \\{(-\\sigma, +1), (+\\sigma, -1)\\}``.
+For `method === :coflip_pair`, `lower` and `upper` record the exact shared-neighborhood
+co-flip bounds ``-\\sigma \\tilde{J}_{uv} \\mp \\frac{1}{2}(|\\tilde{h}_u - \\sigma \\tilde{h}_v| + \\sum_{w \\notin \\{u,v\\}} |\\tilde{J}_{uw} - \\sigma \\tilde{J}_{vw}|)``.
 `persistency` is `:strong` when `lower > 0` and `:weak` when `lower == 0`.
 """
 struct RelationStep <: _ProofRecord
@@ -868,6 +870,9 @@ function _relation_witness(ws::Workspace, u::Int, v::Int;
     h_abs_lo = (h_lo <= 0.0 && h_hi >= 0.0) ? 0.0 : min(abs(h_lo), abs(h_hi))
     rad_hi = h_abs_hi
     rad_other_lo = 0.0
+    shared_v_lo = 0.0
+    cancel_pos_hi = 0.0
+    cancel_neg_hi = 0.0
     j_uv_lo, j_uv_hi = 0.0, 0.0
     q_uv = _Exact(0)
     visits = 0
@@ -891,6 +896,27 @@ function _relation_witness(ws::Workspace, u::Int, v::Int;
             m_in = (c_lo <= 0.0 && c_hi >= 0.0) ? 0.0 : min(abs(c_lo), abs(c_hi))
             rad_hi = _nextfloat_finite(rad_hi + m)
             rad_other_lo = _prevfloat_finite(rad_other_lo + m_in)
+            pos_vw = get(st.adj_pos[v], w, 0)
+            if pos_vw != 0
+                q_vw = st.adjacency[v][pos_vw].second
+                if !iszero(q_vw)
+                    qv_lo, qv_hi = _enclose(q_vw)
+                    if !is_spin_dom
+                        qv_lo = prevfloat(0.25 * qv_lo)
+                        qv_hi = nextfloat(0.25 * qv_hi)
+                    end
+                    cv_lo, cv_hi = (direction * (g_v * g_w) >= 0) ? (qv_lo, qv_hi) : (-qv_hi, -qv_lo)
+                    mv_hi = max(abs(cv_lo), abs(cv_hi))
+                    mv_lo = (cv_lo <= 0.0 && cv_hi >= 0.0) ? 0.0 : min(abs(cv_lo), abs(cv_hi))
+                    shared_v_lo = _prevfloat_finite(shared_v_lo + mv_lo)
+                    if (c_hi > 0.0 && cv_hi > 0.0) || (c_lo < 0.0 && cv_lo < 0.0)
+                        cancel_pos_hi = _nextfloat_finite(cancel_pos_hi + min(m, mv_hi))
+                    end
+                    if (c_hi > 0.0 && cv_lo < 0.0) || (c_lo < 0.0 && cv_hi > 0.0)
+                        cancel_neg_hi = _nextfloat_finite(cancel_neg_hi + min(m, mv_hi))
+                    end
+                end
+            end
         end
     end
     q_uv_mapped_nonpos = iszero(q_uv) || ((direction * (g_u * g_v) >= 0) ? (q_uv < 0) : (q_uv > 0))
@@ -906,32 +932,60 @@ function _relation_witness(ws::Workspace, u::Int, v::Int;
                             predecessors, :interval, scope_length, :strong)
         return (step, :proved, :interval, visits, 0, 0)
     end
+    hv_raw = _spin_field(ws, v)
+    hvr_lo, hvr_hi = _enclose(hv_raw)
+    hv_lo, hv_hi = (direction * g_v >= 0) ? (hvr_lo, hvr_hi) : (-hvr_hi, -hvr_lo)
+    rv_lo = shared_v_lo
+    has_summary = st.lower !== nothing && st.upper !== nothing
+    rad_v_other_lo = 0.0
+    if has_summary
+        up_v_lo, _ = _enclose(st.upper[v])
+        _, lo_v_hi = _enclose(st.lower[v])
+        scale_inv = is_spin_dom ? 0.5 : 0.25
+        tot_v_lo = _prevfloat_finite(scale_inv * _prevfloat_finite(up_v_lo - lo_v_hi))
+        j_abs_hi = max(abs(j_uv_lo), abs(j_uv_hi))
+        rad_v_other_lo = _prevfloat_finite(tot_v_lo - j_abs_hi)
+        rv_lo = max(rv_lo, rad_v_other_lo)
+    end
+    function _coflip_cand_possible(s_cand::Int; strict_only::Bool=false)
+        c_cand_hi = s_cand == 1 ? -j_uv_lo : j_uv_hi
+        if iszero(q_uv)
+            (!strict_only && allow_weak && st.degrees[u] == st.degrees[v] && abs(h_u_raw) == abs(hv_raw)) || return false
+            (direction * g_u * h_u_raw) == s_cand * (direction * g_v * hv_raw) || return false
+        else
+            c_cand_hi > 0.0 || return false
+        end
+        canc_hi = s_cand == 1 ? cancel_pos_hi : cancel_neg_hi
+        hd_lo = s_cand == 1 ? _prevfloat_finite(h_lo - hv_hi) : _prevfloat_finite(h_lo + hv_lo)
+        hd_hi = s_cand == 1 ? _nextfloat_finite(h_hi - hv_lo) : _nextfloat_finite(h_hi + hv_hi)
+        hd_abs_lo = (hd_lo <= 0.0 && hd_hi >= 0.0) ? 0.0 : min(abs(hd_lo), abs(hd_hi))
+        two_rad_lo = _prevfloat_finite(_prevfloat_finite(hd_abs_lo + _prevfloat_finite(rad_other_lo + rv_lo)) - _nextfloat_finite(2.0 * canc_hi))
+        two_c_hi = _nextfloat_finite(2.0 * c_cand_hi)
+        if isfinite(two_c_hi) && isfinite(two_rad_lo)
+            strict_only ? (two_c_hi <= two_rad_lo && return false) : (two_c_hi < two_rad_lo && return false)
+        end
+        return true
+    end
+    coflip_possible = (sign === nothing && iszero(q_uv)) ?
+        (_coflip_cand_possible(1) || _coflip_cand_possible(-1)) :
+        _coflip_cand_possible(σ)
     lower_hi = _nextfloat_finite(center_hi - _prevfloat_finite(h_abs_lo + rad_other_lo))
     if isfinite(lower_hi) && lower_hi < 0.0
         best_u_hi = _nextfloat_finite(_nextfloat_finite(center_hi + h_abs_hi) - rad_other_lo)
         # Note: `:glk_pair` (line 960 and `_verify_relation_step` line 3172) requires
         # `center_exact > 0 && !iszero(h_u)` even when `sign` is explicitly supplied.
-        if iszero(h_u_raw) || center_hi <= 0.0 || (isfinite(best_u_hi) && best_u_hi < 0.0)
-            return (nothing, :not_strict, :interval, visits, 0, 0)
-        elseif st.lower !== nothing && st.upper !== nothing
-            up_v_lo, _ = _enclose(st.upper[v])
-            _, lo_v_hi = _enclose(st.lower[v])
-            scale_inv = is_spin_dom ? 0.5 : 0.25
-            tot_v_lo = _prevfloat_finite(scale_inv * _prevfloat_finite(up_v_lo - lo_v_hi))
-            j_abs_hi = max(abs(j_uv_lo), abs(j_uv_hi))
-            rad_v_other_lo = _prevfloat_finite(tot_v_lo - j_abs_hi)
-            hv_raw = _spin_field(ws, v)
-            hvr_lo, hvr_hi = _enclose(hv_raw)
-            hv_lo, hv_hi = (direction * g_v >= 0) ? (hvr_lo, hvr_hi) : (-hvr_hi, -hvr_lo)
+        glk_possible = !iszero(h_u_raw) && center_hi > 0.0 && !(isfinite(best_u_hi) && best_u_hi < 0.0)
+        if glk_possible && has_summary
             h_u_pos = (direction * g_u >= 0) ? (h_u_raw > 0) : (h_u_raw < 0)
             σ_hu_pos = (σ == 1) ? h_u_pos : !h_u_pos
             m_v_req_hi = σ_hu_pos ?
                 _nextfloat_finite(_nextfloat_finite(center_hi + hv_hi) - rad_v_other_lo) :
                 _nextfloat_finite(_nextfloat_finite(center_hi - hv_lo) - rad_v_other_lo)
             if isfinite(m_v_req_hi) && m_v_req_hi < 0.0
-                return (nothing, :not_strict, :interval, visits, 0, 0)
+                glk_possible = false
             end
         end
+        (glk_possible || coflip_possible) || return (nothing, :not_strict, :interval, visits, 0, 0)
     end
     degree <= max_work - visits || return (nothing, :work_limit, :interval, visits, 0, 0)
     degree < max_exact_work || return (nothing, :verification_limit, :interval, visits, 0, 0)
@@ -956,50 +1010,118 @@ function _relation_witness(ws::Workspace, u::Int, v::Int;
     rad_exact = abs(h_u) + rad_u_other
     lower = center_exact - rad_exact
     upper = center_exact + rad_exact
-    if lower > 0 || (allow_weak && lower >= 0)
+    if lower > 0
         c_val = _mapped_constant(ws, map)
-        pers = lower > 0 ? :strong : :weak
         step = RelationStep(u, v, σ, orig_σ, deepcopy(lower), deepcopy(upper), deepcopy(c_val),
-                            predecessors, :exact, scope_length, pers)
+                            predecessors, :exact, scope_length, :strong)
         return (step, :proved, :exact, visits, 1, exact_work)
     end
+    weak_exact = allow_weak && lower >= 0
+    deg_v = length(st.adjacency[v])
+    v_budget_ok = !weak_exact || (deg_v <= max_work - visits && 1 + deg_v <= max_exact_work - exact_work)
     best_u = center_exact + abs(h_u) - rad_u_other
-    if center_exact > 0 && !iszero(h_u) && (best_u > 0 || (allow_weak && best_u >= 0))
-        deg_v = length(st.adjacency[v])
-        deg_v <= max_work - visits || return (nothing, :work_limit, :glk_pair, visits, 1, exact_work)
-        1 + deg_v <= max_exact_work - exact_work || return (nothing, :verification_limit, :glk_pair, visits, 1, exact_work)
-        h_v = direction * g_v * _spin_field(ws, v)
+    glk_ok = v_budget_ok && center_exact > 0 && !iszero(h_u) && (best_u > 0 || (!weak_exact && allow_weak && best_u >= 0))
+    coflip_ok = v_budget_ok && (weak_exact ?
+        (center_exact > 0 && _coflip_cand_possible(σ; strict_only=true)) :
+        (coflip_possible && (center_exact > 0 || (allow_weak && iszero(center_exact) && iszero(q_uv) && st.degrees[u] == st.degrees[v]))))
+    err_method = :exact
+    weak_glk = false
+    lo_glk = _Exact(0)
+    hi_glk = _Exact(0)
+    weak_cf = false
+    weak_cf_s = σ
+    lo_cf_weak = _Exact(0)
+    hi_cf_weak = _Exact(0)
+    if glk_ok || coflip_ok
+        err_method = glk_ok ? :glk_pair : :coflip_pair
+        deg_v <= max_work - visits || return (nothing, :work_limit, err_method, visits, 1, exact_work)
+        1 + deg_v <= max_exact_work - exact_work || return (nothing, :verification_limit, err_method, visits, 1, exact_work)
+        h_v = direction * g_v * hv_raw
         exact_work += 1
         rad_v_other = _Exact(0)
+        diff_pos = rad_u_other
+        diff_neg = rad_u_other
         for (w, q) in st.adjacency[v]
-            _expired(deadline_ns) && return (nothing, :deadline, :glk_pair, visits, 1, exact_work)
+            _expired(deadline_ns) && return (nothing, :deadline, err_method, visits, 1, exact_work)
             visits += 1
             st.fixed[w] == 2 || continue
             if w != u
                 g_w = map === nothing ? 1 : map.gauge[w]
                 J_vw = direction * (g_v * g_w) * _spin_coupling(ws, q)
                 rad_v_other += abs(J_vw)
+                if coflip_ok
+                    pos_uw = get(st.adj_pos[u], w, 0)
+                    q_uw = pos_uw == 0 ? _Exact(0) : st.adjacency[u][pos_uw].second
+                    if !iszero(q_uw)
+                        J_uw = direction * (g_u * g_w) * _spin_coupling(ws, q_uw)
+                        diff_pos += abs(J_uw - J_vw) - abs(J_uw)
+                        diff_neg += abs(J_uw + J_vw) - abs(J_uw)
+                    else
+                        diff_pos += abs(J_vw)
+                        diff_neg += abs(J_vw)
+                    end
+                end
             end
             exact_work += 1
         end
-        _expired(deadline_ns) && return (nothing, :deadline, :glk_pair, visits, 1, exact_work)
-        m_u_1 = center_exact - σ * h_u - rad_u_other
-        m_u_2 = center_exact + σ * h_u - rad_u_other
-        m_v_1 = center_exact + h_v - rad_v_other
-        m_v_2 = center_exact - h_v - rad_v_other
-        lo_a, hi_a = minmax(m_u_1, m_v_2)
-        lo_b, hi_b = minmax(m_v_1, m_u_2)
-        lo_glk, hi_glk = (lo_a > lo_b || (lo_a == lo_b && hi_a >= hi_b)) ? (lo_a, hi_a) : (lo_b, hi_b)
-        if lo_glk > 0 || (allow_weak && lo_glk >= 0)
-            c_val = _mapped_constant(ws, map)
-            pers = lo_glk > 0 ? :strong : :weak
-            step = RelationStep(u, v, σ, orig_σ, deepcopy(lo_glk), deepcopy(hi_glk), deepcopy(c_val),
-                                predecessors, :glk_pair, scope_length, pers)
-            return (step, :proved, :glk_pair, visits, 1, exact_work)
+        _expired(deadline_ns) && return (nothing, :deadline, err_method, visits, 1, exact_work)
+        if glk_ok
+            m_u_1 = center_exact - σ * h_u - rad_u_other
+            m_u_2 = center_exact + σ * h_u - rad_u_other
+            m_v_1 = center_exact + h_v - rad_v_other
+            m_v_2 = center_exact - h_v - rad_v_other
+            lo_a, hi_a = minmax(m_u_1, m_v_2)
+            lo_b, hi_b = minmax(m_v_1, m_u_2)
+            lo_glk, hi_glk = (lo_a > lo_b || (lo_a == lo_b && hi_a >= hi_b)) ? (lo_a, hi_a) : (lo_b, hi_b)
+            if lo_glk > 0
+                c_val = _mapped_constant(ws, map)
+                step = RelationStep(u, v, σ, orig_σ, deepcopy(lo_glk), deepcopy(hi_glk), deepcopy(c_val),
+                                    predecessors, :glk_pair, scope_length, :strong)
+                return (step, :proved, :glk_pair, visits, 1, exact_work)
+            elseif allow_weak && lo_glk >= 0
+                weak_glk = true
+            end
         end
-        return (nothing, :not_strict, :glk_pair, visits, 1, exact_work)
+        if coflip_ok
+            cands_cf = (sign === nothing && iszero(q_uv)) ? (1, -1) : (σ,)
+            for s_cf in cands_cf
+                diff_cf = s_cf == 1 ? diff_pos : diff_neg
+                rad_cf = (abs(h_u - s_cf * h_v) + diff_cf) // 2
+                lo_cf = center_exact - rad_cf
+                hi_cf = center_exact + rad_cf
+                if lo_cf > 0
+                    c_val = _mapped_constant(ws, map)
+                    orig_s_cf = g_u * g_v * s_cf
+                    step = RelationStep(u, v, s_cf, orig_s_cf, deepcopy(lo_cf), deepcopy(hi_cf), deepcopy(c_val),
+                                        predecessors, :coflip_pair, scope_length, :strong)
+                    return (step, :proved, :coflip_pair, visits, 1, exact_work)
+                elseif allow_weak && lo_cf >= 0 && !weak_cf
+                    weak_cf = true
+                    weak_cf_s = s_cf
+                    lo_cf_weak = lo_cf
+                    hi_cf_weak = hi_cf
+                end
+            end
+        end
     end
-    return (nothing, :not_strict, :exact, visits, 1, exact_work)
+    if weak_exact
+        c_val = _mapped_constant(ws, map)
+        step = RelationStep(u, v, σ, orig_σ, deepcopy(lower), deepcopy(upper), deepcopy(c_val),
+                            predecessors, :exact, scope_length, :weak)
+        return (step, :proved, :exact, visits, 1, exact_work)
+    elseif weak_glk
+        c_val = _mapped_constant(ws, map)
+        step = RelationStep(u, v, σ, orig_σ, deepcopy(lo_glk), deepcopy(hi_glk), deepcopy(c_val),
+                            predecessors, :glk_pair, scope_length, :weak)
+        return (step, :proved, :glk_pair, visits, 1, exact_work)
+    elseif weak_cf
+        c_val = _mapped_constant(ws, map)
+        orig_s_cf = g_u * g_v * weak_cf_s
+        step = RelationStep(u, v, weak_cf_s, orig_s_cf, deepcopy(lo_cf_weak), deepcopy(hi_cf_weak), deepcopy(c_val),
+                            predecessors, :coflip_pair, scope_length, :weak)
+        return (step, :proved, :coflip_pair, visits, 1, exact_work)
+    end
+    return (nothing, :not_strict, err_method, visits, 1, exact_work)
 end
 
 function _elimination_witness(ws::Workspace, u::Int;
@@ -3141,7 +3263,7 @@ function _verify_relation_step(
     expected_sign = active_map === nothing ? step.orig_sign :
         (active_map.gauge[u] * active_map.gauge[v] * step.orig_sign)
     step.sign == expected_sign || return (false, :invalid_value, 0)
-    step.method in (:interval, :exact, :glk_pair) && step.persistency in (:strong, :weak) ||
+    step.method in (:interval, :exact, :glk_pair, :coflip_pair) && step.persistency in (:strong, :weak) ||
         return (false, :invalid_method, 0)
     direction = _direction_poly(p)
     direction != 0 || return (false, :zero_scale, 0)
@@ -3186,6 +3308,32 @@ function _verify_relation_step(
         lo_a, hi_a = minmax(m_u_1, m_v_2)
         lo_b, hi_b = minmax(m_v_1, m_u_2)
         lower, upper = (lo_a > lo_b || (lo_a == lo_b && hi_a >= hi_b)) ? (lo_a, hi_a) : (lo_b, hi_b)
+        enclosure = (step.lower == lower && step.upper == upper)
+    elseif step.method === :coflip_pair
+        center >= 0 || return (false, :invalid_bound, cost)
+        g_v = active_map === nothing ? 1 : active_map.gauge[v]
+        h_v = direction * g_v * p.h_spin[v]
+        diff_sum = rad_u_other
+        for (nbr, q) in p.adj[v]
+            _expired(deadline) && return (false, :deadline, cost)
+            p.active[nbr] || continue
+            if nbr != u
+                g_nbr = active_map === nothing ? 1 : active_map.gauge[nbr]
+                J_vw = direction * (g_v * g_nbr) * (is_bool ? (q // 4) : q)
+                pos_uw = get(p.adj_pos[u], nbr, 0)
+                q_uw = (pos_uw != 0 && p.active[nbr]) ? p.adj[u][pos_uw].second : _Exact(0)
+                if !iszero(q_uw)
+                    J_uw = direction * (g_u * g_nbr) * (is_bool ? (q_uw // 4) : q_uw)
+                    diff_sum += abs(J_uw - step.sign * J_vw) - abs(J_uw)
+                else
+                    diff_sum += abs(J_vw)
+                end
+            end
+        end
+        _expired(deadline) && return (false, :deadline, cost)
+        rad_cf = (abs(h_u - step.sign * h_v) + diff_sum) // 2
+        lower = center - rad_cf
+        upper = center + rad_cf
         enclosure = (step.lower == lower && step.upper == upper)
     else
         rad = abs(h_u) + rad_u_other
