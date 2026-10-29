@@ -167,27 +167,31 @@ function _elimination_fill(st::_Incremental, quad_deltas)
     return fill
 end
 
-function _deferred_elim_eligible(st::_Incremental, b::Int, u::Int, mf::Int)
+function _deferred_elim_eligible(ws::Workspace, b::Int, u::Int, mf::Int)
+    st = ws._state
     return st.fixed[u] == 2 && st.degrees[u] == b - 1 && !st.elim_queued[b][u] &&
+           (b < 4 || _is_quadratic_deg3(ws, u)) &&
            st.elim_blocked_fill[b][u] < typemax(Int) && mf >= st.elim_blocked_fill[b][u]
 end
 
-function _next_deferred_elim(st::_Incremental, md::Int, mf::Int; min_bucket::Int=1)
+function _next_deferred_elim(ws::Workspace, md::Int, mf::Int; min_bucket::Int=1)
+    st = ws._state
     @inbounds for b in min_bucket:(md + 1)
         for u in st.elim_deferred[b]
-            _deferred_elim_eligible(st, b, u, mf) && return b
+            _deferred_elim_eligible(ws, b, u, mf) && return b
         end
     end
     return 0
 end
 
-function _count_deferred_elim(st::_Incremental, md::Int, mf::Int; min_bucket::Int=1)
+function _count_deferred_elim(ws::Workspace, md::Int, mf::Int; min_bucket::Int=1)
+    st = ws._state
     cnt = 0
     @inbounds for b in min_bucket:(md + 1)
         q = st.elim_deferred[b]
         for idx in eachindex(q)
             u = q[idx]
-            if _deferred_elim_eligible(st, b, u, mf)
+            if _deferred_elim_eligible(ws, b, u, mf)
                 !(u in view(q, 1:(idx - 1))) && (cnt += 1)
             end
         end
@@ -200,7 +204,7 @@ function _requeue_deferred_elim!(ws::Workspace, md::Int, mf::Int; min_bucket::In
     @inbounds for b in min_bucket:(md + 1)
         q = st.elim_queues[b]
         for u in st.elim_deferred[b]
-            if _deferred_elim_eligible(st, b, u, mf)
+            if _deferred_elim_eligible(ws, b, u, mf)
                 st.serial == typemax(UInt64) && throw(ArgumentError("trail serial exhausted; reset workspace"))
                 entry = _UndoQueue(
                     st.serial + 1, length(st.fixes), u, st.elim_heads[b], false,
@@ -1954,7 +1958,7 @@ function _step_elimination_queue!(
     end
     b = _next_elim_bucket(st, md; min_bucket)
     u = st.elim_queues[b][st.elim_heads[b]]
-    if st.fixed[u] != 2 || direction == 0 || st.degrees[u] != b - 1 || (b == 4 && !iszero(_spin_field(ws, u)))
+    if st.fixed[u] != 2 || direction == 0 || st.degrees[u] != b - 1 || (b == 4 && !_is_quadratic_deg3(ws, u))
         _pop_elim_queue!(ws, b)
         return (:continue, 1, 0, 0, 0, 0, 0)
     end
@@ -2011,7 +2015,8 @@ end
 
 Run queue-driven exact local elimination for free vertices of active degree
 `0 <= degree(ws, label) <= max_degree` (default `max_degree=2`; `max_degree=3`
-enables guarded zero-field degree-three Ising star–triangle reduction) without
+enables guarded degree-three Ising reduction whenever the local conditional minimum has
+zero cubic Fourier coefficient `α_123 = 0`) without
 scanning the whole graph per elimination. Eliminations that would introduce more
 than `max_fill` new fill edges are skipped and deferred. When
 `cascade_dominance=true` (requiring `Workspace(model; rules=:dominance)`,
@@ -2055,13 +2060,13 @@ function eliminate_low_degree!(
         @inbounds for b in 1:(md + 1)
             p += length(st.elim_queues[b]) - st.elim_heads[b] + 1
         end
-        p += _count_deferred_elim(st, md, mf)
+        p += _count_deferred_elim(ws, md, mf)
         return p
     end
     finish(reason) = _propagation_report!(ws, reason, candidates, edges, deductions, exact;
                                           pending=pending_count())
     direction = _direction(ws._snapshot)
-    while _next_elim_bucket(st, md) != 0 || _next_deferred_elim(st, md, mf) != 0 || (cascade_dominance && st.head <= length(st.queue))
+    while _next_elim_bucket(st, md) != 0 || _next_deferred_elim(ws, md, mf) != 0 || (cascade_dominance && st.head <= length(st.queue))
         if cascade_dominance && st.head <= length(st.queue)
             _expired(deadline_ns) && return finish(:deadline)
             deductions < max_deductions || return finish(:deduction_limit)
@@ -2446,7 +2451,7 @@ function _has_fill_blocked_elim(ws::Workspace, b::Int, mf::Int)
     st = ws._state
     @inbounds for u in st.elim_deferred[b]
         if st.fixed[u] == 2 && st.degrees[u] == b - 1 && !st.elim_queued[b][u] &&
-           (b < 4 || iszero(_spin_field(ws, u))) &&
+           (b < 4 || _is_quadratic_deg3(ws, u)) &&
            mf < st.elim_blocked_fill[b][u] < typemax(Int)
             return true
         end
@@ -2485,21 +2490,21 @@ function _has_star_candidate(ws::Workspace, mf::Int)
     idx = max(st.elim_heads[4], st.star_hint)
     @inbounds while idx <= length(q)
         u = q[idx]
-        if st.fixed[u] == 2 && st.degrees[u] == 3 && iszero(_spin_field(ws, u))
+        if st.fixed[u] == 2 && st.degrees[u] == 3 && _is_quadratic_deg3(ws, u)
             st.star_hint = idx
             return true
         end
         idx += 1
     end
     st.star_hint = idx
-    return _next_deferred_elim(st, 3, mf; min_bucket=4) != 0
+    return _next_deferred_elim(ws, 3, mf; min_bucket=4) != 0
 end
 
 function _has_rel_candidate(st::_Incremental, mf::Int, allow_weak::Bool)
     st.active_edges > 0 || return false
     idx = max(st.rel_head, st.rel_hint)
     @inbounds while idx <= length(st.rel_queue)
-        u = st.rel_queue[idx]
+        u = q_u = st.rel_queue[idx]
         if st.fixed[u] == 2 && st.degrees[u] >= 1
             st.rel_hint = idx
             return true
@@ -2524,7 +2529,7 @@ function _disabled_optional_passes_with_work(
     if !enable_dominance && length(st.fixes) < length(st.fixed) && st.head <= length(st.queue)
         push!(out, :dominance)
     end
-    if !enable_elimination && (_next_elim_bucket(st, 2) != 0 || _next_deferred_elim(st, 2, mf) != 0)
+    if !enable_elimination && (_next_elim_bucket(st, 2) != 0 || _next_deferred_elim(ws, 2, mf) != 0)
         push!(out, :elimination)
     end
     if !enable_star_triangle && _has_star_candidate(ws, mf)
@@ -2603,11 +2608,11 @@ function schedule_reductions!(
             for b in 1:3
                 p += length(st.elim_queues[b]) - st.elim_heads[b] + 1
             end
-            p += _count_deferred_elim(st, 2, ef)
+            p += _count_deferred_elim(ws, 2, ef)
         end
         if enable_star_triangle
             p += length(st.elim_queues[4]) - st.elim_heads[4] + 1
-            p += _count_deferred_elim(st, 3, ef; min_bucket=4)
+            p += _count_deferred_elim(ws, 3, ef; min_bucket=4)
         end
         if enable_relations
             p += (length(st.rel_queue) - st.rel_head + 1) + _count_deferred_rel(st, ef, allow_weak_relations)
@@ -2680,10 +2685,10 @@ function schedule_reductions!(
             push!(passes, SchedulePassSummary(:dominance, p_reason, p_cand, p_edges, p_ded, p_exact, p_fb, 0))
             p_reason === :quiescent || return finish(p_reason)
             continue
-        elseif enable_elimination && (_next_elim_bucket(st, 2) != 0 || _next_deferred_elim(st, 2, ef) != 0)
+        elseif enable_elimination && (_next_elim_bucket(st, 2) != 0 || _next_deferred_elim(ws, 2, ef) != 0)
             p_cand = p_edges = p_ded = p_exact = p_fb = p_fill = 0
             p_reason = :quiescent
-            while _next_elim_bucket(st, 2) != 0 || _next_deferred_elim(st, 2, eff_fill()) != 0
+            while _next_elim_bucket(st, 2) != 0 || _next_deferred_elim(ws, 2, eff_fill()) != 0
                 (enable_dominance && st.head <= length(st.queue) && p_ded > 0) && break
                 if deductions >= max_deductions
                     p_reason = :deduction_limit
@@ -2705,10 +2710,10 @@ function schedule_reductions!(
             push!(passes, SchedulePassSummary(:elimination, p_reason, p_cand, p_edges, p_ded, p_exact, p_fb, p_fill))
             p_reason === :quiescent || return finish(p_reason)
             continue
-        elseif enable_star_triangle && (_next_elim_bucket(st, 3; min_bucket=4) != 0 || _next_deferred_elim(st, 3, ef; min_bucket=4) != 0)
+        elseif enable_star_triangle && (_next_elim_bucket(st, 3; min_bucket=4) != 0 || _next_deferred_elim(ws, 3, ef; min_bucket=4) != 0)
             p_cand = p_edges = p_ded = p_exact = p_fb = p_fill = 0
             p_reason = :quiescent
-            while p_ded == 0 && (_next_elim_bucket(st, 3; min_bucket=4) != 0 || _next_deferred_elim(st, 3, eff_fill(); min_bucket=4) != 0)
+            while p_ded == 0 && (_next_elim_bucket(st, 3; min_bucket=4) != 0 || _next_deferred_elim(ws, 3, eff_fill(); min_bucket=4) != 0)
                 if deductions >= max_deductions
                     p_reason = :deduction_limit
                     break
