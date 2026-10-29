@@ -2210,7 +2210,7 @@ end
                         pos_bw = get(st.adj_pos[b_large], w, 0)
                         if pos_bw != 0
                             q_bw = st.adjacency[b_large][pos_bw].second
-                            if orig_σ * q_aw * q_bw > 0
+                            if !iszero(q_bw) && ((q_aw > 0) == (orig_σ > 0 ? (q_bw > 0) : (q_bw < 0)))
                                 has_compat_shared = true
                                 break
                             end
@@ -2354,21 +2354,31 @@ function _step_relation_queue!(
             end
         end
         w_piv, q_uw_piv = nbrs[piv_idx]
+        neg_q_uw_piv = -q_uw_piv
         h_u_spin = _spin_field(ws, u)
+        neg_h_u_spin = -h_u_spin
         has_sum = st.lower !== nothing && st.upper !== nothing
         tot_u_exact = has_sum ? (st.upper[u] - st.lower[u]) : _Exact(0)
         twin_cands = Int[]
         for (v, q_vw_piv) in st.adjacency[w_piv]
-            (v != u && st.fixed[v] == 2 && st.degrees[v] == d_u && abs(q_vw_piv) == abs(q_uw_piv)) || continue
+            _expired(deadline_ns) && return (:deadline, 1, u_visits, 0, u_exact, u_fb, 0)
+            (v != u && st.fixed[v] == 2 && st.degrees[v] == d_u) || continue
+            σ_cand = q_vw_piv == q_uw_piv ? 1 : (q_vw_piv == neg_q_uw_piv ? -1 : 0)
+            σ_cand != 0 || continue
             pos_uv = get(st.adj_pos[u], v, 0)
             (pos_uv == 0 || iszero(st.adjacency[u][pos_uv].second)) || continue
             has_sum && (st.upper[v] - st.lower[v]) != tot_u_exact && continue
-            σ_cand = q_uw_piv == q_vw_piv ? 1 : -1
-            h_u_spin == σ_cand * _spin_field(ws, v) || continue
+            h_v_spin = _spin_field(ws, v)
+            (σ_cand == 1 ? (h_v_spin == h_u_spin) : (h_v_spin == neg_h_u_spin)) || continue
             all_match = true
             @inbounds for (w, q_uw) in nbrs
                 pos_vw = get(st.adj_pos[v], w, 0)
-                if pos_vw == 0 || st.adjacency[v][pos_vw].second != σ_cand * q_uw
+                if pos_vw == 0
+                    all_match = false
+                    break
+                end
+                q_vw = st.adjacency[v][pos_vw].second
+                if !(σ_cand == 1 ? (q_vw == q_uw) : (q_vw == -q_uw))
                     all_match = false
                     break
                 end

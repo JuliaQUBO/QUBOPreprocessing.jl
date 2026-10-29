@@ -947,10 +947,10 @@ function _relation_witness(ws::Workspace, u::Int, v::Int;
         rad_v_other_lo = _prevfloat_finite(tot_v_lo - j_abs_hi)
         rv_lo = max(rv_lo, rad_v_other_lo)
     end
-    function _coflip_cand_possible(s_cand::Int)
+    function _coflip_cand_possible(s_cand::Int; strict_only::Bool=false)
         c_cand_hi = s_cand == 1 ? -j_uv_lo : j_uv_hi
         if iszero(q_uv)
-            allow_weak && st.degrees[u] == st.degrees[v] && abs(h_u_raw) == abs(hv_raw) || return false
+            (!strict_only && allow_weak && st.degrees[u] == st.degrees[v] && abs(h_u_raw) == abs(hv_raw)) || return false
             (direction * g_u * h_u_raw) == s_cand * (direction * g_v * hv_raw) || return false
         else
             c_cand_hi > 0.0 || return false
@@ -961,7 +961,10 @@ function _relation_witness(ws::Workspace, u::Int, v::Int;
         hd_abs_lo = (hd_lo <= 0.0 && hd_hi >= 0.0) ? 0.0 : min(abs(hd_lo), abs(hd_hi))
         two_rad_lo = _prevfloat_finite(_prevfloat_finite(hd_abs_lo + _prevfloat_finite(rad_other_lo + rv_lo)) - _nextfloat_finite(2.0 * canc_hi))
         two_c_hi = _nextfloat_finite(2.0 * c_cand_hi)
-        return !(isfinite(two_c_hi) && isfinite(two_rad_lo) && two_c_hi < two_rad_lo)
+        if isfinite(two_c_hi) && isfinite(two_rad_lo)
+            strict_only ? (two_c_hi <= two_rad_lo && return false) : (two_c_hi < two_rad_lo && return false)
+        end
+        return true
     end
     coflip_possible = (sign === nothing && iszero(q_uv)) ?
         (_coflip_cand_possible(1) || _coflip_cand_possible(-1)) :
@@ -1007,19 +1010,30 @@ function _relation_witness(ws::Workspace, u::Int, v::Int;
     rad_exact = abs(h_u) + rad_u_other
     lower = center_exact - rad_exact
     upper = center_exact + rad_exact
-    if lower > 0 || (allow_weak && lower >= 0)
+    if lower > 0
         c_val = _mapped_constant(ws, map)
-        pers = lower > 0 ? :strong : :weak
         step = RelationStep(u, v, σ, orig_σ, deepcopy(lower), deepcopy(upper), deepcopy(c_val),
-                            predecessors, :exact, scope_length, pers)
+                            predecessors, :exact, scope_length, :strong)
         return (step, :proved, :exact, visits, 1, exact_work)
     end
+    weak_exact = allow_weak && lower >= 0
+    deg_v = length(st.adjacency[v])
+    v_budget_ok = !weak_exact || (deg_v <= max_work - visits && 1 + deg_v <= max_exact_work - exact_work)
     best_u = center_exact + abs(h_u) - rad_u_other
-    glk_ok = center_exact > 0 && !iszero(h_u) && (best_u > 0 || (allow_weak && best_u >= 0))
-    coflip_ok = coflip_possible && (center_exact > 0 || (allow_weak && iszero(center_exact) && iszero(q_uv) && st.degrees[u] == st.degrees[v]))
+    glk_ok = v_budget_ok && center_exact > 0 && !iszero(h_u) && (best_u > 0 || (!weak_exact && allow_weak && best_u >= 0))
+    coflip_ok = v_budget_ok && (weak_exact ?
+        (center_exact > 0 && _coflip_cand_possible(σ; strict_only=true)) :
+        (coflip_possible && (center_exact > 0 || (allow_weak && iszero(center_exact) && iszero(q_uv) && st.degrees[u] == st.degrees[v]))))
+    err_method = :exact
+    weak_glk = false
+    lo_glk = _Exact(0)
+    hi_glk = _Exact(0)
+    weak_cf = false
+    weak_cf_s = σ
+    lo_cf_weak = _Exact(0)
+    hi_cf_weak = _Exact(0)
     if glk_ok || coflip_ok
         err_method = glk_ok ? :glk_pair : :coflip_pair
-        deg_v = length(st.adjacency[v])
         deg_v <= max_work - visits || return (nothing, :work_limit, err_method, visits, 1, exact_work)
         1 + deg_v <= max_exact_work - exact_work || return (nothing, :verification_limit, err_method, visits, 1, exact_work)
         h_v = direction * g_v * hv_raw
@@ -1059,12 +1073,13 @@ function _relation_witness(ws::Workspace, u::Int, v::Int;
             lo_a, hi_a = minmax(m_u_1, m_v_2)
             lo_b, hi_b = minmax(m_v_1, m_u_2)
             lo_glk, hi_glk = (lo_a > lo_b || (lo_a == lo_b && hi_a >= hi_b)) ? (lo_a, hi_a) : (lo_b, hi_b)
-            if lo_glk > 0 || (allow_weak && lo_glk >= 0)
+            if lo_glk > 0
                 c_val = _mapped_constant(ws, map)
-                pers = lo_glk > 0 ? :strong : :weak
                 step = RelationStep(u, v, σ, orig_σ, deepcopy(lo_glk), deepcopy(hi_glk), deepcopy(c_val),
-                                    predecessors, :glk_pair, scope_length, pers)
+                                    predecessors, :glk_pair, scope_length, :strong)
                 return (step, :proved, :glk_pair, visits, 1, exact_work)
+            elseif allow_weak && lo_glk >= 0
+                weak_glk = true
             end
         end
         if coflip_ok
@@ -1074,19 +1089,39 @@ function _relation_witness(ws::Workspace, u::Int, v::Int;
                 rad_cf = (abs(h_u - s_cf * h_v) + diff_cf) // 2
                 lo_cf = center_exact - rad_cf
                 hi_cf = center_exact + rad_cf
-                if lo_cf > 0 || (allow_weak && lo_cf >= 0)
+                if lo_cf > 0
                     c_val = _mapped_constant(ws, map)
-                    pers = lo_cf > 0 ? :strong : :weak
                     orig_s_cf = g_u * g_v * s_cf
                     step = RelationStep(u, v, s_cf, orig_s_cf, deepcopy(lo_cf), deepcopy(hi_cf), deepcopy(c_val),
-                                        predecessors, :coflip_pair, scope_length, pers)
+                                        predecessors, :coflip_pair, scope_length, :strong)
                     return (step, :proved, :coflip_pair, visits, 1, exact_work)
+                elseif allow_weak && lo_cf >= 0 && !weak_cf
+                    weak_cf = true
+                    weak_cf_s = s_cf
+                    lo_cf_weak = lo_cf
+                    hi_cf_weak = hi_cf
                 end
             end
         end
-        return (nothing, :not_strict, err_method, visits, 1, exact_work)
     end
-    return (nothing, :not_strict, :exact, visits, 1, exact_work)
+    if weak_exact
+        c_val = _mapped_constant(ws, map)
+        step = RelationStep(u, v, σ, orig_σ, deepcopy(lower), deepcopy(upper), deepcopy(c_val),
+                            predecessors, :exact, scope_length, :weak)
+        return (step, :proved, :exact, visits, 1, exact_work)
+    elseif weak_glk
+        c_val = _mapped_constant(ws, map)
+        step = RelationStep(u, v, σ, orig_σ, deepcopy(lo_glk), deepcopy(hi_glk), deepcopy(c_val),
+                            predecessors, :glk_pair, scope_length, :weak)
+        return (step, :proved, :glk_pair, visits, 1, exact_work)
+    elseif weak_cf
+        c_val = _mapped_constant(ws, map)
+        orig_s_cf = g_u * g_v * weak_cf_s
+        step = RelationStep(u, v, weak_cf_s, orig_s_cf, deepcopy(lo_cf_weak), deepcopy(hi_cf_weak), deepcopy(c_val),
+                            predecessors, :coflip_pair, scope_length, :weak)
+        return (step, :proved, :coflip_pair, visits, 1, exact_work)
+    end
+    return (nothing, :not_strict, err_method, visits, 1, exact_work)
 end
 
 function _elimination_witness(ws::Workspace, u::Int;

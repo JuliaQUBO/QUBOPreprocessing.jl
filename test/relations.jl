@@ -738,6 +738,24 @@
         )
         vr_twin = verify_certificate(ws_twin_t, DominanceCertificate(generation(ws_twin_t), checkpoint(ws_twin_t), (), (forged_twin_strong,), ws_twin_t._snapshot))
         @test !vr_twin.valid && vr_twin.stop_reason === :invalid_bound
+
+        # 7. allow_weak=true does not downgrade :strong persistency when :exact or :glk_pair ties at 0:
+        # (a) :exact ties at 0 (center - R_u = 1 - 1 = 0) while :coflip_pair has lo_cf = 1//2 > 0:
+        ws_up_exact = Workspace(rel_fixture(
+            [:a, :b, :c], [0.0, 0.0, 0.0], [0.0 -1.0 1.0; 0.0 0.0 0.0; 0.0 0.0 0.0]; domain=:spin
+        ); rules=:relations)
+        att_up_ex = prove_relation(ws_up_exact, :a, :b; allow_weak=true)
+        @test att_up_ex.stop_reason === :proved && att_up_ex.method === :coflip_pair
+        @test persistency(only(att_up_ex.certificate.steps)) === :strong
+        @test only(att_up_ex.certificate.steps).lower == 1 // 2
+        # (b) :glk_pair ties at 0 (lo_glk = 4 + 3 - 7 = 0) while :coflip_pair has lo_cf = 4 > 0:
+        ws_up_glk = Workspace(rel_fixture(
+            [:u, :v, :w], [3.0, 3.0, 2.0], [0.0 -4.0 7.0; 0.0 0.0 7.0; 0.0 0.0 0.0]; domain=:spin
+        ); rules=:relations)
+        att_up_glk = prove_relation(ws_up_glk, :u, :v; allow_weak=true)
+        @test att_up_glk.stop_reason === :proved && att_up_glk.method === :coflip_pair
+        @test persistency(only(att_up_glk.certificate.steps)) === :strong
+        @test only(att_up_glk.certificate.steps).lower == 4 // 1
     end
 end
 
