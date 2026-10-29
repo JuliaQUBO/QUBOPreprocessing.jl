@@ -27,7 +27,10 @@ export SubmodularComponent, MaxCutGraph,
        step_guarantee, certificate_guarantee, persistency
 
 export DomainGaugeMap, domain_map, map_value, lift_value, map_state, lift_state,
-       degree, effective_field, incident_couplings, conditioned_constant
+       degree, effective_field, incident_couplings, conditioned_constant,
+       coercive_fields, coercive_field_ratios, coercive_field_ratio,
+       zero_field_fraction, trivial_dominance_fraction, is_gauge_invariant,
+       coercive_field_witness
 
 export propagate!, PropagationReport, ProbingReport, RoofDualityReport, SubmodularCutReport, MaxCutReport,
        deductions, reductions, export_certificate,

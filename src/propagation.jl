@@ -423,22 +423,263 @@ function _probing_report!(ws::Workspace, reason::Symbol, candidates::Int, edges:
     )
 end
 
+function _polish_spin_state!(
+    spin_s::Vector{Int},
+    ws::Workspace,
+    free_vars::Vector{Int},
+    direction::Int,
+    mf::Int,
+)
+    st = ws._state
+    n = length(ws._snapshot.labels)
+    eff_h = Vector{_Exact}(undef, n)
+    @inbounds for i in free_vars
+        eh = _spin_field(ws, i)
+        for (j, q) in st.adjacency[i]
+            (st.fixed[j] == 2 && !iszero(q)) || continue
+            eh += _spin_coupling(ws, q) * spin_s[j]
+        end
+        eff_h[i] = eh
+    end
+    for _ in 1:mf
+        best_i = 0
+        best_gain = _Exact(0)
+        @inbounds for i in free_vars
+            gain = (2 * direction * spin_s[i]) * eff_h[i]
+            if gain > best_gain
+                best_gain = gain
+                best_i = i
+            end
+        end
+        best_i == 0 && break
+        new_s = -spin_s[best_i]
+        spin_s[best_i] = new_s
+        two_new_s = 2 * new_s
+        @inbounds for (j, q) in st.adjacency[best_i]
+            (st.fixed[j] == 2 && !iszero(q)) || continue
+            eff_h[j] += two_new_s * _spin_coupling(ws, q)
+        end
+    end
+    energy = _Exact(0)
+    @inbounds for i in free_vars
+        h_i = _spin_field(ws, i)
+        energy += (h_i + eff_h[i]) * spin_s[i]
+    end
+    return direction * (energy // 2)
+end
+
+function _coercive_field_witness_orig(
+    ws::Workspace;
+    polish::Bool=true,
+    max_flips=1000,
+    tie_break::Symbol=:low,
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+)
+    max_flips isa Integer && !(max_flips isa Bool) && 0 <= max_flips <= typemax(Int) ||
+        throw(ArgumentError("max_flips must be a nonnegative machine-sized integer"))
+    tie_break in (:low, :high) ||
+        throw(ArgumentError("tie_break must be :low or :high"))
+    map === nothing || _validate_domain_map(ws, map)
+    s, st = ws._snapshot, ws._state
+    n = length(s.labels)
+    is_bool = s.domain === QT.BoolDomain
+    direction = _direction(s)
+    spin_s = zeros(Int, n)
+    free_vars = Int[]
+    @inbounds for i in 1:n
+        st.fixed[i] == 2 || continue
+        push!(free_vars, i)
+        h_i = _spin_field(ws, i)
+        g_i = map === nothing ? 1 : map.gauge[i]
+        tie_spin = tie_break === :low ? -g_i : g_i
+        if direction == 0 || iszero(h_i)
+            spin_s[i] = tie_spin
+        else
+            spin_s[i] = (direction * h_i > 0) ? -1 : 1
+        end
+    end
+    mf = Int(max_flips)
+    if polish && direction != 0 && !isempty(free_vars)
+        e_par = _polish_spin_state!(spin_s, ws, free_vars, direction, mf)
+        if length(free_vars) > 1
+            seq_order = copy(free_vars)
+            _order_probing_candidates!(ws, seq_order, spin_s, :coercive)
+            spin_seq = zeros(Int, n)
+            cond_h = Vector{_Exact}(undef, n)
+            assigned = falses(n)
+            @inbounds for i in free_vars
+                cond_h[i] = _spin_field(ws, i)
+            end
+            @inbounds for i in seq_order
+                h_i = cond_h[i]
+                g_i = map === nothing ? 1 : map.gauge[i]
+                tie_spin = tie_break === :low ? -g_i : g_i
+                s_i = iszero(h_i) ? tie_spin : ((direction * h_i > 0) ? -1 : 1)
+                spin_seq[i] = s_i
+                assigned[i] = true
+                for (j, q) in st.adjacency[i]
+                    (st.fixed[j] == 2 && !assigned[j] && !iszero(q)) || continue
+                    cond_h[j] += _spin_coupling(ws, q) * s_i
+                end
+            end
+            e_seq = _polish_spin_state!(spin_seq, ws, free_vars, direction, mf)
+            if e_seq < e_par
+                spin_s = spin_seq
+            end
+        end
+    end
+    w = Vector{Int}(undef, n)
+    low_orig = is_bool ? 0 : -1
+    @inbounds for i in 1:n
+        if st.fixed[i] == 2
+            w[i] = is_bool ? ((spin_s[i] + 1) ÷ 2) : spin_s[i]
+        elseif st.fixed[i] == low_orig || st.fixed[i] == 1
+            w[i] = Int(st.fixed[i])
+        else
+            w[i] = low_orig
+        end
+    end
+    for pos in st.callers
+        e = st.trail[pos]::_UndoFix
+        w[e.index] = e.value
+    end
+    for idx_fix in length(st.fixes):-1:1
+        pos = st.fixes[idx_fix]
+        entry = st.trail[pos]
+        if entry isa _UndoFix && entry.proof === nothing
+            w[entry.index] = entry.value
+            continue
+        end
+        pstep = entry.proof
+        pstep === nothing && continue
+        if pstep isa Union{DominanceStep,ProbingStep,RoofDualityStep,SubmodularCutStep}
+            w[pstep.variable] = pstep.value
+        elseif pstep isa MaxCutStep
+            if pstep.representative == 0
+                w[pstep.eliminated] = pstep.value
+            else
+                s_v = is_bool ? (2 * w[pstep.representative] - 1) : w[pstep.representative]
+                s_u = pstep.orig_sign * s_v
+                w[pstep.eliminated] = is_bool ? ((s_u + 1) ÷ 2) : s_u
+            end
+        elseif pstep isa RelationStep
+            s_v = is_bool ? (2 * w[pstep.representative] - 1) : w[pstep.representative]
+            s_u = pstep.orig_sign * s_v
+            w[pstep.eliminated] = is_bool ? ((s_u + 1) ÷ 2) : s_u
+        elseif pstep isa EliminationStep
+            t_idx = 1
+            for (bit_pos, nbr) in enumerate(pstep.neighbors)
+                w[nbr] == 1 && (t_idx += 1 << (bit_pos - 1))
+            end
+            w[pstep.variable] = pstep.table[t_idx]
+        end
+    end
+    return w
+end
+
 """
-    apply_probing!(ws, label, witness; value=nothing, map=nothing,
+    coercive_field_witness(ws::Workspace; polish=true, max_flips=1000,
+                           tie_break=:low, map=nothing) -> Vector{Int}
+
+Construct a deterministic parent-scope feasible witness vector for `ws` by
+aligning each currently free variable with its conditioned Ising coercive field
+``h_i`` under `sense(ws)` (`tie_break in (:low, :high)` for ``h_i = 0``),
+optionally performing up to `max_flips` steps of steepest 1-flip local descent on
+the residual Ising Hamiltonian (`polish=true`), and lifting the assignment in
+reverse trail order through all caller assumptions and committed workspace
+reductions (and through `map` when provided).
+"""
+function coercive_field_witness(
+    ws::Workspace;
+    polish::Bool=true,
+    max_flips=1000,
+    tie_break::Symbol=:low,
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+)
+    w = _coercive_field_witness_orig(ws; polish, max_flips, tie_break, map)
+    map === nothing && return w
+    return Int[_map_index_value(map, i, w[i]) for i in eachindex(w)]
+end
+
+function _order_probing_candidates!(
+    ws::Workspace,
+    cand_indices::Vector{Int},
+    w_vec::Vector{Int},
+    order::Symbol,
+)
+    order in (:index, :coercive, :extremal) ||
+        throw(ArgumentError("order must be :index, :coercive, or :extremal"))
+    (order === :index || length(cand_indices) <= 1) && return cand_indices
+    s, st = ws._snapshot, ws._state
+    n = length(s.labels)
+    is_bool = s.domain === QT.BoolDomain
+    direction = _direction(s)
+    tiers = zeros(Int, n)
+    ratios = fill(_Exact(0), n)
+    secondary = fill(_Exact(0), n)
+    if order === :coercive
+        @inbounds for i in cand_indices
+            abs_h = abs(_spin_field(ws, i))
+            l1 = _Exact(0)
+            for (j, q) in st.adjacency[i]
+                (st.fixed[j] == 2 && !iszero(q)) || continue
+                l1 += abs(_spin_coupling(ws, q))
+            end
+            if iszero(l1)
+                tiers[i] = iszero(abs_h) ? 0 : 2
+                ratios[i] = abs_h
+            else
+                tiers[i] = 1
+                ratios[i] = abs_h / l1
+            end
+            secondary[i] = abs_h
+        end
+    else # :extremal
+        @inbounds for i in cand_indices
+            h_i = _spin_field(ws, i)
+            s_i = is_bool ? (2 * w_vec[i] - 1) : w_vec[i]
+            fav_h = (-direction * s_i) * h_i
+            l1 = _Exact(0)
+            eff_h = h_i
+            for (j, q) in st.adjacency[i]
+                (st.fixed[j] == 2 && !iszero(q)) || continue
+                c_ij = _spin_coupling(ws, q)
+                l1 += abs(c_ij)
+                s_j = is_bool ? (2 * w_vec[j] - 1) : w_vec[j]
+                eff_h += c_ij * s_j
+            end
+            fav_eff = (-direction * s_i) * eff_h
+            if iszero(l1)
+                tiers[i] = fav_h > 0 ? 2 : (iszero(fav_h) ? 0 : -1)
+                ratios[i] = fav_h
+            else
+                tiers[i] = 1
+                ratios[i] = fav_h / l1
+            end
+            secondary[i] = fav_eff
+        end
+    end
+    sort!(cand_indices; by = i -> (tiers[i], ratios[i], secondary[i], -i), rev = true)
+    return cand_indices
+end
+
+"""
+    apply_probing!(ws, label, witness=nothing; value=nothing, map=nothing,
                    max_rounds=1, max_trial_fixes=typemax(Int),
                    max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing)
 
 Certify and transactionally commit one probing fixing on `ws` by strictly
 refuting the opposite branch (`branch_lower > witness_upper`) against the
 verified parent-scope feasible `witness` (an original-order vector, label
-dictionary, or [`Reconstruction`](@ref)), recording a [`ProbingStep`](@ref) on
+dictionary, [`Reconstruction`](@ref), or `nothing` to synthesize
+[`coercive_field_witness`](@ref)), recording a [`ProbingStep`](@ref) on
 the reversible trail. Interrupted or inconclusive probes leave `ws` at its exact
 pre-probe checkpoint. Returns an [`UpdateReport`](@ref).
 """
 function apply_probing!(
     ws::Workspace,
     label,
-    witness;
+    witness=nothing;
     value=nothing,
     map::Union{Nothing,DomainGaugeMap}=nothing,
     max_rounds=1,
@@ -453,7 +694,7 @@ function apply_probing!(
     _limits(max_trial_fixes, nothing)
     map === nothing || _validate_domain_map(ws, map)
     i = _variable(ws, label)
-    w_vec = _extract_witness_state(ws, witness, map)
+    w_vec = witness === nothing ? _coercive_field_witness_orig(ws; map) : _extract_witness_state(ws, witness, map)
     req_orig = if value === nothing
         nothing
     elseif map === nothing
@@ -479,23 +720,26 @@ function apply_probing!(
 end
 
 """
-    probe_variables!(ws, witness; candidates=nothing, map=nothing,
-                     max_candidates=typemax(Int), max_rounds=1,
+    probe_variables!(ws, witness=nothing; candidates=nothing, order=:index,
+                     map=nothing, max_candidates=typemax(Int), max_rounds=1,
                      max_trial_fixes=typemax(Int), max_work=typemax(Int),
                      max_exact_work=typemax(Int), deadline_ns=nothing)
 
 Run an optional bounded certified probing pass across `candidates` (defaulting to
-all currently free variables in original order) using a verified parent-scope
-feasible `witness`. Each candidate temporarily conditions on the opposite
-assignment, propagates bounded trial dominance, and commits a [`ProbingStep`](@ref)
-when the trial branch lower bound strictly refutes the branch against `witness`.
-Cancelled or inconclusive trial probes roll back cleanly to the pre-probe
-checkpoint while charging executed work in the returned [`ProbingReport`](@ref).
+all currently free variables) using a verified parent-scope feasible `witness`
+(or synthesizing [`coercive_field_witness`](@ref) when `witness === nothing`).
+Candidate order is controlled by `order in (:index, :coercive, :extremal)`.
+Each candidate temporarily conditions on the opposite assignment, propagates
+bounded trial dominance, and commits a [`ProbingStep`](@ref) when the trial
+branch lower bound strictly refutes the branch against `witness`. Cancelled or
+inconclusive trial probes roll back cleanly to the pre-probe checkpoint while
+charging executed work in the returned [`ProbingReport`](@ref).
 """
 function probe_variables!(
     ws::Workspace,
-    witness;
+    witness=nothing;
     candidates=nothing,
+    order::Symbol=:index,
     map::Union{Nothing,DomainGaugeMap}=nothing,
     max_candidates=typemax(Int),
     max_rounds=1,
@@ -509,8 +753,10 @@ function probe_variables!(
     _limits(max_trial_fixes, nothing)
     _limits(max_work, deadline_ns)
     _limits(max_exact_work, deadline_ns)
+    order in (:index, :coercive, :extremal) ||
+        throw(ArgumentError("order must be :index, :coercive, or :extremal"))
     map === nothing || _validate_domain_map(ws, map)
-    w_vec = _extract_witness_state(ws, witness, map)
+    w_vec = witness === nothing ? _coercive_field_witness_orig(ws; map) : _extract_witness_state(ws, witness, map)
     s, st = ws._snapshot, ws._state
     cand_indices = if candidates === nothing
         Int[i for i in 1:length(s.labels) if st.fixed[i] == 2]
@@ -526,6 +772,7 @@ function probe_variables!(
         end
         out
     end
+    _order_probing_candidates!(ws, cand_indices, w_vec, order)
     _direction(s) != 0 || return _probing_report!(ws, :zero_scale, 0, 0, 0, 0, 0; pending=length(cand_indices))
     probed = 0
     visits = 0

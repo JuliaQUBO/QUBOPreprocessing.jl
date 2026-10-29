@@ -499,5 +499,148 @@
         @test alloc_probe > 0
         cert_bench = export_certificate(ws_dom)
         @test verify_certificate(ws_dom, cert_bench).valid
+
+        # 4. Witness-free probing (witness = nothing) with coercive_field_witness fixes all 16 variables!
+        ws_auto = Workspace(m_bench; rules=:dominance)
+        @test propagate!(ws_auto).deductions == 0
+        @test coercive_field_witness(ws_auto) == w_full
+        rep_auto = probe_variables!(ws_auto; order=:coercive, max_rounds=1)
+        @test rep_auto.stop_reason === :quiescent
+        @test rep_auto.deductions == 4 * n_blocks
+        @test verify_certificate(ws_auto, export_certificate(ws_auto)).valid
+    end
+
+    @testset "conditioned coercive-field diagnostics, deterministic witness, and probing orderings (#49)" begin
+        # 1. Conditioned coercive-field diagnostics on :bool and :spin workspaces
+        L_b = Dict(1 => 2.0, 2 => -4.0, 3 => 0.0, 4 => 6.0)
+        Q_b = Dict((1, 2) => 8.0, (2, 3) => -4.0)
+        m_b = QT.Model{Int,Float64,Int}(Set(1:4), L_b, Q_b; domain=:bool, sense=:min)
+        ws_b = Workspace(m_b; rules=:mixed)
+
+        # h_1 = 2/2 + 8/4 = 3//1, ||J_1||_1 = 2//1
+        # h_2 = -4/2 + (8 - 4)/4 = -1//1, ||J_2||_1 = 3//1
+        # h_3 = 0/2 - 4/4 = -1//1, ||J_3||_1 = 1//1
+        # h_4 = 6/2 = 3//1 (isolated), ||J_4||_1 = 0//1
+        @test coercive_fields(ws_b) == Rational{BigInt}[3 // 1, -1 // 1, -1 // 1, 3 // 1]
+        @test !is_gauge_invariant(ws_b)
+        @test is_gauge_invariant(ws_b; atol=3)
+        @test is_gauge_invariant(ws_b; atol=Inf)
+        @test zero_field_fraction(ws_b) == 0.0
+        @test zero_field_fraction(ws_b; atol=1) == 0.5
+        @test trivial_dominance_fraction(ws_b) == 0.5
+        @test trivial_dominance_fraction(ws_b; atol=Inf) == 0.0
+
+        r1 = coercive_field_ratios(ws_b; norm=1)
+        @test r1[1:3] ≈ [1.5, 1 / 3, 1.0]
+        @test isinf(r1[4])
+        @test coercive_field_ratio(ws_b; norm=1) ≈ (1.5 + 1 / 3 + 1.0) / 3
+
+        r2 = coercive_field_ratios(ws_b; norm=2)
+        @test r2[1:3] ≈ [1.5, 1 / sqrt(5.0), 1.0]
+        @test isinf(r2[4])
+        @test coercive_field_ratio(ws_b; norm=2) ≈ (1.5 + 1 / sqrt(5.0) + 1.0) / 3
+
+        rinf = coercive_field_ratios(ws_b; norm=Inf)
+        @test rinf[1:3] ≈ [1.5, 0.5, 1.0]
+
+        r3 = coercive_field_ratios(ws_b; norm=3)
+        @test r3[2] ≈ 1.0 / (2.0^3 + 1.0^3)^(1 / 3)
+
+        # Gauge map transforms coercive_fields signs while preserving ratios
+        dmap_g = domain_map(ws_b; domain=:spin, gauge=[-1, 1, -1, 1])
+        @test coercive_fields(ws_b; map=dmap_g) == Rational{BigInt}[-3 // 1, -1 // 1, 1 // 1, 3 // 1]
+        @test coercive_field_ratio(ws_b; norm=1, map=dmap_g) ≈ (1.5 + 1 / 3 + 1.0) / 3
+
+        # Conditioning updates coercive_fields dynamically, and fixing all variables yields empty/NaN
+        cp_b = checkpoint(ws_b)
+        for v in 1:4
+            assume!(ws_b, v, 0)
+        end
+        @test isempty(coercive_fields(ws_b))
+        @test isempty(coercive_field_ratios(ws_b))
+        @test isnan(coercive_field_ratio(ws_b))
+        @test is_gauge_invariant(ws_b)
+        @test isnan(zero_field_fraction(ws_b))
+        @test isnan(trivial_dominance_fraction(ws_b))
+        rollback!(ws_b, cp_b)
+
+        # 2. Reverse-trail lifting in coercive_field_witness across caller assumptions, eliminations, relations, and dominance
+        m_lift = QT.Model{Int,Float64,Int}(
+            Dict(1 => 0.0, 2 => 0.0, 3 => 4.0, 4 => 1.5, 5 => 1.5),
+            Dict((1, 2) => -2.0, (2, 3) => -4.0, (3, 4) => 2.5, (3, 5) => 2.5, (4, 5) => -1.0);
+            domain=:spin, sense=:min,
+        )
+        ws_lift = Workspace(m_lift; rules=:mixed)
+        # Eliminate degree-1 variable 1 into 2, then contract 2 into 3
+        @test eliminate_variable!(ws_lift, 1).stop_reason === :applied
+        @test contract_relation!(ws_lift, 2, 3).stop_reason === :applied
+        w_lift = coercive_field_witness(ws_lift)
+        @test w_lift == [-1, -1, -1, 1, 1]
+        # Witness-free prove_probing, apply_probing!, and probe_variables! work directly after reductions
+        att_lift = prove_probing(ws_lift, 3)
+        @test att_lift.stop_reason === :proved
+        @test verify_certificate(ws_lift, att_lift.certificate).valid
+        upd_lift = apply_probing!(ws_lift, 3)
+        @test upd_lift.stop_reason === :applied
+        rep_lift = probe_variables!(ws_lift)
+        @test rep_lift.stop_reason === :quiescent
+        @test verify_certificate(ws_lift, export_certificate(ws_lift)).valid
+
+        # Mapped witness round-trip with DomainGaugeMap
+        ws_map_test = Workspace(
+            QT.Model{Int,Float64,Int}(
+                Dict(1 => 4.0, 2 => 1.5, 3 => 1.5),
+                Dict((1, 2) => 2.5, (1, 3) => 2.5, (2, 3) => -1.0);
+                domain=:spin, sense=:min,
+            );
+            rules=:dominance,
+        )
+        dmap_bool = domain_map(ws_map_test; domain=:bool, gauge=[-1, 1, -1])
+        w_mapped = coercive_field_witness(ws_map_test; map=dmap_bool)
+        @test prove_probing(ws_map_test, 1, w_mapped; map=dmap_bool).stop_reason === :proved
+        @test prove_probing(ws_map_test, 1; map=dmap_bool).stop_reason === :proved
+
+        # 3. Candidate ordering (:coercive and :extremal vs :index) under max_candidates=1
+        # Variables 1, 2 form a zero-field symmetric pair E(s1, s2) = -s1*s2 (coercive ratio 0, unprovable),
+        # while variables 3, 4, 5 form a frustrated block where root 3 has the highest coercive ratio (4.0 / 5.0 = 0.8).
+        # Under max_candidates=1, :index probes variable 1 first (0 deductions), whereas :coercive and :extremal
+        # probe variable 3 first and immediately certify 3 => -1!
+        m_order_star = QT.Model{Int,Float64,Int}(
+            Dict(1 => 0.0, 2 => 0.0, 3 => 4.0, 4 => 1.5, 5 => 1.5),
+            Dict(
+                (1, 2) => -1.0,
+                (3, 4) => 2.5, (3, 5) => 2.5, (4, 5) => -1.0,
+            );
+            domain=:spin, sense=:min,
+        )
+        ws_idx = Workspace(m_order_star; rules=:dominance)
+        rep_idx = probe_variables!(ws_idx; order=:index, max_candidates=1)
+        @test rep_idx.stop_reason === :candidate_limit
+        @test rep_idx.candidates == 1
+        @test rep_idx.deductions == 0
+
+        for ord in (:coercive, :extremal)
+            ws_ord = Workspace(m_order_star; rules=:dominance)
+            rep_ord = probe_variables!(ws_ord; order=ord, max_candidates=1)
+            @test rep_ord.stop_reason === :candidate_limit
+            @test rep_ord.candidates == 1
+            @test rep_ord.deductions == 1
+            @test Dict(deductions(ws_ord)) == Dict(3 => -1)
+        end
+
+        # 4. Validation errors
+        @test_throws ArgumentError coercive_field_ratios(ws_b; norm=0)
+        @test_throws ArgumentError coercive_field_ratios(ws_b; norm=-1)
+        @test_throws ArgumentError coercive_field_ratios(ws_b; norm=NaN)
+        @test_throws ArgumentError coercive_field_ratios(ws_b; norm=true)
+        @test_throws ArgumentError is_gauge_invariant(ws_b; atol=-1)
+        @test_throws ArgumentError is_gauge_invariant(ws_b; atol=NaN)
+        @test_throws ArgumentError is_gauge_invariant(ws_b; atol=false)
+        @test_throws ArgumentError zero_field_fraction(ws_b; atol=-1)
+        @test_throws ArgumentError trivial_dominance_fraction(ws_b; atol=-1)
+        @test_throws ArgumentError coercive_field_witness(ws_b; max_flips=-1)
+        @test_throws ArgumentError coercive_field_witness(ws_b; max_flips=true)
+        @test_throws ArgumentError coercive_field_witness(ws_b; tie_break=:middle)
+        @test_throws ArgumentError probe_variables!(ws_b; order=:random)
     end
 end

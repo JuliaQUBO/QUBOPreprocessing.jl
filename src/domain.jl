@@ -557,3 +557,203 @@ function conditioned_constant(ws::Workspace; map::Union{Nothing,DomainGaugeMap}=
     map === nothing || _validate_domain_map(ws, map)
     return deepcopy(_mapped_constant(ws, map))
 end
+
+function _validate_nonneg_atol(atol)
+    !(atol isa Bool) && atol isa Real && !isnan(atol) && atol >= 0 ||
+        throw(ArgumentError("atol must be a nonnegative real number; got $(repr(atol))"))
+    return nothing
+end
+
+"""
+    coercive_fields(ws::Workspace; map=nothing) -> Vector{Rational{BigInt}}
+
+Return the exact conditioned Ising local fields ``h_i`` for all currently free
+variables in ascending `free_variables` order. In `:bool` workspaces,
+``h_i = \\frac{1}{2} L_i + \\frac{1}{4} \\sum_{j \\in \\text{free}} Q_{i,j}``;
+in `:spin` workspaces, ``h_i = L_i``. When a validated [`DomainGaugeMap`](@ref)
+is supplied, each field is multiplied by its spin gauge ``g_i \\in \\{-1, +1\\}``.
+"""
+function coercive_fields(ws::Workspace; map::Union{Nothing,DomainGaugeMap}=nothing)
+    map === nothing || _validate_domain_map(ws, map)
+    st = ws._state
+    out = _Exact[]
+    sizehint!(out, count(==(2), st.fixed))
+    for i in eachindex(st.fixed)
+        st.fixed[i] == 2 || continue
+        g_i = map === nothing ? 1 : map.gauge[i]
+        push!(out, deepcopy(g_i * _spin_field(ws, i)))
+    end
+    return out
+end
+
+function _ws_coercive_ratios_and_active(ws::Workspace; norm::Real=2)
+    !(norm isa Bool) && norm > 0 && !isnan(norm) ||
+        throw(ArgumentError("norm must be positive; got $(repr(norm))"))
+    st = ws._state
+    n_free = count(==(2), st.fixed)
+    ratios = Vector{Float64}(undef, n_free)
+    active = falses(n_free)
+    n_free == 0 && return ratios, active
+
+    setprecision(BigFloat, 256) do
+        pos = 0
+        for i in eachindex(st.fixed)
+            st.fixed[i] == 2 || continue
+            pos += 1
+            abs_h = abs(_spin_field(ws, i))
+            abs_js = _Exact[]
+            for (j, q) in st.adjacency[i]
+                (st.fixed[j] == 2 && !iszero(q)) || continue
+                push!(abs_js, abs(_spin_coupling(ws, q)))
+            end
+            if isempty(abs_js)
+                ratios[pos] = iszero(abs_h) ? 0.0 : Inf
+                active[pos] = false
+            else
+                j_norm = if isinf(norm)
+                    BigFloat(maximum(abs_js))
+                elseif norm == 1
+                    BigFloat(sum(abs_js))
+                elseif norm == 2
+                    max_j = maximum(abs_js)
+                    s2 = sum((r = c / max_j; r * r) for c in abs_js)
+                    BigFloat(max_j) * sqrt(BigFloat(s2))
+                else
+                    max_j = BigFloat(maximum(abs_js))
+                    p_bf = BigFloat(norm)
+                    sp = sum((BigFloat(c) / max_j)^p_bf for c in abs_js)
+                    max_j * (sp^(inv(p_bf)))
+                end
+                ratios[pos] = Float64(BigFloat(abs_h) / j_norm)
+                active[pos] = true
+            end
+        end
+    end
+    return ratios, active
+end
+
+"""
+    coercive_field_ratios(ws::Workspace; norm::Real=2, map=nothing) -> Vector{Float64}
+
+Return the per-free-variable coercive-field-to-coupling ratios
+``|h_i| / \\|J_{i,\\cdot}\\|_p`` on the conditioned residual graph of `ws` in
+ascending `free_variables` order. Isolated free variables with ``\\|J_{i,\\cdot}\\|_p = 0``
+yield `0.0` when ``h_i = 0`` and `Inf` when ``h_i \\neq 0``.
+"""
+function coercive_field_ratios(
+    ws::Workspace;
+    norm::Real=2,
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+)
+    map === nothing || _validate_domain_map(ws, map)
+    return first(_ws_coercive_ratios_and_active(ws; norm))
+end
+
+"""
+    coercive_field_ratio(ws::Workspace; norm::Real=2, map=nothing) -> Float64
+
+Return the arithmetic mean of [`coercive_field_ratios`](@ref) over all currently
+free variables with at least one active incident coupling (`NaN` if no free
+variable has an active coupling).
+"""
+function coercive_field_ratio(
+    ws::Workspace;
+    norm::Real=2,
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+)
+    map === nothing || _validate_domain_map(ws, map)
+    ratios, active = _ws_coercive_ratios_and_active(ws; norm)
+    k = count(active)
+    k == 0 && return NaN
+    return setprecision(BigFloat, 256) do
+        s = zero(BigFloat)
+        for idx in eachindex(ratios)
+            active[idx] && (s += BigFloat(ratios[idx]))
+        end
+        return Float64(s / k)
+    end
+end
+
+"""
+    is_gauge_invariant(ws::Workspace; atol::Real=0//1, map=nothing) -> Bool
+
+Return `true` iff every currently free variable in `ws` satisfies ``|h_i| \\le \\text{atol}``
+(so the conditioned residual Ising Hamiltonian is ``\\mathbb{Z}_2`` spin-flip
+invariant up to `atol`).
+"""
+function is_gauge_invariant(
+    ws::Workspace;
+    atol::Real=0//1,
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+)
+    _validate_nonneg_atol(atol)
+    map === nothing || _validate_domain_map(ws, map)
+    isinf(atol) && return true
+    atol_ex = _Exact(atol)
+    st = ws._state
+    for i in eachindex(st.fixed)
+        st.fixed[i] == 2 || continue
+        abs(_spin_field(ws, i)) <= atol_ex || return false
+    end
+    return true
+end
+
+"""
+    zero_field_fraction(ws::Workspace; atol::Real=0//1, map=nothing) -> Float64
+
+Return the fraction of currently free variables in `ws` whose conditioned Ising
+local field satisfies ``|h_i| \\le \\text{atol}`` (`NaN` when `free_count(ws) == 0`).
+"""
+function zero_field_fraction(
+    ws::Workspace;
+    atol::Real=0//1,
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+)
+    _validate_nonneg_atol(atol)
+    map === nothing || _validate_domain_map(ws, map)
+    st = ws._state
+    n_free = 0
+    z_cnt = 0
+    atol_ex = isinf(atol) ? _Exact(0) : _Exact(atol)
+    for i in eachindex(st.fixed)
+        st.fixed[i] == 2 || continue
+        n_free += 1
+        (isinf(atol) || abs(_spin_field(ws, i)) <= atol_ex) && (z_cnt += 1)
+    end
+    n_free == 0 && return NaN
+    return z_cnt / n_free
+end
+
+"""
+    trivial_dominance_fraction(ws::Workspace; atol::Real=0//1, map=nothing) -> Float64
+
+Return the fraction of currently free variables in `ws` whose conditioned Ising
+local field strictly dominates its incident coupling ``\\ell_1`` norm by more than
+`atol` (``|h_i| > \\sum_{j \\in N(i)} |J_{i,j}| + \\text{atol}``; `NaN` when
+`free_count(ws) == 0`).
+"""
+function trivial_dominance_fraction(
+    ws::Workspace;
+    atol::Real=0//1,
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+)
+    _validate_nonneg_atol(atol)
+    map === nothing || _validate_domain_map(ws, map)
+    st = ws._state
+    n_free = count(==(2), st.fixed)
+    n_free == 0 && return NaN
+    isinf(atol) && return 0.0
+    atol_ex = _Exact(atol)
+    dom_cnt = 0
+    for i in eachindex(st.fixed)
+        st.fixed[i] == 2 || continue
+        abs_h = abs(_spin_field(ws, i))
+        l1 = _Exact(0)
+        for (j, q) in st.adjacency[i]
+            (st.fixed[j] == 2 && !iszero(q)) || continue
+            l1 += abs(_spin_coupling(ws, q))
+        end
+        abs_h > l1 + atol_ex && (dom_cnt += 1)
+    end
+    return dom_cnt / n_free
+end
