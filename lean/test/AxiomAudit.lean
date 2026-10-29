@@ -38,11 +38,14 @@ private def stringField (j : Json) (key : String) : IO String := do
 private def audit (modules : Array String) : CoreM Json := do
   let env ← getEnv
   let mut declarations := #[]
-  let entries := env.constants.toList.toArray.qsort (fun a b => Name.quickLt a.1 b.1)
-  for (name, ci) in entries do
+  let mut projectEntries : Array (Name × ConstantInfo × String) := #[]
+  for (name, ci) in env.constants.toList do
     let some idx := env.getModuleIdxFor? name | continue
     let origin := env.header.moduleNames[idx.toNat]!.toString
-    unless modules.contains origin do continue
+    if modules.contains origin then
+      projectEntries := projectEntries.push (name, ci, origin)
+  let entries := projectEntries.qsort (fun a b => Name.quickLt a.1 b.1)
+  for (name, ci, origin) in entries do
     let axioms ← collectAxioms name
     let ranges ← findDeclarationRanges? name
     let mut refs := ci.type.getUsedConstants
