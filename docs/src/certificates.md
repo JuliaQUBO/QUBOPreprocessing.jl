@@ -77,16 +77,16 @@ tag (`:strong` or `:weak`) queried with `persistency`:
   `table` (`tie_break=:low` or `:high`) and exact quadratic polynomial deltas
   (`constant_delta`, `linear_deltas`, `quadratic_deltas`). For `d == 3`
   (Boettcher–Davidheiser (2008) Section II Rule V Eq. (4) zero-field Ising
-  star–triangle reduction), ``u`` must have three distinct free neighbors with
-  nonzero couplings and an exact zero effective Ising field ``h_u = 0`` at the
-  moment of application so that spin-flip symmetry makes the local minimum an even
-  function of its three neighbors (pure constant + pair representation in Ising
-  coordinates, with zero cubic interaction ``\alpha_{123} = 0`` and zero neighbor
-  Ising field shifts). Nonzero cubic interactions are refused with
-  `:nonquadratic_elimination`, and nonzero center effective fields at `d == 3` are
-  refused with `:nonzero_field`. `unique_argmin` records whether the minimizing
-  value of ``u`` is strict on all boundary states. Higher-degree variables are
-  skipped/refused (`:degree_too_high`) with no higher-order truncation.
+  star–triangle reduction and Boros–Hammer (2002) Section 4.4 / Rehfeldt et al. (2023)
+  zero-cubic-Fourier degree-three reduction), ``u`` must have three distinct free
+  neighbors with nonzero couplings and a local conditional minimum with vanishing
+  cubic Walsh–Fourier coefficient ``\alpha_{123} = 0`` at the moment of application
+  (equivalently, ``h_u = 0``, ``|h_u| \ge \sum_{k=1}^3 |J_k|``, or
+  ``2 \max_k |J_k| \ge |h_u| + \sum_{k=1}^3 |J_k|``). Nonzero cubic interactions
+  (``\alpha_{123} \ne 0``) are refused with `:nonquadratic_elimination`.
+  `unique_argmin` records whether the minimizing value of ``u`` is strict on all
+  boundary states. Higher-degree variables are skipped/refused (`:degree_too_high`)
+  with no higher-order truncation.
 - **`:optimum_preserving_restriction` (`DominanceStep`, `RelationStep`, `ProbingStep`, `RoofDualityStep`, `SubmodularCutStep`, `MaxCutStep`):**
   unary value fixing (`DominanceStep`), signed pair contraction
   ``s_u = \sigma_{\text{orig}} s_v`` (`RelationStep`, proved via single-endpoint

@@ -621,7 +621,7 @@ end
         rep_nz = eliminate_low_degree!(ws_nz; max_degree=3)
         @test rep_nz.stop_reason === :quiescent && rep_nz.deductions == 0 && rep_nz.exact_work == 0
     end
-    # Nonzero field where |h_u| >= |J1|+|J2|+|J3| or |J3| >= |J1|+|J2|+|h_u| (so alpha_123 == 0) is proved and eliminated with 0 fill:
+    # Nonzero field where |h_u| >= |J1|+|J2|+|J3| (0 fill) or |J3| >= |J1|+|J2|+|h_u| (at most 2 fill edges incident to w_3; alpha_123 == 0) is proved and eliminated:
     for (L_dom, Q_dom) in (
         ([5.0, 0.25, -0.5, 0.75], Q_star),
         ([0.5, 0.25, -0.5, 0.75], [0.0 1.0 1.0 3.0; 0.0 0.0 0.0 0.0; 0.0 0.0 0.0 0.0; 0.0 0.0 0.0 0.0]),
@@ -648,6 +648,45 @@ end
                            for s1 in (-1, 1), s2 in (-1, 1), s3 in (-1, 1), s4 in (-1, 1))
         @test reference(L_dom, Q_dom, 1.0, 0.0, rec_dom.state, R) == best_dom
     end
+    # Regression tests for fill-blocked and deferred degree-3 nonzero-field (alpha_123 == 0) eliminations:
+    # 1. Heavy-edge degree-3 vertex with h_u != 0 and actual_fill == 2 deferred at max_fill=0 reports :fill_limit in schedule_reductions!:
+    Q_fill_dom = zeros(8, 8)
+    Q_fill_dom[1, 2] = 1.0; Q_fill_dom[1, 3] = 1.0; Q_fill_dom[1, 4] = 3.0
+    for i in 2:8, j in (i + 1):8
+        (i <= 4 && j <= 4) && continue
+        Q_fill_dom[i, j] = 1.0
+    end
+    L_fill_dom = [0.5, 0.25, -0.5, 0.75, 0.1, -0.2, 0.3, -0.4]
+    ws_fill_dom = Workspace(fixture([:u, :w1, :w2, :w3, :c1, :c2, :c3, :c4], L_fill_dom, Q_fill_dom; domain=:spin); rules=:mixed)
+    rep_fill_dom = schedule_reductions!(ws_fill_dom; enable_dominance=false, enable_elimination=false, enable_relations=false, enable_star_triangle=true, max_fill=0)
+    @test rep_fill_dom.stop_reason === :fill_limit
+    # 2. Deferred zero-field degree-3 vertex whose neighbor :v is eliminated (replacing edge (u,v) with fill edge (u,w3) and inducing h_u != 0 with alpha_123 != 0 while keeping degree(:u) == 3 and u in elim_deferred[4]) is skipped by _next_deferred_elim / _count_deferred_elim / _has_fill_blocked_elim:
+    Q_def_cond = zeros(8, 8)
+    # :u (1) connected to :w1 (2), :w2 (3), :v (4) with J = (1.0, -1.5, 2.0) and h_u = 0:
+    Q_def_cond[1, 2] = 1.0; Q_def_cond[1, 3] = -1.5; Q_def_cond[1, 4] = 2.0
+    # :v (4) also connected to :w3 (5) with J_{v,w3} = 2.0 and h_v = 1.0 (so eliminating :v adds edge (u,w3) with J_{u,w3} = -0.5 and shifts h_u by -0.5):
+    Q_def_cond[4, 5] = 2.0
+    # Make :w1, :w2, :w3, :c1, :c2, :c3 high degree so only :u is degree 3 and :v is degree 2:
+    for i in (2, 3, 5, 6, 7, 8), j in (2, 3, 5, 6, 7, 8)
+        i < j || continue
+        (i <= 3 && j <= 3) && continue
+        Q_def_cond[i, j] = 1.0
+    end
+    L_def_cond = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]
+    ws_def_cond = Workspace(fixture([:u, :w1, :w2, :v, :w3, :c1, :c2, :c3], L_def_cond, Q_def_cond; domain=:spin); rules=:mixed)
+    # Defer :u in bucket 4 at max_fill = 0:
+    rep_def1 = schedule_reductions!(ws_def_cond; enable_dominance=false, enable_elimination=false, enable_relations=false, enable_star_triangle=true, max_fill=0)
+    @test rep_def1.stop_reason === :fill_limit
+    @test 1 in ws_def_cond._state.elim_deferred[4] && ws_def_cond._state.elim_blocked_fill[4][1] == 3
+    @test QUBOPreprocessing._count_deferred_elim(ws_def_cond, 3, 3; min_bucket=4) == 1
+    # Now eliminate degree-2 vertex :v, which replaces (u,v) with (u,w3) and shifts h_u to -0.5 so alpha_123(u) != 0 while keeping degree(:u) == 3:
+    @test eliminate_variable!(ws_def_cond, :v; max_degree=2).stop_reason === :applied
+    @test degree(ws_def_cond, :u) == 3 && !QUBOPreprocessing._is_quadratic_deg3(ws_def_cond, 1)
+    @test 1 in ws_def_cond._state.elim_deferred[4] && !ws_def_cond._state.elim_queued[4][1]
+    @test QUBOPreprocessing._next_deferred_elim(ws_def_cond, 3, 3; min_bucket=4) == 0
+    @test QUBOPreprocessing._count_deferred_elim(ws_def_cond, 3, 3; min_bucket=4) == 0
+    @test !QUBOPreprocessing._has_fill_blocked_elim(ws_def_cond, 4, 0)
+    @test !(:star_triangle in schedule_reductions!(ws_def_cond; enable_dominance=false, enable_elimination=false, enable_relations=false, enable_star_triangle=false, max_fill=3).optional_passes_disabled)
     # Forged EliminationStep with zero-coupling neighbor or zero delta in linear_deltas/quadratic_deltas is rejected:
     ws_z = Workspace(fixture([:u, :w1, :w2, :w3], zeros(4), [0.0 1.0 1.0 0.0; 0.0 0.0 0.0 0.0; 0.0 0.0 0.0 0.0; 0.0 0.0 0.0 0.0]; domain=:spin))
     forged_zero_nbr = EliminationStep(1, (2, 3, 4), (-1, -1, -1, -1, -1, -1, -1, -1), R(0), (), (), R(0), 0, 0, false)

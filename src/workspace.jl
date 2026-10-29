@@ -50,9 +50,7 @@ _is_quadratic_deg3(ws::Workspace, u::Int) = _is_quadratic_deg3(
 function _may_be_quadratic_deg3_fast(ws::Workspace, u::Int)
     st = ws._state
     st.degrees[u] == 3 || return false
-    iszero(_spin_field(ws, u)) && return true
-    length(st.adjacency[u]) <= 16 && return _is_quadratic_deg3(ws, u)
-    return true
+    return iszero(_spin_field(ws, u)) || _is_quadratic_deg3(ws, u)
 end
 
 function _incremental(s::_Snapshot;rules=:identity)

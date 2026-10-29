@@ -121,7 +121,7 @@ so ``\phi`` is an exact quadratic polynomial over ``\{\pm 1\}^3``) **if and only
 one of three trichotomy conditions holds:
 1. ``h_u = 0`` (zero-field star–triangle reduction, Eq. 4);
 2. ``|h_u| \ge |J_1| + |J_2| + |J_3|`` (unary coercive-field dominance, introducing 0 fill edges); or
-3. ``2 \max_{k \in \{1,2,3\}} |J_k| \ge |h_u| + |J_1| + |J_2| + |J_3|`` (heavy-edge relation dominance, introducing 0 new fill edges beyond the dominant neighbor).
+3. ``2 \max_{k \in \{1,2,3\}} |J_k| \ge |h_u| + |J_1| + |J_2| + |J_3|`` (heavy-edge relation dominance, introducing at most 2 fill edges incident to the dominant neighbor ``w_{k^*}`` and 0 fill edges between the two non-dominant neighbors).
 
 All three ``\alpha_{123} = 0`` regimes are certified and verified by `prove_elimination`,
 `eliminate_variable!`, and `eliminate_low_degree!` when `max_degree=3`, while
