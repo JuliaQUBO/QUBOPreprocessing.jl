@@ -1,0 +1,68 @@
+{
+  "checked_at_utc": "2026-10-29T19:04:22.388500+00:00",
+  "lean_version": "Lean (version 4.33.1, x86_64-unknown-linux-gnu, commit 819816b2e0a3bf405af45ae5c7af2491d8f5bee6, Release)",
+  "status": "build_and_axiom_audit_passed",
+  "build_method": "isolated source snapshot; every project module recompiled by Lean; dependency cache read-only",
+  "audit_method": "compiler environment, private visibility, defining-module provenance, all constant kinds",
+  "root_module": "QUBOPreprocessing",
+  "project_module_count": 5,
+  "project_modules": [
+    "QUBOPreprocessing",
+    "QUBOPreprocessing.CompositionRepair",
+    "QUBOPreprocessing.CompressionAudit",
+    "QUBOPreprocessing.GaugeCoercive",
+    "QUBOPreprocessing.MaxCutTriangle"
+  ],
+  "all_project_constant_count": 112,
+  "constant_kinds": {
+    "constructor": 2,
+    "definition": 38,
+    "inductive": 2,
+    "recursor": 2,
+    "theorem": 68
+  },
+  "private_constant_count": 0,
+  "compiler_generated_partial_runtime_helpers": [],
+  "public_theorem_count": 58,
+  "public_theorem_count_method": "compiler theorem metadata matched to theorem/lemma source name-selection ranges; generated declarations counted separately",
+  "axioms": [
+    "Classical.choice",
+    "Quot.sound",
+    "propext"
+  ],
+  "source_snapshot_unchanged": true,
+  "sha256": {
+    "QUBOPreprocessing/CompositionRepair.lean": "34aac17a548f257fd417f5a61f4f68c7cd9727a1e9298ba612f1e499ae498cfb",
+    "QUBOPreprocessing/CompressionAudit.lean": "695cf59638438281f6ee9e37f6ac2cdf42e8cb11c74975071a59d9c9b94ff132",
+    "QUBOPreprocessing/GaugeCoercive.lean": "19a5a721ff7652a30fe65a3d1a9bd8d7d39810139120737b52a53293c758bfbc",
+    "QUBOPreprocessing/MaxCutTriangle.lean": "050794427649ea89c030a5b09a34257837132efe236f5295d2d300848b127186",
+    "QUBOPreprocessing.lean": "7e7fdcd5e5d3675d09903263c795888dfabe11971b134ed7876ba4a525256237",
+    "lake-manifest.json": "c95907221a30a13a4cdd23d68953259eaec205fb53263e9567342ac811566fb3",
+    "lakefile.toml": "7a33683c5a987c7a55d49d4de41704abce0dfca4f92469b54fa8e973b1f50cbe",
+    "lean-toolchain": "3aac669c7a910ec2389f4e4f921b605adf6ebf2d1e0c9b9cd0be4d33f3f5db71",
+    "test/AxiomAudit.lean": "17b169bbffc874b43e44d5329f5266ab4c4f55a8ed6c502921305a5ba0077dc5",
+    "verify.py": "3f423c460094d115bace53d503f1c0664410417acaedb8557c257c30d8a26051",
+    "verify.sh": "d0d4149242469231c29082e710913f985b98619a0cdcd6b34c10085f5b6fa924"
+  },
+  "sha256_after": {
+    "QUBOPreprocessing/CompositionRepair.lean": "34aac17a548f257fd417f5a61f4f68c7cd9727a1e9298ba612f1e499ae498cfb",
+    "QUBOPreprocessing/CompressionAudit.lean": "695cf59638438281f6ee9e37f6ac2cdf42e8cb11c74975071a59d9c9b94ff132",
+    "QUBOPreprocessing/GaugeCoercive.lean": "19a5a721ff7652a30fe65a3d1a9bd8d7d39810139120737b52a53293c758bfbc",
+    "QUBOPreprocessing/MaxCutTriangle.lean": "050794427649ea89c030a5b09a34257837132efe236f5295d2d300848b127186",
+    "QUBOPreprocessing.lean": "7e7fdcd5e5d3675d09903263c795888dfabe11971b134ed7876ba4a525256237",
+    "lake-manifest.json": "c95907221a30a13a4cdd23d68953259eaec205fb53263e9567342ac811566fb3",
+    "lakefile.toml": "7a33683c5a987c7a55d49d4de41704abce0dfca4f92469b54fa8e973b1f50cbe",
+    "lean-toolchain": "3aac669c7a910ec2389f4e4f921b605adf6ebf2d1e0c9b9cd0be4d33f3f5db71",
+    "test/AxiomAudit.lean": "17b169bbffc874b43e44d5329f5266ab4c4f55a8ed6c502921305a5ba0077dc5",
+    "verify.py": "3f423c460094d115bace53d503f1c0664410417acaedb8557c257c30d8a26051",
+    "verify.sh": "d0d4149242469231c29082e710913f985b98619a0cdcd6b34c10085f5b6fa924"
+  },
+  "compiled_olean_sha256": {
+    "QUBOPreprocessing/CompositionRepair.olean": "5c76fea2173278a83e608db7580de6bd20573a52fdaf2bed5a5dae3b9dc67c4d",
+    "QUBOPreprocessing/CompressionAudit.olean": "05e812e48ea4b6f625ca3b5d91f00d5ad56892e8e34629be2c30925a95083bfd",
+    "QUBOPreprocessing/GaugeCoercive.olean": "1a43059e0dae28ac99683c323d68ffe5bb78208e771a43d528961ac8c8019982",
+    "QUBOPreprocessing/MaxCutTriangle.olean": "5902c04fcc90364c81e2a7d78ecd078069c96124f97c31e0974c0dd961fe1f7b",
+    "QUBOPreprocessing.olean": "a2e140ec6916504ac88c8d4c6d0aef18a04855e079a5f502c885ab5973750cf8"
+  },
+  "dependency_boundary": "Pinned Mathlib/Lean oleans are trusted imports, not rebuilt or independently kernel-replayed"
+}
