@@ -114,11 +114,22 @@ package's ``\min_s (s^T J s + h^T s + c)`` convention):
 \end{aligned}
 ```
 Neighbor fields ``h_1, h_2, h_3`` may be arbitrary (`spin_field_deltas` on
-``w_1, w_2, w_3`` are zero); the zero-field precondition is strictly local to the
-eliminated center ``u`` at the moment of application. Conditioning a fourth
-neighbor can induce a nonzero field ``h'_u \ne 0`` (which invalidates degree-3
-eligibility in ``O(1)`` via the cached exact Ising field) or cancel an existing
-field to ``h'_u = 0`` (which unlocks degree-3 eligibility). Small floating-point
+``w_1, w_2, w_3`` are zero when ``h_u = 0``). More generally, when ``h_u \ne 0``,
+the conditional minimum ``\phi(s_1, s_2, s_3) = \min_{s_u \in \{\pm 1\}} s_u(h_u + \sum_{k=1}^3 J_k s_k)``
+has vanishing 3-way Walsh–Fourier / Möbius cubic coefficient (``\alpha_{123} = 0``,
+so ``\phi`` is an exact quadratic polynomial over ``\{\pm 1\}^3``) **if and only if**
+one of three trichotomy conditions holds:
+1. ``h_u = 0`` (zero-field star–triangle reduction, Eq. 4);
+2. ``|h_u| \ge |J_1| + |J_2| + |J_3|`` (unary coercive-field dominance, introducing 0 fill edges); or
+3. ``2 \max_{k \in \{1,2,3\}} |J_k| \ge |h_u| + |J_1| + |J_2| + |J_3|`` (heavy-edge relation dominance, introducing 0 new fill edges beyond the dominant neighbor).
+
+All three ``\alpha_{123} = 0`` regimes are certified and verified by `prove_elimination`,
+`eliminate_variable!`, and `eliminate_low_degree!` when `max_degree=3`, while
+degree-3 vertices with ``\alpha_{123} \ne 0`` are refused with `:nonquadratic_elimination`
+(and skipped in ``O(1)`` with zero exact table work during `eliminate_low_degree!`).
+Conditioning a fourth neighbor can induce a field ``h'_u \ne 0`` with ``\alpha_{123} \ne 0``
+(which invalidates degree-3 eligibility in ``O(1)``) or bring ``(h'_u, J_1, J_2, J_3)``
+into an ``\alpha_{123} = 0`` regime (which unlocks degree-3 eligibility). Small floating-point
 fields are converted to exact `Rational{BigInt}` without rounding to zero.
 When `max_degree=3` is requested in `eliminate_low_degree!`, `max_fill` bounds
 the number of new triangle edges introduced per step and defers blocked vertices

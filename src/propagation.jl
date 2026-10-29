@@ -1954,7 +1954,7 @@ function _step_elimination_queue!(
     end
     b = _next_elim_bucket(st, md; min_bucket)
     u = st.elim_queues[b][st.elim_heads[b]]
-    if st.fixed[u] != 2 || direction == 0 || st.degrees[u] != b - 1 || (b == 4 && !iszero(_spin_field(ws, u)))
+    if st.fixed[u] != 2 || direction == 0 || st.degrees[u] != b - 1 || (b == 4 && !_is_quadratic_deg3(ws, u))
         _pop_elim_queue!(ws, b)
         return (:continue, 1, 0, 0, 0, 0, 0)
     end
@@ -2485,7 +2485,7 @@ function _has_star_candidate(ws::Workspace, mf::Int)
     idx = max(st.elim_heads[4], st.star_hint)
     @inbounds while idx <= length(q)
         u = q[idx]
-        if st.fixed[u] == 2 && st.degrees[u] == 3 && iszero(_spin_field(ws, u))
+        if st.fixed[u] == 2 && st.degrees[u] == 3 && _is_quadratic_deg3(ws, u)
             st.star_hint = idx
             return true
         end

@@ -12,6 +12,49 @@ function _label_index_dict(@nospecialize(labels::Tuple))
     return d
 end
 
+function _is_quadratic_deg3(
+    is_bool::Bool,
+    fields::Vector{_Exact},
+    dual_fields::Vector{_Exact},
+    adjacency::Vector{Vector{Pair{Int,_Exact}}},
+    fixed::Union{Nothing,Vector{Int8}},
+    u::Int,
+)
+    h_u = is_bool ? dual_fields[u] : fields[u]
+    iszero(h_u) && return true
+    abs_h = abs(h_u)
+    sum_J = _Exact(0)
+    max_J = _Exact(0)
+    cnt = 0
+    for (w, q) in adjacency[u]
+        ((fixed === nothing || fixed[w] == 2) && !iszero(q)) || continue
+        cnt += 1
+        cnt > 3 && return false
+        aJ = abs(is_bool ? (q // 4) : q)
+        sum_J += aJ
+        aJ > max_J && (max_J = aJ)
+    end
+    cnt == 3 || return false
+    return abs_h >= sum_J || 2 * max_J >= abs_h + sum_J
+end
+
+_is_quadratic_deg3(ws::Workspace, u::Int) = _is_quadratic_deg3(
+    ws._snapshot.domain === QT.BoolDomain,
+    ws._state.fields,
+    ws._state.dual_fields,
+    ws._state.adjacency,
+    ws._state.fixed,
+    u,
+)
+
+function _may_be_quadratic_deg3_fast(ws::Workspace, u::Int)
+    st = ws._state
+    st.degrees[u] == 3 || return false
+    iszero(_spin_field(ws, u)) && return true
+    length(st.adjacency[u]) <= 16 && return _is_quadratic_deg3(ws, u)
+    return true
+end
+
 function _incremental(s::_Snapshot;rules=:identity)
     n = length(s.labels)
     adjacency = [Pair{Int,_Exact}[] for _ in 1:n]
@@ -57,9 +100,10 @@ function _incremental(s::_Snapshot;rules=:identity)
     end
     queue = rules in (:dominance, :elimination, :relations, :mixed) ? collect(1:n) : Int[]
     queued = rules in (:dominance, :elimination, :relations, :mixed) ? trues(n) : falses(n)
-    is_zero_spin(i) = iszero(s.domain === QT.BoolDomain ? dual_fields[i] : fields[i])
-    elim_queues = ntuple(b -> Int[i for i in 1:n if degrees[i] == b - 1 && (b < 4 || is_zero_spin(i))], 4)
-    elim_queued = ntuple(b -> BitVector(degrees[i] == b - 1 && (b < 4 || is_zero_spin(i)) for i in 1:n), 4)
+    is_bool = s.domain === QT.BoolDomain
+    is_quad_deg3(i) = _is_quadratic_deg3(is_bool, fields, dual_fields, adjacency, nothing, i)
+    elim_queues = ntuple(b -> Int[i for i in 1:n if degrees[i] == b - 1 && (b < 4 || is_quad_deg3(i))], 4)
+    elim_queued = ntuple(b -> BitVector(degrees[i] == b - 1 && (b < 4 || is_quad_deg3(i)) for i in 1:n), 4)
     elim_blocked_fill = ntuple(_ -> fill(typemax(Int), n), 4)
     rel_queue = Int[i for i in 1:n if degrees[i] >= 1]
     rel_queued = BitVector(degrees[i] >= 1 for i in 1:n)
@@ -311,11 +355,11 @@ function _fix!(ws::Workspace,i::Int,v::Int;proof=nothing,max_work=typemax(Int),d
         st.dual_fields[j] = df
         st.degrees[j] -= 1
         d_j = st.degrees[j]
-        if d_j <= 3 && (d_j < 3 || iszero(_spin_field(ws, j))) && !st.elim_queued[d_j + 1][j]
+        if d_j <= 3 && (d_j < 3 || _may_be_quadratic_deg3_fast(ws, j)) && !st.elim_queued[d_j + 1][j]
             push!(st.elim_queues[d_j + 1], j)
             st.elim_queued[d_j + 1][j] = true
         end
-        d_j == 3 && iszero(_spin_field(ws, j)) && (st.star_hint = st.elim_heads[4])
+        d_j == 3 && _may_be_quadratic_deg3_fast(ws, j) && (st.star_hint = st.elim_heads[4])
         if d_j >= 1 && !st.rel_queued[j]
             push!(st.rel_queue, j)
             st.rel_queued[j] = true
@@ -551,11 +595,11 @@ function _apply_reduction!(
             st.queued[w] = true
         end
         d_w = st.degrees[w]
-        if d_w <= 3 && (d_w < 3 || iszero(_spin_field(ws, w))) && !st.elim_queued[d_w + 1][w]
+        if d_w <= 3 && (d_w < 3 || _may_be_quadratic_deg3_fast(ws, w)) && !st.elim_queued[d_w + 1][w]
             push!(st.elim_queues[d_w + 1], w)
             st.elim_queued[d_w + 1][w] = true
         end
-        d_w == 3 && iszero(_spin_field(ws, w)) && (st.star_hint = st.elim_heads[4])
+        d_w == 3 && _may_be_quadratic_deg3_fast(ws, w) && (st.star_hint = st.elim_heads[4])
         if d_w >= 1 && !st.rel_queued[w]
             push!(st.rel_queue, w)
             st.rel_queued[w] = true

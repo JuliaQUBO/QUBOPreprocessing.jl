@@ -266,11 +266,14 @@ end
     @test verify_certificate(ws3, att3.certificate).valid
     @test eliminate_variable!(ws3, :u; max_degree=3).stop_reason === :applied
 
-    # Degree-3 variable with nonzero effective Ising field (even if unary-dominated so alpha_123 == 0)
-    # is refused with :nonzero_field:
+    # Degree-3 variable with nonzero effective Ising field where alpha_123 == 0 (unary-dominated or heavy-edge dominated)
+    # is proved and eliminated cleanly:
     ws3_nz = Workspace(fixture([:u, :w1, :w2, :w3], [10.0, 1.0, -1.0, 2.0], Q3))
-    @test prove_elimination(ws3_nz, :u; max_degree=3).stop_reason === :nonzero_field
-    @test eliminate_variable!(ws3_nz, :u; max_degree=3).stop_reason === :nonzero_field
+    att3_nz = prove_elimination(ws3_nz, :u; max_degree=3)
+    @test att3_nz.stop_reason === :proved
+    @test verify_certificate(ws3_nz, att3_nz.certificate).valid
+    @test eliminate_variable!(ws3_nz, :u; max_degree=3).stop_reason === :applied
+    @test verify_certificate(ws3_nz, export_certificate(ws3_nz)).valid
 
     # Degree-3 variable with nonzero cubic term alpha_123 != 0 is refused with :nonquadratic_elimination:
     # For u in {0, 1} with f_u = -1.0 and couplings +2.0 to w1, w2, w3:

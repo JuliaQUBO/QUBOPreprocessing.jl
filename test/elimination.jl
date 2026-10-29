@@ -621,21 +621,32 @@ end
         rep_nz = eliminate_low_degree!(ws_nz; max_degree=3)
         @test rep_nz.stop_reason === :quiescent && rep_nz.deductions == 0 && rep_nz.exact_work == 0
     end
-    # Nonzero field where |h_u| >= |J1|+|J2|+|J3| or |J3| >= |J1|+|J2|+|h_u| (so alpha_123 == 0) is rejected with :nonzero_field:
+    # Nonzero field where |h_u| >= |J1|+|J2|+|J3| or |J3| >= |J1|+|J2|+|h_u| (so alpha_123 == 0) is proved and eliminated with 0 fill:
     for (L_dom, Q_dom) in (
-        ([5.0, 0.0, 0.0, 0.0], Q_star),
-        ([0.5, 0.0, 0.0, 0.0], [0.0 1.0 1.0 3.0; 0.0 0.0 0.0 0.0; 0.0 0.0 0.0 0.0; 0.0 0.0 0.0 0.0]),
+        ([5.0, 0.25, -0.5, 0.75], Q_star),
+        ([0.5, 0.25, -0.5, 0.75], [0.0 1.0 1.0 3.0; 0.0 0.0 0.0 0.0; 0.0 0.0 0.0 0.0; 0.0 0.0 0.0 0.0]),
+        ([-0.5, 0.25, -0.5, 0.75], [0.0 -1.0 1.0 -2.5; 0.0 0.0 0.0 0.0; 0.0 0.0 0.0 0.0; 0.0 0.0 0.0 0.0]),
     )
         ws_dom = Workspace(fixture([:u, :w1, :w2, :w3], L_dom, Q_dom; domain=:spin); rules=:elimination)
-        @test prove_elimination(ws_dom, :u; max_degree=3).stop_reason === :nonzero_field
-        @test eliminate_variable!(ws_dom, :u; max_degree=3).stop_reason === :nonzero_field
-        # Forged EliminationStep on a nonzero-field degree-3 vertex is rejected by verify_certificate:
+        att_dom = prove_elimination(ws_dom, :u; max_degree=3)
+        @test att_dom.stop_reason === :proved
+        @test verify_certificate(ws_dom, att_dom.certificate).valid
+        # Forged EliminationStep on a nonzero-field degree-3 vertex with wrong linear_deltas is rejected by verify_certificate:
         forged_step = EliminationStep(1, (2, 3, 4), (-1, -1, -1, -1, -1, -1, -1, -1),
                                       R(-5), (), (), R(0), 0, 0, true)
         forged_cert = QUBOPreprocessing.DominanceCertificate(
             generation(ws_dom), checkpoint(ws_dom), (), (forged_step,), ws_dom._snapshot,
         )
         @test verify_certificate(ws_dom, forged_cert).stop_reason === :invalid_bound
+        # Now eliminate via eliminate_low_degree!(ws_dom; max_degree=3) and verify full ground-state preservation:
+        rep_dom = eliminate_low_degree!(ws_dom; max_degree=3)
+        @test rep_dom.stop_reason === :quiescent && rep_dom.deductions == 4
+        @test verify_certificate(ws_dom, export_certificate(ws_dom)).valid
+        res_dom = materialize(ws_dom; coefficient_type=R)
+        rec_dom = reconstruct(res_dom, Int[])
+        best_dom = minimum(reference(L_dom, Q_dom, 1.0, 0.0, [s1, s2, s3, s4], R)
+                           for s1 in (-1, 1), s2 in (-1, 1), s3 in (-1, 1), s4 in (-1, 1))
+        @test reference(L_dom, Q_dom, 1.0, 0.0, rec_dom.state, R) == best_dom
     end
     # Forged EliminationStep with zero-coupling neighbor or zero delta in linear_deltas/quadratic_deltas is rejected:
     ws_z = Workspace(fixture([:u, :w1, :w2, :w3], zeros(4), [0.0 1.0 1.0 0.0; 0.0 0.0 0.0 0.0; 0.0 0.0 0.0 0.0; 0.0 0.0 0.0 0.0]; domain=:spin))
