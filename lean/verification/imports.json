@@ -1,0 +1,33 @@
+{
+  "QUBOPreprocessing.CompositionRepair": [
+    "Init",
+    "Init",
+    "Mathlib",
+    "QUBOPreprocessing.GaugeCoercive"
+  ],
+  "QUBOPreprocessing.CompressionAudit": [
+    "Init",
+    "Init",
+    "Mathlib",
+    "QUBOPreprocessing.GaugeCoercive"
+  ],
+  "QUBOPreprocessing.GaugeCoercive": [
+    "Init",
+    "Init",
+    "Mathlib"
+  ],
+  "QUBOPreprocessing.MaxCutTriangle": [
+    "Init",
+    "Init",
+    "Mathlib",
+    "QUBOPreprocessing.GaugeCoercive"
+  ],
+  "QUBOPreprocessing": [
+    "Init",
+    "Init",
+    "QUBOPreprocessing.GaugeCoercive",
+    "QUBOPreprocessing.CompositionRepair",
+    "QUBOPreprocessing.MaxCutTriangle",
+    "QUBOPreprocessing.CompressionAudit"
+  ]
+}

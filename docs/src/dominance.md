@@ -565,3 +565,32 @@ residual-to-original reconstruction contract
      because closed endpoints violate ``\operatorname{lift}(\operatorname{opt}(F')) \subseteq \operatorname{opt}(F)``,
      negative coupling compression can lose all original optima, non-unary-dominated positive
      couplings cannot be sparsified by 1-hop bounds, and energy transport is state-dependent.
+
+## Kernel-checked Lean 4 formalization (`#54`)
+
+The directory `lean/` provides a standalone Lean `v4.33.1` / Mathlib `v4.33.1` formalization
+(`lean/verify.sh`, `lean/verification/result.json`) of the four core theoretical results on this
+page across five modules (`58` public source theorems, `112` total compiled constants, using only
+Lean's standard axioms `propext`, `Classical.choice`, and `Quot.sound`):
+
+- `QUBOPreprocessing.GaugeCoercive`: QUBO↔Ising affine bijection, exact $n$-variable energy
+  equivalence, spin-flip gauge invariance of $|h_i|$, $|J_{ij}|$, $\sum_{j \ne i} |J_{ij}|$, and
+  coercive-field ratios $\rho_i$, equivalence of Hammer–Hansen–Simeone binary derivative bounds and
+  Ising coercive-field criteria, and soundness of coercive-field fixing.
+- `QUBOPreprocessing.CompositionRepair`: Compositional closure of weak and strong preprocessing
+  reduction steps (`ReductionStep.comp`, `StrongReductionStep.comp`), monotonic and strictly
+  improving post-processing repair (`repair_monotone`, `repair_strict_improvement`), and exact
+  8-state zero-field degree-3 Ising star–triangle elimination (`starMin_cubic_walsh_zero`,
+  `starTriPoly_eq_starMin`).
+- `QUBOPreprocessing.MaxCutTriangle`: External-degree-aware Max-Cut triangle slack
+  $\gamma_{abc}(\sigma)$ (`gammaTriangle`), supportive and frustrated closed forms, soundness of
+  single-spin vs. joint triangle co-flip dominance (`maxcut_triangle_dominance_sound`,
+  `maxcut_triangle_strict_improvement`), and the formal counterexample refuting the uncorrected
+  multicut triangle rule when $R_c > 0$ (`uncorrected_multicut_triangle_counterexample`).
+- `QUBOPreprocessing.CompressionAudit`: Formal refutations of closed-endpoint and open-interior
+  negative-coupling parameter compression (`endpoint_tie_counterexample`,
+  `quadratic_endpoint_tie_counterexample`, `negative_quadratic_lost_optimum_counterexample`),
+  subsumption of valid open-interior diagonal compression and positive-coupling sparsification by
+  strict unary dominance (`diagonal_compression_subsumed_by_dominance`,
+  `positive_quadratic_sparsification_subsumed_by_dominance`), and non-constant energy transport of
+  in-place coefficient perturbations (`in_place_compression_nonconstant_shift`).
