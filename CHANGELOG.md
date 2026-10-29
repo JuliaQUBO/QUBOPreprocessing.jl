@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.3
+
+Coercive local-field diagnostics, witness-guided probing, and default scale
+integerization release (#49, #50, #51, #52):
+
+- Added conditioned workspace coercive local-field and $\mathbb{Z}_2$
+  gauge-invariance diagnostics (`coercive_fields`, `coercive_field_ratios`,
+  `coercive_field_ratio`, `zero_field_fraction`, `trivial_dominance_fraction`,
+  `is_gauge_invariant`) (#49, #50).
+- Added `coercive_field_witness(ws)` as the default upper-bound witness for
+  `probe_variables!(ws)` and added `:coercive` and `:extremal` candidate
+  orderings (#49, #50).
+- Added `is_integer_scaled` and `integerize_scale` (`integerize_scale::Bool = false`
+  on `Workspace` / `reset!` to preserve raw `export_model` roundtrips, and
+  `integerize_scale::Bool = (rules !== :identity)` enabled by default in
+  `preprocess`) so decimal-scaled models use exact small-integer rational
+  arithmetic (#51, #52).
+
 ## 0.1.2
 
 Scalability, numerical soundness, and full-corpus benchmark release (#46, #47):
