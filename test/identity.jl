@@ -224,3 +224,71 @@ end
     m.variable_map.map[:x] = 2
     @test_throws ArgumentError Workspace(m)
 end
+
+@testset "integerize_scale and is_integer_scaled (#51)" begin
+    # 1. Decimal Float64 noise (-1.7999999999999998 = -0.9 - 0.9) is cleaned up into exact integers
+    #    with scale = 0.1, restoring 100% Z2 gauge invariance and clean Float64 materialization!
+    L_chimera = [-0.9, -1.7999999999999998, -0.9]
+    Q_chimera = [0.0 1.8 0.0; 0.0 0.0 1.8; 0.0 0.0 0.0]
+    for kind in (:sparse, :dense, :dict)
+        m_ch = fixture([:x1, :x2, :x3], L_chimera, Q_chimera; kind, domain=:bool, sense=:min)
+        @test !is_integer_scaled(m_ch)
+        ws_raw = Workspace(m_ch)
+        @test !is_integer_scaled(ws_raw)
+        @test !is_gauge_invariant(ws_raw)
+
+        m_ch_int = integerize_scale(m_ch)
+        @test is_integer_scaled(m_ch_int)
+        @test QT.scale(m_ch_int) == 0.1
+        @test Dict(QT.linear_terms(m_ch_int)) == Dict(1 => -9.0, 2 => -18.0, 3 => -9.0)
+        @test Dict(ij => v for (ij, v) in QT.quadratic_terms(m_ch_int) if !iszero(v)) == Dict((1, 2) => 18.0, (2, 3) => 18.0)
+
+        # Workspace(...; integerize_scale=true) and reset!(...; integerize_scale=true)
+        ws_int = Workspace(m_ch; integerize_scale=true)
+        @test is_integer_scaled(ws_int)
+        @test is_gauge_invariant(ws_int)
+        @test zero_field_fraction(ws_int) == 1.0
+        @test ws_int._snapshot.scale == 0.1
+
+        reset!(ws_raw, m_ch; integerize_scale=true)
+        @test is_integer_scaled(ws_raw)
+        @test is_gauge_invariant(ws_raw)
+
+        # preprocess(m_ch; rules=:identity) preserves raw Float64 by default,
+        # while preprocess(m_ch; rules=:mixed) integerizes by default!
+        ws_id, _ = preprocess(m_ch; rules=:identity)
+        @test !is_integer_scaled(ws_id)
+        ws_mix, rep_mix = preprocess(m_ch; rules=:mixed)
+        @test is_integer_scaled(ws_mix)
+        @test ws_mix._snapshot.scale == 0.1
+        mat_mix = materialize(ws_mix)
+        @test QT.scale(export_model(mat_mix)) == 0.1
+
+        # Explicit override integerize_scale=false on rules=:mixed
+        ws_mix_raw, _ = preprocess(m_ch; rules=:mixed, integerize_scale=false)
+        @test !is_integer_scaled(ws_mix_raw)
+    end
+
+    # 2. Sub-ulp near-tie perturbations on dyadic values must never be rounded away
+    m_near = fixture([:x1, :x2, :x3], [-0.75 + 2.0^-53, -prevfloat(0.5), 0.0], [0.0 1.0 0.5; 0.0 0.0 0.0; 0.0 0.0 0.0])
+    @test !is_integer_scaled(m_near)
+    m_near_out = integerize_scale(m_near)
+    @test !is_integer_scaled(m_near_out)
+    @test QT.scale(m_near_out) == 1.0
+    @test Dict(QT.linear_terms(m_near_out)) == Dict(QT.linear_terms(m_near))
+
+    # 3. Validation of kwargs and unsupported inputs
+    m_ok = fixture([:x, :y], [0.5, -0.25], [0.0 0.75; 0.0 0.0]; offset=0.5, scale=2.0)
+    @test is_integer_scaled(integerize_scale(m_ok))
+    @test QT.scale(integerize_scale(m_ok)) == 0.5
+    @test_throws ArgumentError is_integer_scaled(nothing)
+    @test_throws ArgumentError integerize_scale(nothing)
+    @test_throws ArgumentError integerize_scale(m_ok; max_decimals=-1)
+    @test_throws ArgumentError integerize_scale(m_ok; max_decimals=true)
+    @test_throws ArgumentError integerize_scale(m_ok; atol=-1e-12)
+    @test_throws ArgumentError integerize_scale(m_ok; atol=NaN)
+    @test_throws ArgumentError integerize_scale(m_ok; atol=Inf)
+    @test_throws ArgumentError integerize_scale(m_ok; atol=true)
+    @test_throws ArgumentError Workspace(m_ok; integerize_scale=true, max_decimals=-1)
+    @test_throws ArgumentError Workspace(m_ok; integerize_scale=true, atol=-1.0)
+end

@@ -10,7 +10,8 @@ using UUIDs: UUID, uuid4
 
 export Workspace, Generation, generation, reset!, materialize, ExportResult,
        export_model, original_variables, index_map, reconstruct, Reconstruction,
-       EnergyEvaluation, preprocess, IdentityReport
+       EnergyEvaluation, preprocess, IdentityReport,
+       is_integer_scaled, integerize_scale
 
 export Checkpoint, checkpoint, assume!, rollback!, unfix!, changes, assumptions,
        UpdateReport, RollbackReport, ConditionedExport
