@@ -136,3 +136,83 @@ end
     @test large <= small+2048
     @test isempty(rollback!(b,y;report=true).caller_unfixed)
 end
+
+@testset "deduction-matched assumptions survive a later structural rollback (#71)" begin
+    L = Dict(5 => 1/3, 4 => 1.0, 6 => 2.0, 2 => -4.0, 3 => 1.0, 1 => 1/3)
+    Q = Dict((4, 5) => 3.0, (1, 2) => -0.25, (6, 8) => 4.0, (2, 5) => 2.0, (1, 3) => 2/3,
+             (3, 8) => 4.0, (2, 6) => -1.0, (7, 8) => -0.25, (4, 7) => 0.5, (3, 4) => -2.0,
+             (5, 6) => -1.0, (2, 7) => 4.0, (2, 8) => 0.75, (5, 7) => -2/3, (1, 6) => -0.5,
+             (3, 5) => -1/3, (5, 8) => -2/3, (2, 4) => -0.5, (1, 7) => 3.5, (3, 6) => 0.75,
+             (6, 7) => -3.0, (1, 8) => 4.0)
+    model = QT.Model{Int,Float64,Int}(L, Q; domain=:bool, sense=:min)
+    function lifted_states(ws)
+        res = materialize(ws; coefficient_type=Rational{BigInt})
+        nr = QT.dimension(export_model(res))
+        return [reconstruct(res, [(k >> (b - 1)) & 1 for b in 1:nr]).state for k in 0:(2^nr - 1)]
+    end
+
+    ws = Workspace(model; rules=:mixed)
+    schedule_reductions!(ws)
+    @test (1 => 0) in deductions(ws)
+    @test !(2 in first.(deductions(ws))) # x2 is removed structurally, not fixed
+    # Matching a deduction is still a no-op that does not enter the caller scope.
+    @test assume!(ws, 1, 0).stop_reason === :unchanged
+    @test assume!(ws, 1, 0).stop_reason === :unchanged # repeats do not duplicate
+    @test isempty(assumptions(ws))
+    cert = export_certificate(ws)
+    @test isempty(cert.assumptions)
+    @test verify_certificate(ws, cert).valid
+    # The structural rollback replays the matched request as a caller assumption.
+    r = assume!(ws, 2, 1)
+    @test r.stop_reason === :applied
+    @test r.changed == 2
+    @test assumptions(ws) == [1 => 0, 2 => 1]
+    @test all(s -> s[1] == 0 && s[2] == 1, lifted_states(ws))
+    schedule_reductions!(ws)
+    @test all(s -> s[1] == 0 && s[2] == 1, lifted_states(ws))
+    @test verify_certificate(ws, export_certificate(ws)).valid
+
+    # A request made after a checkpoint is discarded by rolling back to it, and
+    # checkpoints from that discarded pin branch are rejected.
+    ws = Workspace(model; rules=:mixed)
+    schedule_reductions!(ws)
+    cp = checkpoint(ws)
+    assume!(ws, 1, 0)
+    cp_pinned = checkpoint(ws)
+    rollback!(ws, cp)
+    @test_throws ArgumentError rollback!(ws, cp_pinned)
+    @test_throws ArgumentError changes(ws, cp_pinned)
+    @test assume!(ws, 2, 1).stop_reason === :applied
+    @test assumptions(ws) == [2 => 1]
+
+    # Interleaved pins and free-variable caller assumptions replay in
+    # chronological application order on a later structural rollback.
+    L_ord = Dict(1 => 2.0, 2 => 0.0, 3 => 0.0, 4 => 0.0, 5 => 0.0, 6 => 0.0)
+    Q_ord = Dict((2, 3) => -1.0, (3, 4) => 1.0, (3, 5) => 1.0, (3, 6) => 1.0,
+                 (4, 5) => 1.0, (4, 6) => 1.0, (5, 6) => 1.0)
+    ws_ord = Workspace(QT.Model{Int,Float64,Int}(L_ord, Q_ord; domain=:bool, sense=:min); rules=:mixed)
+    apply_dominance!(ws_ord, 1)
+    eliminate_variable!(ws_ord, 2)
+    @test assume!(ws_ord, 1, 0).stop_reason === :unchanged
+    @test assume!(ws_ord, 3, 1).stop_reason === :applied
+    @test assume!(ws_ord, 2, 1).stop_reason === :applied
+    @test assumptions(ws_ord) == [1 => 0, 3 => 1, 2 => 1]
+
+    # LIFO unfix! keeps a pin requested before the removed caller and drops one
+    # whose deduction it undoes.
+    small = fixture([:x,:y,:z,:w], [1.0,0.0,2.0,0.0],
+                    [0.0 -2.0 0.0 0.0;0.0 0.0 0.0 0.0;0.0 0.0 0.0 -3.0;0.0 0.0 0.0 0.0])
+    ws = Workspace(small; rules=:dominance)
+    assume!(ws, :y, 0)
+    propagate!(ws)
+    @test deductions(ws) == [:x => 0]
+    @test assume!(ws, :x, 0).stop_reason === :unchanged
+    @test length(ws._state.pins) == 1
+    assume!(ws, :z, 1)
+    @test unfix!(ws, :z).stop_reason === :applied
+    @test length(ws._state.pins) == 1
+    @test assumptions(ws) == [:y => 0]
+    @test unfix!(ws, :y).stop_reason === :applied
+    @test isempty(ws._state.pins)
+    @test isempty(assumptions(ws))
+end

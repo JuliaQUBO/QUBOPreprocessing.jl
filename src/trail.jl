@@ -118,4 +118,12 @@ mutable struct _Incremental
     initial_edges::Int
     star_hint::Int
     rel_hint::Int
+    # Caller requests that matched a certified unary deduction, as
+    # (index, value, trail length when requested, id). They stay outside the
+    # caller scope; `assume!` replays them as caller fixes when its structural
+    # rollback undoes the deduction, and `rollback!` drops those made after its
+    # checkpoint. Ids come from the monotone `pin_serial`; both ids and trail
+    # lengths are nondecreasing along `pins`.
+    pins::Vector{NTuple{4,Int}}
+    pin_serial::Int
 end
