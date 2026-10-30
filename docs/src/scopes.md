@@ -56,9 +56,13 @@ and replays retained caller pins in order, discarding all deductions, including
 independent root deductions. Repropagation can recover those facts. This
 conservative O(n+m+replay adjacency work) path invalidates all prior checkpoints
 and reports replay visits through `UpdateReport.edge_visits`; initialization is
-separate. No stale inferred value becomes an independent caller premise.
-Matching already inferred values are no-ops without promotion; impose a truly
-independent premise only after restoring a state where that variable is free.
+separate. No stale inferred value becomes an independent caller premise during `unfix!`.
+Matching already inferred values are no-ops without promotion while the deduction
+remains active (if a later `assume!` triggers a structural-reduction rollback that
+undoes that deduction, the recorded matching request is replayed in chronological
+order as an explicit caller assumption so the requested conditioning is not lost);
+impose a truly independent premise directly only after restoring a state where that
+variable is free.
 Conflicts are rejected before mutation. Work/deadline refusals of caller updates
 leave state unchanged; interrupted propagation retains a sound resumable prefix.
 

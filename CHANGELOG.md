@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.1.4
+
+Literature reduction rules, kernel-checked Lean 4 formalization of all eight
+theorems, large-scale $O(1)$ label/domain-map performance, assumption-pin
+rollback soundness, and full 6,292-instance corpus benchmark release
+(#55, #57, #59, #61, #63, #65, #67, #69, #73, #75, #77, #78, #79, #81):
+
+- **Non-zero-field degree-3 Walsh–Hadamard elimination (`star_nonzero_h`, #56, #57):**
+  generalized `prove_elimination`, `eliminate_variable!`, `eliminate_low_degree!`,
+  and `verify_certificate` at `max_degree = 3` to eliminate any degree-3 vertex
+  whose 3-way Walsh/Möbius cubic coefficient vanishes ($\alpha_{123} = 0$) even
+  when $h_u \neq 0$ (coercive-field-dominant and heavy-edge trichotomy cones).
+- **Shared-neighborhood co-flip & twin contraction (`:coflip_pair`, #58, #59):**
+  added shared-neighbor cancellation bounds
+  $2\lvert J_{uv}\rvert \ge \lvert h_u - \sigma h_v\rvert + \sum_{w \notin \{u,v\}} \lvert J_{uw} - \sigma J_{vw}\rvert$
+  and non-adjacent exact signed twin contraction (`prove_twin`, `contract_twins!`,
+  `contract_relations!`).
+- **Roof-duality residual-SCC and two-branch probing 2-SAT pair equivalences
+  (`:roof_scc_pair`, `:probing_pair`, `:double_probe`, #60, #61):** extracted
+  certified signed pair contractions ($s_u = \sigma s_v$) from residual
+  implication SCCs in `apply_roof_duality!` (`contract_scc = true`) and from
+  two-branch trial dominance in `probe_variables!` / `contract_relations!`, plus
+  witness-free `:double_probe` unary fixings.
+- **0-, 1-, and 2-separator biconnected block elimination (`eliminate_block!`,
+  `:block`, #62, #63):** added Tarjan biconnected-component decomposition and
+  exact $2^{\lvert S\rvert}$-state boundary-conditioned quadratic interpolation
+  for small connected blocks ($2 \le \lvert B\rvert \le 16$, $0 \le \lvert S\rvert \le 2$,
+  `enable_blocks = true`).
+- **Large-scale performance & zero per-size recompilation (#64, #65, #66, #67,
+  #70, #78):** replaced heterogeneous `Tuple` slicing in `verify_certificate`,
+  switched `_Storage` to concrete backing vectors with direct term iteration and
+  53-bit rational hardware `fma` interval enclosures (`_enclose`), added symmetric
+  co-flip queue skips, replaced $O(n)$ abstract `labels::Tuple` scans with $O(1)$
+  `label_vec::Vector` indexing (**34.5x** `export_certificate` and **30.0x**
+  `materialize` speedup at $n = 32{,}000$), and eliminated per-size `NTuple{N}`
+  recompilation in `domain_map`, `_source_gauged_bool_constant`, and
+  `_verify_poly_witness_state` (**15,300x** first-call speedup at $n = 4{,}000$).
+- **Deduction-matched caller assumption pins across structural rollbacks (#71,
+  #79) & permanent fuzz suite (#80, #81):** recorded `assume!` requests that
+  match active deductions in `st.pins` and replayed them in chronological order
+  when a later structural `assume!` rolls back that deduction, validated pin state
+  in `_validate_checkpoint`, and added end-to-end brute-force, operation-sequence,
+  and certificate-tampering fuzz tests (`test/fuzz.jl`).
+- **Kernel-checked Lean 4 formalization of all eight theorems (`lean/`, #54, #55,
+  #68, #69, #72, #73, #74, #75, #76, #77):** mechanized Propositions 1 & 3 and
+  Theorems 2, 4, 5, 6, 7, & 8 in Lean `v4.33.1` / Mathlib `v4.33.1` (`180` public
+  source theorems and `360` compiled constants across `9` modules, verified by
+  `lean/verify.sh` with zero `sorry`/`admit` and only standard foundational
+  axioms).
+
 ## 0.1.3
 
 Coercive local-field diagnostics, witness-guided probing, and default scale

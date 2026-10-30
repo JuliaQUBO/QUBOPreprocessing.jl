@@ -55,9 +55,9 @@ algorithm revisits the same model under different assumptions. Workspace and
 Explicit materialization, proof verification and reconstruction have full-model
 costs, and arbitrary non-LIFO unfixing rebuilds state. The
 [operating envelope](performance.md) shows when reuse paid off and when preprocessing
-added cost, and the [QUBOLib & QOBLIB corpus benchmarks](benchmarks.md) report
+added cost, and the [QUBOLib, QOBLIB & MINLPLib corpus benchmarks](benchmarks.md) report
 size reductions, ground-state verification, and heuristic solution repairs across
-6,263 benchmark instances.
+6,292 benchmark instances.
 
 For the individual contracts, read [conditioning](workspace.md),
 [bounded dominance](dominance.md), [proof verification](certificates.md),
