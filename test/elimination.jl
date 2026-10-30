@@ -1141,14 +1141,22 @@ end
     s1_orig = att_tie_lo.certificate.steps[1]::EliminationStep
     s2_orig = att_tie_lo.certificate.steps[2]::EliminationStep
     bw1 = s1_orig.block_witness
-    # Tamper block_phi:
+    # Tamper block_phi (both steps sharing bad block_phi -> :invalid_bound; mismatched -> :invalid_step):
     bw1_bad_phi = QUBOPreprocessing._BlockEliminationWitness(
         bw1.block_variables, 1, bw1.block_tables, (bw1.block_phi[1] + 1, bw1.block_phi[2]),
+    )
+    bw2_bad_phi = QUBOPreprocessing._BlockEliminationWitness(
+        bw1.block_variables, 2, bw1.block_tables, (bw1.block_phi[1] + 1, bw1.block_phi[2]),
     )
     s1_bad_phi = EliminationStep(
         s1_orig.variable, s1_orig.neighbors, s1_orig.table,
         s1_orig.constant_delta, s1_orig.linear_deltas, s1_orig.quadratic_deltas,
         s1_orig.constant, s1_orig.predecessors, s1_orig.scope_length, s1_orig.unique_argmin, bw1_bad_phi,
+    )
+    s2_bad_phi = EliminationStep(
+        s2_orig.variable, s2_orig.neighbors, s2_orig.table,
+        s2_orig.constant_delta, s2_orig.linear_deltas, s2_orig.quadratic_deltas,
+        s2_orig.constant, s2_orig.predecessors, s2_orig.scope_length, s2_orig.unique_argmin, bw2_bad_phi,
     )
     cert_bad_phi = DominanceCertificate(
         generation(ws_tie_lo), att_tie_lo.certificate._scope_checkpoint,
@@ -1156,6 +1164,72 @@ end
         att_tie_lo.certificate._source, nothing,
     )
     @test verify_certificate(ws_tie_lo, cert_bad_phi).stop_reason === :invalid_step
+    cert_both_bad_phi = DominanceCertificate(
+        generation(ws_tie_lo), att_tie_lo.certificate._scope_checkpoint,
+        att_tie_lo.certificate.assumptions, (s1_bad_phi, s2_bad_phi),
+        att_tie_lo.certificate._source, nothing,
+    )
+    @test verify_certificate(ws_tie_lo, cert_both_bad_phi).stop_reason === :invalid_bound
+
+    # Tamper final step constant_delta -> :invalid_bound:
+    s2_bad_delta = EliminationStep(
+        s2_orig.variable, s2_orig.neighbors, s2_orig.table,
+        s2_orig.constant_delta + 1, s2_orig.linear_deltas, s2_orig.quadratic_deltas,
+        s2_orig.constant, s2_orig.predecessors, s2_orig.scope_length, s2_orig.unique_argmin, s2_orig.block_witness,
+    )
+    cert_bad_delta = DominanceCertificate(
+        generation(ws_tie_lo), att_tie_lo.certificate._scope_checkpoint,
+        att_tie_lo.certificate.assumptions, (s1_orig, s2_bad_delta),
+        att_tie_lo.certificate._source, nothing,
+    )
+    @test verify_certificate(ws_tie_lo, cert_bad_delta).stop_reason === :invalid_bound
+
+    # Nested 2-separator sub-block discovery, deduction_limit skip of oversized blocks,
+    # and block_fill_blocked reset when a fill-blocked super-block is superseded:
+    # Construct B = (1, 2) with 2-separator (3, 4), where 4 is also a degree-2 bridge to core 5,
+    # so blocking s1 = 3 alone closes B1 = (1, 2, 4) with 2-separator (3, 5) (which introduces fill (3, 5)),
+    # while blocking (s1 = 3, s2 = 4) closes B = (1, 2) with 2-separator (3, 4) where edge (3, 4) ALREADY exists (0 fill!).
+    labels_nested = [:b1, :b2, :s1, :s2, :c1, :c2, :c3, :c4, :c5, :c6]
+    h_nest = [0.25, -0.5, 0.1, -0.2, 0.3, -0.4, 0.2, -0.1, 0.15, -0.25]
+    J_nest = zeros(10, 10)
+    J_nest[1, 2] = 1.0
+    J_nest[1, 3] = 1.0; J_nest[2, 3] = -1.0
+    J_nest[1, 4] = 1.0; J_nest[2, 4] = 1.0
+    J_nest[3, 4] = 1.0 # existing edge between :s1 (3) and :s2 (4), so eliminating B = (:b1, :b2) has 0 fill!
+    J_nest[4, 5] = 1.0 # :s2 (4) only connects to :b1, :b2, :s1, :c1 -> so B1 = (:b1, :b2, :s2) has 2-separator (:s1, :c1) with NO edge (:s1, :c1) (fill = 1)!
+    # Make (:c1..:c6) a 6-clique (degree >= 5 > D_max = 4) and connect :s1 (3) to :c2..:c6 (with NO edge between :s1 and :c1 so B1 has fill = 1):
+    for u in 6:10
+        J_nest[3, u] = isodd(u) ? 1.0 : -1.0
+    end
+    for u in 5:10, v in (u + 1):10
+        J_nest[u, v] = 1.0
+    end
+    m_nest = fixture(labels_nested, h_nest, J_nest; domain=:spin, sense=:min)
+    ws_nest = Workspace(m_nest; rules=:mixed)
+    # 1. Both B1 = [1, 2, 4] (size 3, fill 1) and B = [1, 2] (size 2, fill 0) are discovered:
+    blocks_nest, r_nest, _ = QUBOPreprocessing._find_separator_blocks(ws_nest; max_block_size=3, max_separator=2)
+    @test r_nest === :ok
+    @test [1, 2, 4] in blocks_nest && [1, 2] in blocks_nest
+    # 2. With max_deductions=2, B1 (size 3) is skipped and B (size 2) is eliminated:
+    ws_nest_ded = Workspace(m_nest; rules=:mixed)
+    rep_nest_ded = eliminate_low_degree!(
+        ws_nest_ded; max_degree=1, cascade_dominance=false,
+        enable_blocks=true, max_block_size=3, max_separator=2, max_deductions=2,
+    )
+    @test rep_nest_ded.stop_reason === :deduction_limit
+    @test rep_nest_ded.deductions == 2
+    # 3. With max_fill=0 in schedule_reductions!, B1 (fill=1) is skipped (setting fblocked=true),
+    #    B (fill=0) is applied (resetting block_fill_blocked=false), and since only :s2 remains in is_cand,
+    #    the next block pass finds 0 blocks and finishes with :quiescent!
+    srep_nest = schedule_reductions!(
+        ws_nest;
+        enable_dominance=false, enable_elimination=false,
+        enable_relations=false, enable_star_triangle=false,
+        enable_blocks=true, max_block_size=3, max_separator=2, max_fill=0,
+    )
+    @test srep_nest.stop_reason === :quiescent
+    @test srep_nest.elimination_deductions == 2
+    @test verify_certificate(ws_nest, export_certificate(ws_nest)).valid
 
     # Tamper unique_argmin:
     s1_bad_ua = EliminationStep(

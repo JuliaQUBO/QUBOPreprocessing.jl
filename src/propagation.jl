@@ -2336,7 +2336,8 @@ function _find_separator_blocks(
                         push!(seen_blocks, bt1)
                         push!(found, (sep1, -length(B1), B1))
                     end
-                elseif max_separator >= 2 && forced_u0 == 0
+                end
+                if max_separator >= 2 && forced_u0 == 0
                     cand_s2 = q1[2:min(length(q1), max_block_size + 1)]
                     for s2 in reverse(cand_s2)
                         pair_key = s1 < s2 ? (s1, s2) : (s2, s1)
@@ -2396,10 +2397,10 @@ function _step_block_elimination!(
     exact_used = 0
     fb_used = 0
     fill_blocked = false
+    ded_blocked = false
     for B in blocks
         _expired(deadline_ns) && return (:deadline, cand_count, edges_used, 0, exact_used, fb_used, 0, fill_blocked)
         k = length(B)
-        k <= rem_deductions || return (:deduction_limit, cand_count, edges_used, 0, exact_used, fb_used, 0, fill_blocked)
         rem_w = rem_work - cand_count - edges_used
         rem_ex = rem_exact - exact_used
         rem_w > 0 || return (:work_limit, cand_count, edges_used, 0, exact_used, fb_used, 0, fill_blocked)
@@ -2430,6 +2431,10 @@ function _step_block_elimination!(
             fill_blocked = true
             continue
         end
+        if k > rem_deductions
+            ded_blocked = true
+            continue
+        end
         rep, apply_visits, _ = _commit_block_elimination!(
             ws, steps;
             max_fill=mf, max_work=rem_work - cand_count - edges_used,
@@ -2441,7 +2446,7 @@ function _step_block_elimination!(
             return (rep.stop_reason, cand_count, edges_used, 0, exact_used, fb_used, 0, fill_blocked)
         return (:applied, cand_count, edges_used, k, exact_used, fb_used, actual_fill, fill_blocked)
     end
-    return (:none, cand_count, edges_used, 0, exact_used, fb_used, 0, fill_blocked)
+    return (ded_blocked ? :deduction_limit : :none, cand_count, edges_used, 0, exact_used, fb_used, 0, fill_blocked)
 end
 
 function _step_elimination_queue!(
@@ -3614,6 +3619,7 @@ function schedule_reductions!(
             end
             if status === :applied
                 blocks_quiescent = false
+                block_fill_blocked = false
                 empty!(rejected_blocks)
             elseif status === :none
                 blocks_quiescent = true
