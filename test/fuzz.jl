@@ -1,19 +1,29 @@
-using Random
+_fuzz_pick(rng, coll) = coll[Int(rng() % UInt64(length(coll))) + 1]
+_fuzz_bool(rng) = isodd(rng())
+_fuzz_prob(rng, p::Float64) = (Float64(rng()) / 4294967296.0) < p
 
 function _fuzz_randmodel(rng, n)
-    dom = rand(rng, (:bool, :spin))
-    sense = rand(rng, (:min, :min, :max))
-    coef() = rand(rng, (rand(rng, -4:4), rand(rng, -8:8) / 2, rand(rng, -3:3) / 4, rand(rng, -3:3) / 3 * 1.0))
+    dom = _fuzz_pick(rng, (:bool, :spin))
+    sense = _fuzz_pick(rng, (:min, :min, :max))
+    coef() = _fuzz_pick(
+        rng,
+        (
+            Float64(_fuzz_pick(rng, -4:4)),
+            Float64(_fuzz_pick(rng, -8:8)) / 2,
+            Float64(_fuzz_pick(rng, -3:3)) / 4,
+            Float64(_fuzz_pick(rng, -3:3)) / 3,
+        ),
+    )
     L = Dict{Int,Float64}()
     Q = Dict{Tuple{Int,Int},Float64}()
-    p = rand(rng, (0.3, 0.5, 0.8))
+    p = _fuzz_pick(rng, (0.3, 0.5, 0.8))
     for i in 1:n
-        rand(rng) < 0.7 && (L[i] = Float64(coef()))
+        _fuzz_prob(rng, 0.7) && (L[i] = coef())
         for j in (i + 1):n
-            rand(rng) < p && (Q[(i, j)] = Float64(coef()))
+            _fuzz_prob(rng, p) && (Q[(i, j)] = coef())
         end
     end
-    off = rand(rng, (0.0, 0.0, 1.5, -2.0))
+    off = _fuzz_pick(rng, (0.0, 0.0, 1.5, -2.0))
     m = QT.Model{Int,Float64,Int}(L, Q; domain=dom, sense=sense, offset=off)
     return m, dom, sense
 end
@@ -70,31 +80,31 @@ function _check_sequence_fuzz_case(rng, n0)
     n == 0 && return (:ok, false)
     ws = Workspace(m; rules=:mixed)
     map = nothing
-    if rand(rng) < 0.5
-        tdom = rand(rng, (:bool, :spin))
-        g = rand(rng) < 0.5 ? nothing : rand(rng, (-1, 1), n)
+    if _fuzz_bool(rng)
+        tdom = _fuzz_pick(rng, (:bool, :spin))
+        g = _fuzz_bool(rng) ? nothing : [_fuzz_pick(rng, (-1, 1)) for _ in 1:n]
         map = domain_map(ws; domain=tdom, gauge=g)
     end
     assumed = Dict{Int,Int}()
     low = dom === :bool ? 0 : -1
     cp = nothing
-    for _ in 1:rand(rng, 2:6)
-        r = rand(rng, 1:9)
-        lab = rand(rng, labels)
+    for _ in 1:_fuzz_pick(rng, 2:6)
+        r = _fuzz_pick(rng, 1:9)
+        lab = _fuzz_pick(rng, labels)
         try
             if r == 1
-                schedule_reductions!(ws; map, enable_star_triangle=rand(rng, Bool), enable_blocks=rand(rng, Bool),
-                    allow_weak_dominance=rand(rng, Bool), allow_weak_relations=rand(rng, Bool))
+                schedule_reductions!(ws; map, enable_star_triangle=_fuzz_bool(rng), enable_blocks=_fuzz_bool(rng),
+                    allow_weak_dominance=_fuzz_bool(rng), allow_weak_relations=_fuzz_bool(rng))
             elseif r == 2
-                apply_probing!(ws, lab; map, double_probe=rand(rng, Bool))
+                apply_probing!(ws, lab; map, double_probe=_fuzz_bool(rng))
             elseif r == 3
-                apply_roof_duality!(ws; map, contract_scc=rand(rng, Bool))
+                apply_roof_duality!(ws; map, contract_scc=_fuzz_bool(rng))
             elseif r == 4
-                apply_submodular_cut!(ws; map, allow_weak=rand(rng, Bool))
+                apply_submodular_cut!(ws; map, allow_weak=_fuzz_bool(rng))
             elseif r == 5
-                apply_maxcut!(ws, lab; map, allow_weak=rand(rng, Bool))
+                apply_maxcut!(ws, lab; map, allow_weak=_fuzz_bool(rng))
             elseif r == 6 && length(assumed) < n - 1
-                v = rand(rng, (low, 1))
+                v = _fuzz_pick(rng, (low, 1))
                 assume!(ws, lab, v)
                 assumed[lab] = v
             elseif r == 7 && cp === nothing
@@ -168,22 +178,22 @@ function _check_tamper_fuzz_case(rng, n)
     n_dim == 0 && return (:ok, 0, 0)
     labels = QT.variables(m)
     ws = Workspace(m; rules=:mixed)
-    init_op = rand(rng, 1:5)
+    init_op = _fuzz_pick(rng, 1:5)
     try
         if init_op == 1
             apply_roof_duality!(ws; contract_scc=true)
         elseif init_op == 2
-            apply_submodular_cut!(ws; allow_weak=rand(rng, Bool))
+            apply_submodular_cut!(ws; allow_weak=_fuzz_bool(rng))
         elseif init_op == 3
-            apply_maxcut!(ws, rand(rng, labels); allow_weak=rand(rng, Bool))
+            apply_maxcut!(ws, _fuzz_pick(rng, labels); allow_weak=_fuzz_bool(rng))
         elseif init_op == 4
-            apply_probing!(ws, rand(rng, labels); double_probe=rand(rng, Bool))
+            apply_probing!(ws, _fuzz_pick(rng, labels); double_probe=_fuzz_bool(rng))
         end
     catch err
         err isa ArgumentError || rethrow()
     end
     schedule_reductions!(ws; enable_star_triangle=true, enable_blocks=true,
-        allow_weak_dominance=rand(rng, Bool), allow_weak_relations=rand(rng, Bool))
+        allow_weak_dominance=_fuzz_bool(rng), allow_weak_relations=_fuzz_bool(rng))
     cert = export_certificate(ws)
     cert === nothing && return (:ok, 0, 0)
     verify_certificate(ws, cert).valid || return (:base_invalid, 0, 0)
@@ -246,12 +256,12 @@ end
 
 @testset "Brute-Force Scheduler, Sequence, and Certificate-Tampering Fuzzing (#80)" begin
     @testset "Brute-force scheduler fuzzing across 5 configurations" begin
-        rng = MersenneTwister(20261030)
+        rng = trace_bits(20261030)
         reduced_count = 0
         for t in 1:150
-            n = rand(rng, 1:8)
+            n = _fuzz_pick(rng, 1:8)
             cfg = _FUZZ_CONFIGS[mod1(t, length(_FUZZ_CONFIGS))]
-            sub = MersenneTwister(10_000 + t)
+            sub = trace_bits(10_000 + t)
             status, info = _check_scheduler_fuzz_case(sub, n, cfg)
             @test status === :ok
             status === :ok && info && (reduced_count += 1)
@@ -260,11 +270,11 @@ end
     end
 
     @testset "Interleaved operation-sequence, gauge-map, assumption & rollback fuzzing" begin
-        rng = MersenneTwister(20261031)
+        rng = trace_bits(20261031)
         reduced_count = 0
         for t in 1:150
-            n = rand(rng, 1:8)
-            sub = MersenneTwister(20_000 + t)
+            n = _fuzz_pick(rng, 1:8)
+            sub = trace_bits(20_000 + t)
             status, info = _check_sequence_fuzz_case(sub, n)
             @test status === :ok
             status === :ok && info && (reduced_count += 1)
@@ -319,12 +329,12 @@ end
     end
 
     @testset "Certificate-tampering soundness verification" begin
-        rng = MersenneTwister(20261101)
+        rng = trace_bits(20261101)
         total_checked = 0
         total_rejected = 0
         for t in 1:60
-            n = rand(rng, 2:7)
-            status, checked, rejected = _check_tamper_fuzz_case(MersenneTwister(30_000 + t), n)
+            n = _fuzz_pick(rng, 2:7)
+            status, checked, rejected = _check_tamper_fuzz_case(trace_bits(30_000 + t), n)
             @test status === :ok
             total_checked += checked
             total_rejected += rejected
@@ -333,4 +343,3 @@ end
         @test total_rejected >= 450
     end
 end
-
