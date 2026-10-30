@@ -37,8 +37,13 @@ restored.state
 `assume!` takes an original **label**, including when labels are integers; it
 does not take a compact residual index. Duplicate assignments are no-ops and
 conflicts or invalid values fail before mutation. A duplicate of an inferred
-value is also a no-op and does not create an independent caller premise.
-Roll back before imposing such a premise. Caller assumptions only
+value is also a no-op and does not create an independent caller premise; however,
+if a subsequent `assume!` on a structurally reduced variable (or with an active
+marginal weak step) rolls back that inferred deduction, the recorded matching
+request is replayed in chronological order as an explicit caller assumption so the
+requested conditioning is preserved (`rollback!` and `unfix!` discard such
+recorded requests when their checkpoint or underlying deduction is removed).
+Roll back before imposing an unconditional caller premise directly. Caller assumptions only
 describe a restricted problem. A residual optimum lifts to an optimum within
 that scope, which need not contain any original global optimum. The residual
 export has `certificate.scope == :assumptions`; an empty reduction chain makes

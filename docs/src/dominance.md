@@ -653,31 +653,64 @@ residual-to-original reconstruction contract
      negative coupling compression can lose all original optima, non-unary-dominated positive
      couplings cannot be sparsified by 1-hop bounds, and energy transport is state-dependent.
 
-## Kernel-checked Lean 4 formalization (`#54`)
+## Kernel-checked Lean 4 formalization (`#54`, `#68`, `#72`, `#74`, `#76`)
 
 The directory `lean/` provides a standalone Lean `v4.33.1` / Mathlib `v4.33.1` formalization
-(`lean/verify.sh`, `lean/verification/result.json`) of the four core theoretical results on this
-page across five modules (`58` public source theorems, `112` total compiled constants, using only
-Lean's standard axioms `propext`, `Classical.choice`, and `Quot.sound`):
+(`lean/verify.sh`, `lean/verification/result.json`) of all eight core theoretical results on this
+page across nine modules (`180` public source theorems, `360` total compiled constants, with zero
+compiler warnings and using only Lean's standard foundational axioms `propext`, `Classical.choice`,
+and `Quot.sound`):
 
-- `QUBOPreprocessing.GaugeCoercive`: QUBO↔Ising affine bijection, exact $n$-variable energy
-  equivalence, spin-flip gauge invariance of $|h_i|$, $|J_{ij}|$, $\sum_{j \ne i} |J_{ij}|$, and
-  coercive-field ratios $\rho_i$, equivalence of Hammer–Hansen–Simeone binary derivative bounds and
-  Ising coercive-field criteria, and soundness of coercive-field fixing.
-- `QUBOPreprocessing.CompositionRepair`: Compositional closure of weak and strong preprocessing
-  reduction steps (`ReductionStep.comp`, `StrongReductionStep.comp`), monotonic and strictly
-  improving post-processing repair (`repair_monotone`, `repair_strict_improvement`), and exact
-  8-state zero-field degree-3 Ising star–triangle elimination (`starMin_cubic_walsh_zero`,
-  `starTriPoly_eq_starMin`).
-- `QUBOPreprocessing.MaxCutTriangle`: External-degree-aware Max-Cut triangle slack
-  $\gamma_{abc}(\sigma)$ (`gammaTriangle`), supportive and frustrated closed forms, soundness of
-  single-spin vs. joint triangle co-flip dominance (`maxcut_triangle_dominance_sound`,
+- `QUBOPreprocessing.GaugeCoercive` (**Proposition 1**, `#54`): QUBO↔Ising affine bijection, exact
+  $n$-variable energy equivalence, spin-flip gauge invariance of $|h_i|$, $|J_{ij}|$,
+  $\sum_{j \ne i} |J_{ij}|$, and coercive-field ratios $\rho_i$, equivalence of
+  Hammer–Hansen–Simeone binary derivative bounds and Ising coercive-field criteria, and soundness of
+  coercive-field fixing.
+- `QUBOPreprocessing.CompositionRepair` (**Theorem 2 & Corollary 2.1**, `#54`): Compositional
+  closure of weak and strong preprocessing reduction steps (`ReductionStep.comp`,
+  `StrongReductionStep.comp`), monotonic and strictly improving post-processing repair
+  (`repair_monotone`, `repair_strict_improvement`), and exact 8-state zero-field degree-3 Ising
+  star–triangle elimination (`starMin_cubic_walsh_zero`, `starTriPoly_eq_starMin`).
+- `QUBOPreprocessing.MaxCutTriangle` (**Proposition 3**, `#54`): External-degree-aware Max-Cut
+  triangle slack $\gamma_{abc}(\sigma)$ (`gammaTriangle`), supportive and frustrated closed forms,
+  soundness of single-spin vs. joint triangle co-flip dominance (`maxcut_triangle_dominance_sound`,
   `maxcut_triangle_strict_improvement`), and the formal counterexample refuting the uncorrected
   multicut triangle rule when $R_c > 0$ (`uncorrected_multicut_triangle_counterexample`).
-- `QUBOPreprocessing.CompressionAudit`: Formal refutations of closed-endpoint and open-interior
-  negative-coupling parameter compression (`endpoint_tie_counterexample`,
-  `quadratic_endpoint_tie_counterexample`, `negative_quadratic_lost_optimum_counterexample`),
-  subsumption of valid open-interior diagonal compression and positive-coupling sparsification by
-  strict unary dominance (`diagonal_compression_subsumed_by_dominance`,
+- `QUBOPreprocessing.CompressionAudit` (**Theorem 4**, `#54`): Formal refutations of
+  closed-endpoint and open-interior negative-coupling parameter compression
+  (`endpoint_tie_counterexample`, `quadratic_endpoint_tie_counterexample`,
+  `negative_quadratic_lost_optimum_counterexample`), subsumption of valid open-interior diagonal
+  compression and positive-coupling sparsification by strict unary dominance
+  (`diagonal_compression_subsumed_by_dominance`,
   `positive_quadratic_sparsification_subsumed_by_dominance`), and non-constant energy transport of
   in-place coefficient perturbations (`in_place_compression_nonconstant_shift`).
+- `QUBOPreprocessing.WalshDegree3` (**Theorem 5**, `#68`): General 8-point Walsh–Hadamard
+  decomposition on $\{-1, +1\}^3$ (`walshQuadPoly_add_cubic_eq`,
+  `walshQuadPoly_eq_iff_cubic_zero`), general non-zero-field degree-3 spin marginalization
+  (`deg3StarMin_eq_walshQuadPoly_iff_cubic_zero`, `deg3Star_elimination_is_reduction`), the
+  full-dimensional $\alpha_{123} = 0$ trichotomy cones (`deg3StarMin_cubic_zero_of_h0_zero`,
+  `deg3StarMin_cubic_zero_of_field_dominant`, `deg3StarMin_cubic_zero_of_heavy_edge1`–`3`), and
+  cubic obstructions certifying `:nonquadratic_elimination`.
+- `QUBOPreprocessing.CoflipCancellation` (**Theorem 6**, `#72`): Exact two-spin co-flip average
+  identity (`coflip_average_eq`), shared-neighborhood cancellation radius and strong/weak
+  `:coflip_pair` persistency (`coflip_pair_strong_persistency`, `coflip_pair_weak_persistency`),
+  coupled and non-adjacent twin contraction (`coupled_twin_strong_contraction`,
+  `nonadjacent_twin_weak_contraction`), monotone one-sided $L_1$ pruning increments
+  (`one_sided_diff_sum_eq`, `coflipDelta_nonneg`), and `ReductionStep` / `StrongReductionStep`
+  bridges (`coflip_reductionStep`, `coflip_strongReductionStep`).
+- `QUBOPreprocessing.ProbingMargin` (**Theorem 7**, `#74`): Single-step spin margin and
+  Boolean-to-spin normalization (`boolToSpinMargin_eq`, `single_step_spin_margin_sound`),
+  first-divergence and full-cascade telescoping trial-dominance repair
+  (`cascade_first_divergence_repair`, `cascadeFullRepair_satisfies_and_telescopes`,
+  `cascadeFullRepair_drop_ge_branchSpinMargin`), witness-free `:double_probe` (`double_probe_sound`,
+  `double_probe_reductionStep`, `double_probe_strongReductionStep`), and 4-pattern 2-SAT
+  `:probing_pair` equivalence (`probing_pair_sound`, `probing_pair_reductionStep`,
+  `probing_pair_strongReductionStep`).
+- `QUBOPreprocessing.BlockElimination` (**Theorem 8**, `#76`): Separator-conditioned connected
+  block marginalization (`block_elimination_reductionStep`,
+  `block_elimination_unique_argmin_iff`, `block_elimination_strongReductionStep`), universal
+  exactness of 0-, 1-, and 2-separator Boolean and Spin quadratic interpolation (`interp0Poly_eq`,
+  `bool1Poly_eq`, `spin1Poly_eq`, `bool2QuadPoly_eq`, `spin2QuadPoly_eq`), batch $k$-step
+  zero-delta materialization and coordinate-wise table reconstruction (`sum_batchStepDelta_eq`,
+  `reconstruct_coordBlockTable_eq`), and concrete 0-, 1-, 2-, and ($\alpha_{123} = 0$) 3-separator
+  `ReductionStep` / `StrongReductionStep` theorems.

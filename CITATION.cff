@@ -2,7 +2,7 @@ cff-version: 1.2.0
 message: "For general use, cite the preferred QUBO.jl ecosystem article; also cite the exact QUBOPreprocessing.jl software version used."
 title: "QUBOPreprocessing.jl"
 type: software
-abstract: "Certified strict-dominance, pair-relation, elimination, roof-duality, submodular-cut, probing, and Max-Cut preprocessing for QUBO models in Julia."
+abstract: "Certified strict-dominance, pair-relation, co-flip, low-degree and biconnected-block elimination, roof-duality, submodular-cut, probing, and Max-Cut preprocessing for QUBO and Ising models in Julia, backed by a kernel-checked Lean 4 formalization."
 authors:
   - given-names: "David E."
     family-names: "Bernal Neira"
@@ -12,8 +12,8 @@ authors:
 repository-code: "https://github.com/JuliaQUBO/QUBOPreprocessing.jl"
 url: "https://juliaqubo.github.io/QUBOPreprocessing.jl/"
 license: MPL-2.0
-version: "0.1.3"
-date-released: "2026-10-29"
+version: "0.1.4"
+date-released: "2026-10-30"
 keywords:
   - "Julia"
   - "QUBO"
@@ -21,6 +21,7 @@ keywords:
   - "pseudo-Boolean optimization"
   - "preprocessing"
   - "persistency"
+  - "Lean 4"
 references:
   - type: data
     title: "QUBOLib benchmark corpus"
@@ -29,8 +30,8 @@ references:
         family-names: "Maciel Xavier"
       - given-names: "David E."
         family-names: "Bernal Neira"
-    doi: "10.5281/zenodo.23027943"
-    url: "https://doi.org/10.5281/zenodo.23027943"
+    doi: "10.5281/zenodo.23757887"
+    url: "https://doi.org/10.5281/zenodo.23757887"
     year: 2026
 preferred-citation:
   type: article
