@@ -29,6 +29,14 @@
     "Mathlib",
     "QUBOPreprocessing.GaugeCoercive"
   ],
+  "QUBOPreprocessing.ProbingMargin": [
+    "Init",
+    "Init",
+    "Mathlib",
+    "QUBOPreprocessing.GaugeCoercive",
+    "QUBOPreprocessing.CompositionRepair",
+    "QUBOPreprocessing.CoflipCancellation"
+  ],
   "QUBOPreprocessing.WalshDegree3": [
     "Init",
     "Init",
@@ -44,6 +52,7 @@
     "QUBOPreprocessing.MaxCutTriangle",
     "QUBOPreprocessing.CompressionAudit",
     "QUBOPreprocessing.WalshDegree3",
-    "QUBOPreprocessing.CoflipCancellation"
+    "QUBOPreprocessing.CoflipCancellation",
+    "QUBOPreprocessing.ProbingMargin"
   ]
 }

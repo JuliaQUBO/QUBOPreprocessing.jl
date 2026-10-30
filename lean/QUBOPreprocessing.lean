@@ -4,3 +4,4 @@ import QUBOPreprocessing.MaxCutTriangle
 import QUBOPreprocessing.CompressionAudit
 import QUBOPreprocessing.WalshDegree3
 import QUBOPreprocessing.CoflipCancellation
+import QUBOPreprocessing.ProbingMargin
