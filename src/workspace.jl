@@ -193,7 +193,7 @@ function _incremental(s::_Snapshot;rules=:identity)
                         elim_blocked_fill,
                         rel_queue, rel_queued, 1, fill(typemax(Int), n), trues(n),
                         (Int[], Int[], Int[], Int[]), Int[], Int[], 0,
-                        m_init, m_init, 1, 1)
+                        m_init, m_init, 1, 1, NTuple{4,Int}[], 0)
 end
 
 """
@@ -210,6 +210,7 @@ struct Checkpoint
     _depth::Int
     _serial::UInt64
     _fix_depth::Int
+    _pin::Int
 end
 
 """`checkpoint(ws)` captures a constant-size position without copying the model."""
@@ -219,9 +220,19 @@ function checkpoint(ws::Workspace)
 end
 
 function _checkpoint_at(ws::Workspace,depth::Int)
-    t = ws._state.trail
-    return Checkpoint(generation(ws),ws._state.epoch,depth,depth == 0 ? 0 : t[depth].serial,
-                      depth == 0 ? 0 : t[depth].fix_depth)
+    st = ws._state
+    t = st.trail
+    # A checkpoint at the tip follows every pin so far; an earlier depth
+    # follows only the pins requested while the trail was at most that long.
+    pin = depth == length(t) ? st.pin_serial : 0
+    if depth < length(t)
+        for p in st.pins
+            p[3] <= depth || break
+            pin = p[4]
+        end
+    end
+    return Checkpoint(generation(ws),st.epoch,depth,depth == 0 ? 0 : t[depth].serial,
+                      depth == 0 ? 0 : t[depth].fix_depth,pin)
 end
 
 function _validate_checkpoint(ws::Workspace, cp::Checkpoint)
@@ -280,7 +291,11 @@ mutation. If `label` was removed by a structural reduction (`RelationStep` or
 `EliminationStep`) or a non-pointwise marginal weak step is active on the trail,
 `assume!` never treats the removed variable as freely assignable on the reduced
 residual; instead it rolls back the reduction suffix and replays retained caller
-assumptions before imposing the new assumption.
+assumptions before imposing the new assumption. A request that previously
+matched a deduction undone by that rollback is replayed too, as an explicit
+caller assumption, so the conditioning the caller asked for is not dropped.
+`rollback!` discards such requests made after its checkpoint, and `unfix!`
+discards those whose deduction it removes.
 """
 function assume!(ws::Workspace, label, value; map::Union{Nothing,DomainGaugeMap}=nothing,
                  max_work=typemax(Int), deadline_ns=nothing)
@@ -296,6 +311,10 @@ function assume!(ws::Workspace, label, value; map::Union{Nothing,DomainGaugeMap}
     st = ws._state
     if st.fixed[i] in (-1, 0, 1)
         st.fixed[i] == v || throw(ArgumentError("conflicting caller assumption"))
+        if st.trail[st.entries[i]].proof !== nothing && !any(p -> p[1] == i, st.pins)
+            st.pin_serial += 1
+            push!(st.pins, (i, v, length(st.trail), st.pin_serial))
+        end
         return UpdateReport(:unchanged, 0, 0)
     end
     if st.fixed[i] != 2 || st.marginal_count > 0
@@ -306,11 +325,17 @@ function assume!(ws::Workspace, label, value; map::Union{Nothing,DomainGaugeMap}
             c_idx -= 1
         end
         replay_start = c_idx + 1
-        replay_count = length(st.callers) - c_idx + 1
+        n_pins = length(st.pins)
+        replay_count = length(st.callers) - c_idx + n_pins + 1
         replay_list = Vector{Pair{Int,Int}}(undef, replay_count)
         for (offset, k) in enumerate(replay_start:length(st.callers))
             e = st.trail[st.callers[k]]::_UndoFix
             replay_list[offset] = e.index => e.value
+        end
+        # Every pin matched a deduction at or after `pos`, so the rollback below
+        # undoes it; replay the caller's request instead of losing it.
+        for (offset, (pin_i, pin_v, _, _)) in enumerate(st.pins)
+            replay_list[replay_count - n_pins - 1 + offset] = pin_i => pin_v
         end
         replay_list[replay_count] = i => v
         planned_visits = 0
@@ -329,7 +354,7 @@ function assume!(ws::Workspace, label, value; map::Union{Nothing,DomainGaugeMap}
             rep = _fix!(ws, idx, val; max_work=typemax(Int), deadline_ns=nothing)
             total_visits += rep.edge_visits
         end
-        return UpdateReport(:applied, total_visits, 1)
+        return UpdateReport(:applied, total_visits, 1 + n_pins)
     end
     return _fix!(ws, i, v; max_work, deadline_ns)
 end
@@ -858,6 +883,7 @@ function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
             st.dual_constant = undo.dual_constant
         end
     end
+    filter!(p -> p[4] <= cp._pin, st.pins)
     st.star_hint = st.elim_heads[4]
     st.rel_hint = st.rel_head
     return report ? captured : ws
