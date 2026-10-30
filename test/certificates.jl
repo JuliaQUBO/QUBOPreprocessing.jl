@@ -214,3 +214,71 @@ end
     @test fallback > 0
     @test proved > 0
 end
+
+@testset "53-bit exact integer fast path, shared-neighbor contraction budget, and long heterogeneous certificates" begin
+    # 1. _enclose exact 53-bit integer boundary vs > 53-bit integer and non-unit denominator
+    for k in (-9007199254740992, -1, 0, 1, 42, 9007199254740992)
+        q = QUBOPreprocessing._to_exact(k)
+        lo, hi = QUBOPreprocessing._enclose(q)
+        @test lo == hi == Float64(k)
+        @test QUBOPreprocessing._to_exact(Float64(k)) == q
+        @test QUBOPreprocessing._to_exact(q) === q
+    end
+    q_over = Rational{BigInt}(BigInt(9007199254740993), BigInt(1))
+    lo_o, hi_o = QUBOPreprocessing._enclose(q_over)
+    @test lo_o < hi_o
+    @test Rational{BigInt}(lo_o) <= q_over <= Rational{BigInt}(hi_o)
+
+    # 2. _can_possibly_contract outward-rounded Float64 shared-neighbor budget early exit
+    #    Dense 8-vertex graph where shared neighbors cannot cancel enough weight vs where they can
+    n_d = 8
+    L_d = zeros(Float64, n_d)
+    Q_d = zeros(Float64, n_d, n_d)
+    for i in 1:n_d, j in (i + 1):n_d
+        Q_d[i, j] = 4.0
+    end
+    # Make (1, 2) have a negative coupling (-4.0) so sigma = +1 and identical couplings to 3..8 cancel in co-flip
+    Q_d[1, 2] = -4.0
+    ws_d = Workspace(fixture(collect(1:n_d), L_d, Q_d; domain=:spin, sense=:min); rules=:mixed)
+    @test QUBOPreprocessing._can_possibly_contract(ws_d, 1, 2, QUBOPreprocessing._to_exact(-4.0), 1, nothing)
+    @test !QUBOPreprocessing._can_possibly_contract(ws_d, 3, 4, QUBOPreprocessing._to_exact(4.0), 1, nothing)
+    rep_d = schedule_reductions!(ws_d; allow_weak_dominance=true, allow_weak_relations=true)
+    @test rep_d.deductions >= 1
+    cert_d = export_certificate(ws_d)
+    @test cert_d !== nothing
+    @test verify_certificate(ws_d, cert_d).valid
+
+    # 3. Long heterogeneous certificate chain (DominanceStep + RelationStep + EliminationStep)
+    #    verifies and transports in O(n) without dynamic Tuple-slice specialization overhead
+    n_long = 120
+    L_long = zeros(Float64, n_long)
+    Q_long = zeros(Float64, n_long, n_long)
+    # 1..40: strong unary dominance
+    for i in 1:40
+        L_long[i] = (isodd(i) ? -10.0 : 10.0)
+        Q_long[i, i + 1] = 1.0
+    end
+    # 41..80: 20 strongly coupled pairs
+    for k in 1:20
+        u = 40 + 2 * k - 1
+        v = 40 + 2 * k
+        Q_long[u, v] = -12.0
+        Q_long[v, 81 + (k % 10)] = 1.0
+    end
+    # 81..120: chain of degree-1/2 eliminations
+    for i in 81:(n_long - 1)
+        Q_long[i, i + 1] = -2.0
+    end
+    ws_long = Workspace(fixture(collect(1:n_long), L_long, Q_long; domain=:bool, sense=:min); rules=:mixed)
+    rep_long = schedule_reductions!(ws_long; allow_weak_dominance=true, allow_weak_relations=true, enable_blocks=true)
+    @test rep_long.deductions == n_long
+    cert_long = export_certificate(ws_long)
+    @test cert_long !== nothing
+    @test length(cert_long.steps) == n_long
+    @test persistency(cert_long) in (:strong, :weak)
+    @test certificate_guarantee(cert_long) === :optimum_preserving_restriction
+    @test verify_certificate(ws_long, cert_long).valid
+    dmap_long = domain_map(ws_long; domain=:spin)
+    cert_tr = transport_certificate(ws_long, cert_long, dmap_long)
+    @test verify_certificate(ws_long, cert_tr; map=dmap_long).valid
+end

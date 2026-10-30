@@ -479,8 +479,12 @@ scope, or `:weak` when any step relies on tie-breaking / weak persistency.
 persistency(::DomainGaugeMap) = :strong
 persistency(step::Union{DominanceStep,RelationStep,ProbingStep,RoofDualityStep,SubmodularCutStep,MaxCutStep}) = step.persistency
 persistency(step::EliminationStep) = step.unique_argmin ? :strong : :weak
-persistency(cert::DominanceCertificate) =
-    any(s -> persistency(s) === :weak, cert.steps) ? :weak : :strong
+function persistency(cert::DominanceCertificate)
+    for k in 1:length(cert.steps)
+        persistency(cert.steps[k]::_ProofRecord) === :weak && return :weak
+    end
+    return :strong
+end
 
 """
     certificate_guarantee(cert::DominanceCertificate)
@@ -492,8 +496,10 @@ Return the overall guarantee class of `cert`:
 """
 function certificate_guarantee(cert::DominanceCertificate)
     isempty(cert.steps) && return :energy_identity
-    all(s -> s isa EliminationStep, cert.steps) && return :exact_elimination
-    return :optimum_preserving_restriction
+    for k in 1:length(cert.steps)
+        cert.steps[k] isa EliminationStep || return :optimum_preserving_restriction
+    end
+    return :exact_elimination
 end
 
 """Proof attempt with optional `certificate`, `stop_reason`, numeric `method`,
@@ -615,7 +621,11 @@ _direction(s::_Snapshot) = iszero(s.scale) ? 0 :
 
 # Check the enclosure against the exact cached field rather than assuming a
 # rational-to-float conversion is correctly rounded. No global rounding mode.
-function _enclose(q::_Exact)
+@inline function _enclose(q::_Exact)
+    if q.den == 1 && -9007199254740992 <= q.num <= 9007199254740992
+        v = Float64(Int64(q.num))
+        return v, v
+    end
     v = Float64(q)
     isfinite(v) || return (-Inf,Inf)
     exact = _Exact(v)
@@ -2572,20 +2582,33 @@ function _init_poly_state(s::_Snapshot; map::Union{Nothing,DomainGaugeMap}=nothi
                          sense=s.sense, domain=s.domain)
     for (i, v) in QT.linear_terms(f)
         _expired(deadline) && return nothing
-        fields[i] = _Exact(v)
+        fields[i] = _to_exact(v)
+    end
+    deg_init = zeros(Int, n)
+    for ((i, j), v) in QT.quadratic_terms(f)
+        iszero(v) && continue
+        deg_init[i] += 1
+        deg_init[j] += 1
+    end
+    for i in 1:n
+        d_i = deg_init[i]
+        if d_i > 0
+            sizehint!(adj[i], d_i)
+            sizehint!(adj_pos[i], d_i)
+        end
     end
     quad_sum = _Exact(0)
     for ((i, j), v) in QT.quadratic_terms(f)
         _expired(deadline) && return nothing
         iszero(v) && continue
-        q = _Exact(v)
+        q = _to_exact(v)
         push!(adj[i], j => q)
         adj_pos[i][j] = length(adj[i])
         push!(adj[j], i => q)
         adj_pos[j][i] = length(adj[j])
         quad_sum += q
     end
-    constant = _Exact(s.offset)
+    constant = _to_exact(s.offset)
     is_bool = s.domain === QT.BoolDomain
     h_spin = Vector{_Exact}(undef, n)
     if is_bool
@@ -3017,29 +3040,32 @@ function _transport_one_step(
     end
 end
 
-function _transport_steps(ws::Workspace, assumptions::Tuple, steps::Tuple,
+function _transport_steps(ws::Workspace, @nospecialize(assumptions::Tuple), @nospecialize(steps::Tuple),
                           from_map::Union{Nothing,DomainGaugeMap},
                           to_map::Union{Nothing,DomainGaugeMap};
                           tail_step::Union{Nothing,_ProofRecord}=nothing)
-    (isempty(steps) && tail_step === nothing) && return ()
+    n_steps = length(steps)
+    (n_steps == 0 && tail_step === nothing) && return ()
+    n_assumptions = length(assumptions)
     s = ws._snapshot
     p = _init_poly_state(s; map=to_map)
     introduced = 0
-    total_len = length(steps) + (tail_step === nothing ? 0 : 1)
+    total_len = n_steps + (tail_step === nothing ? 0 : 1)
     out = Vector{_ProofRecord}(undef, total_len)
-    for (k, step) in enumerate(steps)
-        count = step.scope_length == -1 ? length(assumptions) : step.scope_length
+    for k in 1:n_steps
+        step = steps[k]::_ProofRecord
+        count = step.scope_length == -1 ? n_assumptions : step.scope_length
         for pos in (introduced + 1):count
-            idx, val = assumptions[pos]
+            idx, val = assumptions[pos]::Pair{Int,Int}
             _poly_fix!(p, idx, val)
         end
         introduced = count
         out[k] = _transport_one_step(s, p, step, from_map, to_map; already_in_target=false)
     end
     if tail_step !== nothing
-        count = tail_step.scope_length == -1 ? length(assumptions) : tail_step.scope_length
+        count = tail_step.scope_length == -1 ? n_assumptions : tail_step.scope_length
         for pos in (introduced + 1):count
-            idx, val = assumptions[pos]
+            idx, val = assumptions[pos]::Pair{Int,Int}
             _poly_fix!(p, idx, val)
         end
         out[total_len] = _transport_one_step(s, p, tail_step, to_map, to_map; already_in_target=true)
@@ -5665,28 +5691,40 @@ function verify_certificate(ws::Workspace, cert::DominanceCertificate;
         return VerificationResult(false,:stale_scope,cost)
     end
     _expired(deadline_ns) && return VerificationResult(false,:deadline,cost)
-    isempty(cert.steps) && return VerificationResult(false,:empty_proof,cost)
+    n_steps = length(cert.steps)
+    n_steps == 0 && return VerificationResult(false,:empty_proof,cost)
+    n_assumptions = length(cert.assumptions)
     seen = Set{Int}()
     low = s.domain === QT.BoolDomain ? 0 : -1
-    for assumption in cert.assumptions
+    assumptions_vec = Vector{Pair{Int,Int}}(undef, n_assumptions)
+    for pos in 1:n_assumptions
+        assumption = cert.assumptions[pos]
         assumption isa Pair{Int,Int} || return VerificationResult(false,:invalid_scope,cost)
         i,v = assumption
         1 <= i <= length(s.labels) && !(i in seen) && v in (low,1) ||
             return VerificationResult(false,:invalid_scope,cost)
         push!(seen,i)
+        assumptions_vec[pos] = assumption
     end
     p = _init_poly_state(s; map=active_map, deadline=deadline_ns)
     p === nothing && return VerificationResult(false,:deadline,cost)
+    steps_vec = Vector{_ProofRecord}(undef, n_steps)
+    for k in 1:n_steps
+        raw_step = cert.steps[k]
+        raw_step isa _ProofRecord || return VerificationResult(false,:invalid_predecessors,cost)
+        steps_vec[k] = raw_step
+    end
     base_step_cost = length(s.linear.values) + length(s.quadratic.values)
     introduced = 0
-    for (k,step) in enumerate(cert.steps)
-        step isa Union{DominanceStep,RelationStep,EliminationStep,ProbingStep,RoofDualityStep,SubmodularCutStep,MaxCutStep} && step.predecessors == k-1 ||
+    for k in 1:n_steps
+        step = steps_vec[k]
+        step.predecessors == k-1 ||
             return VerificationResult(false,:invalid_predecessors,cost)
-        count = step.scope_length == -1 ? length(cert.assumptions) : step.scope_length
-        introduced <= count <= length(cert.assumptions) ||
+        count = step.scope_length == -1 ? n_assumptions : step.scope_length
+        introduced <= count <= n_assumptions ||
             return VerificationResult(false,:invalid_scope,cost)
         for pos in introduced+1:count
-            i,v = cert.assumptions[pos]
+            i,v = assumptions_vec[pos]
             p.active[i] || return VerificationResult(false,:invalid_scope,cost)
             _poly_fix!(p, i, v)
         end
@@ -5701,52 +5739,48 @@ function verify_certificate(ws::Workspace, cert::DominanceCertificate;
         end
         step_cost <= max_work - cost || return VerificationResult(false,:work_limit,cost)
         _expired(deadline_ns) && return VerificationResult(false,:deadline,cost)
+        later = @view(assumptions_vec[(count + 1):n_assumptions])
+        prefix_steps = @view(steps_vec[1:(k - 1)])
         valid, reason, visits = if step isa DominanceStep
-            later = cert.assumptions[(count + 1):end]
             _verify_dominance_step(p, step, active_map, later, step_cost, deadline_ns)
         elseif step isa RelationStep
-            later = cert.assumptions[(count + 1):end]
             _verify_relation_step(
                 p, step, active_map,
-                cert.assumptions[1:count], cert.steps[1:(k - 1)], cert.steps, k, later,
+                @view(assumptions_vec[1:count]), prefix_steps, steps_vec, k, later,
                 step_cost, deadline_ns,
             )
         elseif step isa ProbingStep
-            later = cert.assumptions[(count + 1):end]
             _verify_probing_step(
                 p, step, active_map,
-                cert.assumptions[1:count], cert.steps[1:(k - 1)], later,
+                @view(assumptions_vec[1:count]), prefix_steps, later,
                 step_cost, deadline_ns,
             )
         elseif step isa RoofDualityStep
-            later = cert.assumptions[(count + 1):end]
             _verify_roof_duality_step(
                 p, step, active_map,
-                cert.steps[1:(k - 1)], cert.steps, k, later,
+                prefix_steps, steps_vec, k, later,
                 step_cost, deadline_ns,
             )
         elseif step isa SubmodularCutStep
-            later = cert.assumptions[(count + 1):end]
             _verify_submodular_cut_step(
                 p, step, active_map,
-                cert.steps[1:(k - 1)], cert.steps, k, later,
+                prefix_steps, steps_vec, k, later,
                 step_cost, deadline_ns,
             )
         elseif step isa MaxCutStep
-            later = cert.assumptions[(count + 1):end]
             _verify_maxcut_step(p, step, active_map, later, step_cost, deadline_ns)
         else
             _verify_elimination_step(
                 p, step::EliminationStep, active_map,
-                cert.steps[1:(k - 1)], cert.steps, k,
+                prefix_steps, steps_vec, k,
                 step_cost, deadline_ns,
             )
         end
         cost += visits
         valid || return VerificationResult(false,reason,cost)
     end
-    for pos in introduced+1:length(cert.assumptions)
-        i,v = cert.assumptions[pos]
+    for pos in introduced+1:n_assumptions
+        i,v = assumptions_vec[pos]
         p.active[i] || return VerificationResult(false,:invalid_scope,cost)
         _poly_fix!(p, i, v)
     end

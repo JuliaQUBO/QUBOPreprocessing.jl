@@ -2764,25 +2764,43 @@ end
                     return false
                 end
                 orig_σ = g_e * g_r * σ
-                has_compat_shared = false
-                if st.degrees[elim] >= 2 && st.degrees[rep] >= 2
-                    a_small, b_large = length(st.adjacency[elim]) <= length(st.adjacency[rep]) ? (elim, rep) : (rep, elim)
-                    for (w, q_aw) in st.adjacency[a_small]
-                        (w != elim && w != rep && st.fixed[w] == 2 && !iszero(q_aw)) || continue
-                        pos_bw = get(st.adj_pos[b_large], w, 0)
-                        if pos_bw != 0
-                            q_bw = st.adjacency[b_large][pos_bw].second
-                            if !iszero(q_bw) && ((q_aw > 0) == (orig_σ > 0 ? (q_bw > 0) : (q_bw < 0)))
-                                has_compat_shared = true
-                                break
-                            end
-                        end
-                    end
-                end
-                if !has_compat_shared
+                if st.degrees[elim] < 2 || st.degrees[rep] < 2
                     two_rad_no_cancel_lo = _prevfloat_finite(hd_abs_lo + _prevfloat_finite(tot_e_lo + tot_r_lo))
                     if isfinite(two_rad_no_cancel_lo) && _nextfloat_finite(2.0 * two_c_hi) < two_rad_no_cancel_lo
                         return false
+                    end
+                else
+                    a_small, b_large, tot_a_hi, tot_b_lo = if length(st.adjacency[elim]) <= length(st.adjacency[rep])
+                        (elim, rep, tot_e_hi, tot_r_lo)
+                    else
+                        (rep, elim, tot_r_hi, tot_e_lo)
+                    end
+                    base_diff_lo = max(0.0, _prevfloat_finite(tot_b_lo - tot_a_hi))
+                    rem_budget_hi = _nextfloat_finite(_nextfloat_finite(two_c_hi - hd_abs_lo) - base_diff_lo)
+                    if isfinite(rem_budget_hi)
+                        rem_budget_hi < 0.0 && return false
+                        delta_lo_sum = 0.0
+                        for (w, q_aw) in st.adjacency[a_small]
+                            (w != elim && w != rep && st.fixed[w] == 2 && !iszero(q_aw)) || continue
+                            qaw_lo, qaw_hi = _enclose(q_aw)
+                            jaw_lo = _prevfloat_finite(j_scale * min(abs(qaw_lo), abs(qaw_hi)))
+                            pos_bw = get(st.adj_pos[b_large], w, 0)
+                            if pos_bw == 0
+                                delta_lo_sum = _prevfloat_finite(delta_lo_sum + _prevfloat_finite(2.0 * jaw_lo))
+                            else
+                                q_bw = st.adjacency[b_large][pos_bw].second
+                                if iszero(q_bw) || ((q_aw > 0) != (orig_σ > 0 ? (q_bw > 0) : (q_bw < 0)))
+                                    delta_lo_sum = _prevfloat_finite(delta_lo_sum + _prevfloat_finite(2.0 * jaw_lo))
+                                else
+                                    qbw_lo, qbw_hi = _enclose(q_bw)
+                                    jbw_hi = _nextfloat_finite(j_scale * max(abs(qbw_lo), abs(qbw_hi)))
+                                    if jaw_lo > jbw_hi
+                                        delta_lo_sum = _prevfloat_finite(delta_lo_sum + _prevfloat_finite(2.0 * _prevfloat_finite(jaw_lo - jbw_hi)))
+                                    end
+                                end
+                            end
+                            delta_lo_sum > rem_budget_hi && return false
+                        end
                     end
                 end
             end
@@ -4070,8 +4088,11 @@ function reductions(ws::Workspace; since=nothing)
 end
 
 function _proof_steps(ws::Workspace; map::Union{Nothing,DomainGaugeMap}=nothing)
-    raw = Tuple(deepcopy(ws._state.trail[p].proof) for p in ws._state.fixes
-                if ws._state.trail[p].proof !== nothing)
+    raw_vec = _ProofRecord[
+        deepcopy(ws._state.trail[p].proof) for p in ws._state.fixes
+        if ws._state.trail[p].proof !== nothing
+    ]
+    raw = Tuple(raw_vec)
     map === nothing && return raw
     return _transport_steps(ws, _caller_scope(ws), raw, nothing, map)
 end

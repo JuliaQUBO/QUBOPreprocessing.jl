@@ -61,17 +61,30 @@ function _incremental(s::_Snapshot;rules=:identity)
     f = QT.Form{Float64}(n, _thaw(s.linear), _thaw(s.quadratic), s.scale, s.offset;
                          sense=s.sense, domain=s.domain)
     for (i, v) in QT.linear_terms(f)
-        fields[i] = _Exact(v)
+        fields[i] = _to_exact(v)
+    end
+    deg_init = zeros(Int, n)
+    for ((i, j), v) in QT.quadratic_terms(f)
+        iszero(v) && continue
+        deg_init[i] += 1
+        deg_init[j] += 1
+    end
+    for i in 1:n
+        d_i = deg_init[i]
+        if d_i > 0
+            sizehint!(adjacency[i], d_i)
+            sizehint!(adj_pos[i], d_i)
+        end
     end
     for ((i,j), v) in QT.quadratic_terms(f)
         iszero(v) && continue
-        q = _Exact(v)
+        q = _to_exact(v)
         push!(adjacency[i], j=>q)
         adj_pos[i][j] = length(adjacency[i])
         push!(adjacency[j], i=>q)
         adj_pos[j][i] = length(adjacency[j])
     end
-    degrees = [length(adj) for adj in adjacency]
+    degrees = deg_init
     initial_degrees = copy(degrees)
     dual_fields = Vector{_Exact}(undef, n)
     quad_sum = _Exact(0)
@@ -85,9 +98,10 @@ function _incremental(s::_Snapshot;rules=:identity)
                                                       (2 * fields[i] - 2 * csum)
     end
     field_sum = sum(fields; init=_Exact(0))
+    offset_ex = _to_exact(s.offset)
     dual_constant = s.domain === QT.BoolDomain ?
-        (_Exact(s.offset) + field_sum // 2 + quad_sum // 4) :
-        (_Exact(s.offset) - field_sum + quad_sum)
+        (offset_ex + field_sum // 2 + quad_sum // 4) :
+        (offset_ex - field_sum + quad_sum)
     lower,upper = nothing,nothing
     if rules in (:dominance, :elimination, :relations, :mixed)
         lower,upper = copy(fields),copy(fields)
