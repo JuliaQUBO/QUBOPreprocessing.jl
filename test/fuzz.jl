@@ -166,19 +166,33 @@ function _check_tamper_fuzz_case(rng, n)
     m, dom, sense = _fuzz_randmodel(rng, n)
     n_dim = QT.dimension(m)
     n_dim == 0 && return (:ok, 0, 0)
+    labels = QT.variables(m)
     ws = Workspace(m; rules=:mixed)
+    init_op = rand(rng, 1:5)
+    try
+        if init_op == 1
+            apply_roof_duality!(ws; contract_scc=true)
+        elseif init_op == 2
+            apply_submodular_cut!(ws; allow_weak=rand(rng, Bool))
+        elseif init_op == 3
+            apply_maxcut!(ws, rand(rng, labels); allow_weak=rand(rng, Bool))
+        elseif init_op == 4
+            apply_probing!(ws, rand(rng, labels); double_probe=rand(rng, Bool))
+        end
+    catch err
+        err isa ArgumentError || rethrow()
+    end
     schedule_reductions!(ws; enable_star_triangle=true, enable_blocks=true,
         allow_weak_dominance=rand(rng, Bool), allow_weak_relations=rand(rng, Bool))
-    if rand(rng, Bool)
-        try
-            apply_roof_duality!(ws; contract_scc=true)
-        catch err
-            err isa ArgumentError || rethrow()
-        end
-    end
     cert = export_certificate(ws)
     cert === nothing && return (:ok, 0, 0)
     verify_certificate(ws, cert).valid || return (:base_invalid, 0, 0)
+    orig_all = [QT.value(x, QT.form(m)) for x in _fuzz_states(n_dim, dom)]
+    obest = _fuzz_best(sense, orig_all)
+    res = materialize(ws; coefficient_type=Rational{BigInt})
+    rm = export_model(res)
+    nr = QT.dimension(rm)
+    rdom = QT.domain(rm) === QT.BoolDomain ? :bool : :spin
     checked = 0
     rejected = 0
     for (k, step) in enumerate(cert.steps)
@@ -210,17 +224,19 @@ function _check_tamper_fuzz_case(rng, n)
                 end
                 if !ok
                     rejected += 1
-                elseif newstep isa DominanceStep && fname === :value
-                    # If flipping a unary step's fixed value still verifies, the model must
-                    # achieve its global optimum under the flipped assignment (a genuine tie).
-                    labels = QT.variables(m)
-                    idx = findfirst(==(newstep.variable), labels)
-                    orig_all = [QT.value(x, QT.form(m)) for x in _fuzz_states(n_dim, dom)]
-                    orig_tied = [QT.value(x, QT.form(m)) for x in _fuzz_states(n_dim, dom) if x[idx] == newstep.value]
-                    isempty(orig_tied) && return (:unsound_empty_tie, 0, 0)
-                    obest = _fuzz_best(sense, orig_all)
-                    tbest = _fuzz_best(sense, orig_tied)
-                    abs(tbest - obest) <= 1e-9 * (1 + abs(obest)) || return (:unsound_tamper_accepted, (obest, tbest))
+                else
+                    # Every accepted tampered certificate must lift all residual states
+                    # with exact energy agreement and preserve the brute-force global optimum.
+                    lifted_vals = Float64[]
+                    for y in _fuzz_states(nr, rdom)
+                        rv = Float64(QT.value(y, QT.form(rm)))
+                        st = QUBOPreprocessing._lift_state_impl(res, y, res._free, steps)
+                        ov = QT.value(st, QT.form(m))
+                        abs(ov - rv) <= 1e-9 * (1 + abs(rv)) || return (:unsound_tamper_lift_mismatch, (rv, ov))
+                        push!(lifted_vals, ov)
+                    end
+                    lbest = _fuzz_best(sense, lifted_vals)
+                    abs(lbest - obest) <= 1e-9 * (1 + abs(obest)) || return (:unsound_tamper_accepted, (obest, lbest))
                 end
             end
         end
@@ -235,7 +251,7 @@ end
         for t in 1:150
             n = rand(rng, 1:8)
             cfg = _FUZZ_CONFIGS[mod1(t, length(_FUZZ_CONFIGS))]
-            sub = MersenneTwister(hash((1, t)))
+            sub = MersenneTwister(10_000 + t)
             status, info = _check_scheduler_fuzz_case(sub, n, cfg)
             @test status === :ok
             status === :ok && info && (reduced_count += 1)
@@ -248,7 +264,7 @@ end
         reduced_count = 0
         for t in 1:150
             n = rand(rng, 1:8)
-            sub = MersenneTwister(hash((2, t, 2)))
+            sub = MersenneTwister(20_000 + t)
             status, info = _check_sequence_fuzz_case(sub, n)
             @test status === :ok
             status === :ok && info && (reduced_count += 1)
@@ -308,7 +324,7 @@ end
         total_rejected = 0
         for t in 1:60
             n = rand(rng, 2:7)
-            status, checked, rejected = _check_tamper_fuzz_case(MersenneTwister(hash((t, 99))), n)
+            status, checked, rejected = _check_tamper_fuzz_case(MersenneTwister(30_000 + t), n)
             @test status === :ok
             total_checked += checked
             total_rejected += rejected
