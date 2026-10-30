@@ -1,4 +1,19 @@
 {
+  "QUBOPreprocessing.BlockElimination": [
+    "Init",
+    "Init",
+    "Mathlib",
+    "QUBOPreprocessing.GaugeCoercive",
+    "QUBOPreprocessing.CompositionRepair",
+    "QUBOPreprocessing.WalshDegree3"
+  ],
+  "QUBOPreprocessing.CoflipCancellation": [
+    "Init",
+    "Init",
+    "Mathlib",
+    "QUBOPreprocessing.GaugeCoercive",
+    "QUBOPreprocessing.CompositionRepair"
+  ],
   "QUBOPreprocessing.CompositionRepair": [
     "Init",
     "Init",
@@ -22,12 +37,31 @@
     "Mathlib",
     "QUBOPreprocessing.GaugeCoercive"
   ],
+  "QUBOPreprocessing.ProbingMargin": [
+    "Init",
+    "Init",
+    "Mathlib",
+    "QUBOPreprocessing.GaugeCoercive",
+    "QUBOPreprocessing.CompositionRepair",
+    "QUBOPreprocessing.CoflipCancellation"
+  ],
+  "QUBOPreprocessing.WalshDegree3": [
+    "Init",
+    "Init",
+    "Mathlib",
+    "QUBOPreprocessing.GaugeCoercive",
+    "QUBOPreprocessing.CompositionRepair"
+  ],
   "QUBOPreprocessing": [
     "Init",
     "Init",
     "QUBOPreprocessing.GaugeCoercive",
     "QUBOPreprocessing.CompositionRepair",
     "QUBOPreprocessing.MaxCutTriangle",
-    "QUBOPreprocessing.CompressionAudit"
+    "QUBOPreprocessing.CompressionAudit",
+    "QUBOPreprocessing.WalshDegree3",
+    "QUBOPreprocessing.CoflipCancellation",
+    "QUBOPreprocessing.ProbingMargin",
+    "QUBOPreprocessing.BlockElimination"
   ]
 }
