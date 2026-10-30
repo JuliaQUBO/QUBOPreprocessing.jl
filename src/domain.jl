@@ -89,7 +89,7 @@ struct DomainGaugeMap
         sense::Symbol,
         scale::Float64,
         offset::Float64,
-        gauge::Tuple{Vararg{Int}},
+        @nospecialize(gauge::Tuple{Vararg{Int}}),
         _label_map::Dict{Any,Int},
         _source::_Snapshot;
         _allow_unvalidated::Bool=false,
@@ -140,7 +140,7 @@ struct DomainGaugeMap
         sense::Symbol,
         scale::Float64,
         offset::Float64,
-        gauge::Tuple{Vararg{Int}},
+        @nospecialize(gauge::Tuple{Vararg{Int}}),
         _label_map::Dict{Any,Int},
         _source::_Snapshot,
         _identity_gauge::Bool,
@@ -229,7 +229,11 @@ function domain_map(ws::Workspace; domain::Symbol=_domain_symbol(ws._snapshot.do
     g = _parse_gauge(ws, gauge)
     source = ws._snapshot
     _validate_label_copy(source.labels, _deepcopy_tuple(source.labels, IdDict()))
-    lmap = Dict{Any,Int}(v => i for (i, v) in enumerate(source.labels))
+    lmap = Dict{Any,Int}()
+    sizehint!(lmap, length(source.labels))
+    for i in 1:length(source.labels)
+        lmap[_entry_at(source.labels, i)] = i
+    end
     m = DomainGaugeMap(
         generation(ws),
         _domain_symbol(source.domain),

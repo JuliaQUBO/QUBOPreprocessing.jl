@@ -110,7 +110,14 @@ function _thaw_dict_quadratic(indices::Vector{Tuple{Int,Int}}, values::Vector{Fl
     return QT.DictQuadraticForm{Float64}(d)
 end
 
-_ints(t) = Int[x for x in t]
+# Snapshot labels and export index sets are abstractly typed `Tuple`s with one
+# parameter per variable. Indexing one through generic dispatch costs time
+# proportional to its length, and iterating or comprehending over it compiles a
+# new specialization for every model size. Narrow to `Tuple` and read elements
+# with the `getfield` builtin so loops stay linear and compile once.
+@inline _entry_at(@nospecialize(x), i::Int) = x isa Tuple ? getfield(x, i) : x[i]
+
+_ints(@nospecialize(t)) = Int[_entry_at(t, i) for i in 1:length(t)]
 
 function _thaw(s::_Storage)
     if s.kind === :dense_linear
@@ -168,8 +175,8 @@ end
 
 function _validate_label_copy(@nospecialize(labels), @nospecialize(owned))
     for i in 1:length(labels)
-        (isequal(labels[i], owned[i]) && isequal(owned[i], labels[i]) &&
-         hash(labels[i]) == hash(owned[i])) ||
+        a, b = _entry_at(labels, i), _entry_at(owned, i)
+        (isequal(a, b) && isequal(b, a) && hash(a) == hash(b)) ||
             throw(ArgumentError("labels must preserve equality and hash under deepcopy"))
     end
     return owned

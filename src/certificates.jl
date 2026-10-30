@@ -1636,7 +1636,8 @@ function _extract_witness_state(ws::Workspace, witness, map::Union{Nothing,Domai
         length(witness) == n ||
             throw(ArgumentError("witness state must cover every original variable"))
         target_dom_sym = map === nothing ? _domain_symbol(s.domain) : map.target_domain
-        for (idx, lbl) in enumerate(s.labels)
+        for idx in 1:n
+            lbl = _entry_at(s.labels, idx)
             haskey(witness, lbl) ||
                 throw(ArgumentError("witness state is missing variable label $(repr(lbl))"))
             v_mapped = _check_domain_scalar(witness[lbl], target_dom_sym)
