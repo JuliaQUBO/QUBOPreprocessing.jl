@@ -2775,7 +2775,7 @@ end
                     else
                         (rep, elim, tot_r_hi, tot_e_lo)
                     end
-                    base_diff_lo = max(0.0, _prevfloat_finite(tot_b_lo - tot_a_hi))
+                    base_diff_lo = _prevfloat_finite(tot_b_lo - tot_a_hi)
                     rem_budget_hi = _nextfloat_finite(_nextfloat_finite(two_c_hi - hd_abs_lo) - base_diff_lo)
                     if isfinite(rem_budget_hi)
                         rem_budget_hi < 0.0 && return false

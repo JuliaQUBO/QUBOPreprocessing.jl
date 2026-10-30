@@ -248,6 +248,21 @@ end
     @test cert_d !== nothing
     @test verify_certificate(ws_d, cert_d).valid
 
+    # Regression test: signed (T_b - T_a) < 0 when a_small has fewer neighbors but larger total weight
+    L_sb = zeros(Float64, 4)
+    Q_sb = zeros(Float64, 4, 4)
+    Q_sb[1, 2] = -4.0
+    Q_sb[1, 3] = 100.0
+    Q_sb[2, 3] = 95.0
+    Q_sb[2, 4] = 1.0
+    ws_sb = Workspace(fixture(collect(1:4), L_sb, Q_sb; domain=:spin, sense=:min); rules=:mixed)
+    @test QUBOPreprocessing._can_possibly_contract(ws_sb, 1, 2, QUBOPreprocessing._to_exact(-4.0), 1, nothing)
+    att_sb = prove_relation(ws_sb, 1, 2)
+    @test att_sb.stop_reason === :proved
+    @test only(att_sb.certificate.steps).method === :coflip_pair
+    rep_sb = schedule_reductions!(ws_sb)
+    @test rep_sb.deductions >= 1
+
     # 3. Long heterogeneous certificate chain (DominanceStep + RelationStep + EliminationStep)
     #    verifies and transports in O(n) without dynamic Tuple-slice specialization overhead
     n_long = 120
