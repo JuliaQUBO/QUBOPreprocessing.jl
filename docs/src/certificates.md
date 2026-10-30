@@ -92,13 +92,23 @@ tag (`:strong` or `:weak`) queried with `persistency`:
   ``s_u = \sigma_{\text{orig}} s_v`` (`RelationStep`, proved via single-endpoint
   `:interval` / `:exact` coupling dominance, Glover–Lewis–Kochenberger (2018)
   Theorems 3.1–3.4 cross-endpoint `:glk_pair` implication bounds with favoring
-  coupling ``-\sigma \tilde{J}_{uv} > 0``, or Ferizovic et al. (2020) /
+  coupling ``-\sigma \tilde{J}_{uv} > 0``, Ferizovic et al. (2020) /
   Rehfeldt et al. (2023) shared-neighborhood co-flip pair dominance `:coflip_pair`
-  where ``L_{\text{coflip}}(\sigma) = -\sigma \tilde{J}_{uv} - \frac{1}{2}|\tilde{h}_u - \sigma \tilde{h}_v| - \frac{1}{2}\sum_{w \notin \{u, v\}} |\tilde{J}_{uw} - \sigma \tilde{J}_{vw}| \ge 0``), trial-branch probing fixing
+  where ``L_{\text{coflip}}(\sigma) = -\sigma \tilde{J}_{uv} - \frac{1}{2}|\tilde{h}_u - \sigma \tilde{h}_v| - \frac{1}{2}\sum_{w \notin \{u, v\}} |\tilde{J}_{uw} - \sigma \tilde{J}_{vw}| \ge 0``,
+  two-branch trial-dominance 2-SAT pair equivalence `:probing_pair` where both
+  violating states ``(s_u = -1, s_v = +\sigma_{\text{orig}})`` and
+  ``(s_u = +1, s_v = -\sigma_{\text{orig}})`` are strictly refuted by replayed
+  `DominanceStep` chains, or Boros–Hammer–Tavares (2008) / Rehfeldt et al. (2023)
+  residual implication-network strongly connected component 2-SAT equivalence
+  `:roof_scc_pair` where literals ``a_u`` and ``b_v`` belong to a closed
+  half-integral residual SCC or a witness-bounded residual bottleneck SCC with
+  cycle bottleneck ``B_{\text{cycle}} > U_{\text{witness}} - L_{\text{roof}}``), trial-branch probing fixing
   (`ProbingStep`, proved via `prove_probing` / `apply_probing!` / `probe_variables!`
-  when the trial branch lower bound ``L`` after reversible trial conditioning and
+  either when the trial branch lower bound ``L`` after reversible trial conditioning and
   bounded trial dominance propagation strictly exceeds the verified parent-scope
-  feasible witness upper bound ``U``, ``L > U``), exact implication-network
+  feasible witness upper bound ``U``, ``L > U``, or via witness-free two-branch
+  common implication `:double_probe` when conditioning an active variable ``p \ne u``
+  on both ``x_p = \text{low}`` and ``x_p = 1`` forces the same strong value ``x_u``), exact implication-network
   roof-duality strong persistency fixing (`RoofDualityStep`, proved via
   `prove_roof_duality` / `apply_roof_duality!` from an independently verified
   exact rational maximum ``S``–``T`` flow ``f`` and dual minimum cuts
