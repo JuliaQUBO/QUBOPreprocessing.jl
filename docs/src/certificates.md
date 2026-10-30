@@ -73,9 +73,17 @@ tag (`:strong` or `:weak`) queried with `persistency`:
   `eliminate_variable!` and `eliminate_low_degree!`) variable ``u`` certifying
   ``F'(y) = \operatorname{opt}_{x_u} F(y, x_u)`` (equivalent in normalized Ising
   spin coordinates to ``-|h_u + \sum_{j \in \partial u} J_{uj} s_j|``) across all
-  ``2^d`` boundary assignments of `neighbors`, with an exact argmin reconstruction
-  `table` (`tie_break=:low` or `:high`) and exact quadratic polynomial deltas
-  (`constant_delta`, `linear_deltas`, `quadratic_deltas`). For `d == 3`
+  ``2^d`` boundary assignments of `neighbors`, or connected multi-variable block
+  elimination (`prove_elimination(ws, block_labels)`, `eliminate_block!`, and
+  `enable_blocks=true` in `eliminate_low_degree!` / `schedule_reductions!`,
+  Rehfeldt et al. 2023 Section 3) of a connected active block ``B \subseteq V_{\text{act}}``
+  (`2 <= |B| <= max_block_size <= 16`) with external separator boundary
+  ``S = N_G(B) \subseteq V_{\text{act}} \setminus B`` of size ``0 \le |S| \le 2``
+  certifying ``F'(y) = \operatorname{opt}_{x_B \in \mathcal{D}^{|B|}} F(y, x_B)``
+  across all ``2^{|S|} \le 4`` boundary assignments of ``S``, with an exact argmin
+  reconstruction `table` (`tie_break=:low` or `:high`) and exact quadratic polynomial
+  deltas (`constant_delta`, `linear_deltas`, `quadratic_deltas`) interpolated on ``S``.
+  For single-variable `d == 3`
   (Boettcher–Davidheiser (2008) Section II Rule V Eq. (4) zero-field Ising
   star–triangle reduction and Boros–Hammer (2002) Section 4.4 / Rehfeldt et al. (2023)
   zero-cubic-Fourier degree-three reduction), ``u`` must have three distinct free
@@ -84,8 +92,9 @@ tag (`:strong` or `:weak`) queried with `persistency`:
   (equivalently, ``h_u = 0``, ``|h_u| \ge \sum_{k=1}^3 |J_k|``, or
   ``2 \max_k |J_k| \ge |h_u| + \sum_{k=1}^3 |J_k|``). Nonzero cubic interactions
   (``\alpha_{123} \ne 0``) are refused with `:nonquadratic_elimination`.
-  `unique_argmin` records whether the minimizing value of ``u`` is strict on all
-  boundary states. Higher-degree variables are skipped/refused (`:degree_too_high`)
+  `unique_argmin` records whether the minimizing value of ``u`` (or joint tuple
+  ``x_B^*``) is strict on all boundary states. Higher-degree variables or larger
+  separators are skipped/refused (`:degree_too_high`, `:separator_too_large`)
   with no higher-order truncation.
 - **`:optimum_preserving_restriction` (`DominanceStep`, `RelationStep`, `ProbingStep`, `RoofDualityStep`, `SubmodularCutStep`, `MaxCutStep`):**
   unary value fixing (`DominanceStep`), signed pair contraction
