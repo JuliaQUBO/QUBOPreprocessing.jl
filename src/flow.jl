@@ -880,8 +880,8 @@ end
 
 function _build_poly_submodular_cut_network(
     p,
-    comp_indices::Tuple{Vararg{Int}},
-    gauge::Tuple{Vararg{Int}},
+    @nospecialize(comp_indices::Tuple{Vararg{Int}}),
+    @nospecialize(gauge::Tuple{Vararg{Int}}),
     deadline=nothing,
 )
     k = length(comp_indices)
