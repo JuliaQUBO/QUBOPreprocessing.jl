@@ -1231,6 +1231,85 @@ end
     @test srep_nest.elimination_deductions == 2
     @test verify_certificate(ws_nest, export_certificate(ws_nest)).valid
 
+    # 4. Exercise 2-separator cand_s2 pair search (lines 2341-2356) where s1 > u_0 and s2 > u_0
+    #    are BOTH in is_cand (deg <= D_max = 4 and high_deg <= 2), so forced_u0 == 0:
+    labels_s12 = [Symbol("v$i") for i in 1:11]
+    h_s12 = [isodd(i) ? 0.25 : -0.35 for i in 1:11]
+    J_s12 = zeros(11, 11)
+    J_s12[1, 2] = 1.0
+    J_s12[1, 3] = 1.0; J_s12[2, 3] = -1.0
+    J_s12[1, 4] = 1.0; J_s12[2, 4] = 1.0
+    J_s12[3, 5] = 1.0; J_s12[3, 6] = -1.0
+    J_s12[4, 5] = -1.0; J_s12[4, 6] = 1.0
+    for u in 5:11, v in (u + 1):11
+        J_s12[u, v] = 1.0
+    end
+    ws_s12 = Workspace(fixture(labels_s12, h_s12, J_s12; domain=:spin, sense=:min); rules=:mixed)
+    blocks_s12, r_s12, _ = QUBOPreprocessing._find_separator_blocks(ws_s12; max_block_size=3, max_separator=2)
+    @test r_s12 === :ok && [1, 2] in blocks_s12
+
+    # 5. Exercise require_unique_blocks rejection in _step_block_elimination!, max_deductions in schedule_reductions!,
+    #    work_limit rollback in _commit_block_elimination!, and full mixed cascade with enable_blocks=true:
+    m_k4_tie = fixture([:x1, :x2, :x3, :x4], zeros(4), [0.0 -1.0 -1.0 -1.0; 0.0 0.0 -1.0 -1.0; 0.0 0.0 0.0 -1.0; 0.0 0.0 0.0 0.0]; domain=:spin, sense=:min)
+    ws_tie_req = Workspace(m_k4_tie; rules=:elimination)
+    @test eliminate_low_degree!(ws_tie_req; max_degree=2, enable_blocks=true, max_block_size=4, max_separator=0, require_unique_blocks=true).deductions == 0
+
+    ws_k4_sched_ded = Workspace(m_k4; rules=:mixed)
+    @test schedule_reductions!(
+        ws_k4_sched_ded;
+        enable_dominance=false, enable_elimination=false,
+        enable_relations=false, enable_star_triangle=false,
+        enable_blocks=true, max_block_size=4, max_separator=0, max_deductions=0,
+    ).stop_reason === :deduction_limit
+    @test schedule_reductions!(
+        ws_k4_sched_ded;
+        enable_dominance=false, enable_elimination=false,
+        enable_relations=false, enable_star_triangle=false,
+        enable_blocks=true, max_block_size=4, max_separator=0, max_deductions=2,
+    ).stop_reason === :deduction_limit
+
+    ws_k4_wlim = Workspace(m_k4; rules=:elimination)
+    @test eliminate_block!(ws_k4_wlim, [:x1, :x2, :x3, :x4]; max_work=15).stop_reason === :work_limit
+    @test isempty(reductions(ws_k4_wlim))
+
+    # Full mixed cascade combining dominance, degree-2 elimination, degree-3 star-triangle, pair relation, and block elimination:
+    labels_comb = [:dom1, :el1, :st0, :st1, :st2, :st3, :rel1, :rel2, :bk1, :bk2, :bk3, :bk4]
+    h_comb = zeros(12)
+    J_comb = zeros(12, 12)
+    h_comb[1] = 5.0; J_comb[1, 9] = 1.0 # :dom1 dominated -> fixed by :dominance!
+    J_comb[2, 9] = 1.0; J_comb[2, 10] = -1.0 # :el1 degree-2 zero-field -> eliminated by :elimination!
+    # Zero-field degree-3 star :st0 coupled to (:st1, :st2, :st3), with (:st1,:st2,:st3) also coupled to (:bk1,:bk2,:bk3)
+    J_comb[3, 4] = 1.0; J_comb[3, 5] = 1.0; J_comb[3, 6] = 1.0
+    J_comb[4, 9] = 0.5; J_comb[4, 10] = 0.5; J_comb[4, 11] = 0.5
+    J_comb[5, 9] = 0.5; J_comb[5, 10] = -0.5; J_comb[5, 12] = 0.5
+    J_comb[6, 9] = -0.5; J_comb[6, 11] = 0.5; J_comb[6, 12] = -0.5
+    # Strong pair relation (:rel1, :rel2) where both endpoints have degree 4 so degree-2/3 elimination skips them:
+    J_comb[7, 8] = -5.0
+    J_comb[7, 9] = 0.25; J_comb[7, 10] = 0.25; J_comb[7, 11] = -0.25
+    J_comb[8, 10] = 0.25; J_comb[8, 11] = -0.25; J_comb[8, 12] = 0.25
+    # Frustrated K_4 block (:bk1..:bk4):
+    h_comb[9] = 0.3; h_comb[10] = -0.2; h_comb[11] = 0.4; h_comb[12] = -0.3
+    for u in 9:12, v in (u + 1):12
+        J_comb[u, v] = 1.0
+    end
+    m_comb = fixture(labels_comb, h_comb, J_comb; domain=:spin, sense=:min)
+    ws_comb_el = Workspace(m_comb; rules=:mixed)
+    rep_comb_el = eliminate_low_degree!(ws_comb_el; max_degree=2, cascade_dominance=true, enable_blocks=true, max_block_size=4, max_separator=2)
+    @test rep_comb_el.deductions >= 2
+
+    ws_comb_sc = Workspace(m_comb; rules=:mixed)
+    srep_comb = schedule_reductions!(
+        ws_comb_sc;
+        enable_dominance=true, enable_elimination=true,
+        enable_star_triangle=true, enable_relations=true,
+        enable_blocks=true, max_block_size=4, max_separator=2,
+    )
+    @test srep_comb.dominance_deductions >= 1
+    @test srep_comb.elimination_deductions >= 1
+    @test srep_comb.star_triangle_deductions >= 1
+    @test srep_comb.relation_deductions >= 1
+    @test verify_certificate(ws_comb_sc, export_certificate(ws_comb_sc)).valid
+
     # Tamper unique_argmin:
     s1_bad_ua = EliminationStep(
         s1_orig.variable, s1_orig.neighbors, s1_orig.table,
