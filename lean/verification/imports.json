@@ -22,12 +22,20 @@
     "Mathlib",
     "QUBOPreprocessing.GaugeCoercive"
   ],
+  "QUBOPreprocessing.WalshDegree3": [
+    "Init",
+    "Init",
+    "Mathlib",
+    "QUBOPreprocessing.GaugeCoercive",
+    "QUBOPreprocessing.CompositionRepair"
+  ],
   "QUBOPreprocessing": [
     "Init",
     "Init",
     "QUBOPreprocessing.GaugeCoercive",
     "QUBOPreprocessing.CompositionRepair",
     "QUBOPreprocessing.MaxCutTriangle",
-    "QUBOPreprocessing.CompressionAudit"
+    "QUBOPreprocessing.CompressionAudit",
+    "QUBOPreprocessing.WalshDegree3"
   ]
 }

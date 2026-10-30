@@ -2,3 +2,4 @@ import QUBOPreprocessing.GaugeCoercive
 import QUBOPreprocessing.CompositionRepair
 import QUBOPreprocessing.MaxCutTriangle
 import QUBOPreprocessing.CompressionAudit
+import QUBOPreprocessing.WalshDegree3

@@ -3,11 +3,12 @@
   "QUBOPreprocessing/CompressionAudit.lean": "695cf59638438281f6ee9e37f6ac2cdf42e8cb11c74975071a59d9c9b94ff132",
   "QUBOPreprocessing/GaugeCoercive.lean": "19a5a721ff7652a30fe65a3d1a9bd8d7d39810139120737b52a53293c758bfbc",
   "QUBOPreprocessing/MaxCutTriangle.lean": "050794427649ea89c030a5b09a34257837132efe236f5295d2d300848b127186",
-  "QUBOPreprocessing.lean": "7e7fdcd5e5d3675d09903263c795888dfabe11971b134ed7876ba4a525256237",
+  "QUBOPreprocessing/WalshDegree3.lean": "ad0865db58bb26a8d3ef85b138e88019d2b39ff8b1324673d92c20c6ee03f8bd",
+  "QUBOPreprocessing.lean": "070cc75330a43be9bdae4e498eeb122d80891469148565983860dce24325ad2a",
   "lake-manifest.json": "c95907221a30a13a4cdd23d68953259eaec205fb53263e9567342ac811566fb3",
   "lakefile.toml": "7a33683c5a987c7a55d49d4de41704abce0dfca4f92469b54fa8e973b1f50cbe",
   "lean-toolchain": "3aac669c7a910ec2389f4e4f921b605adf6ebf2d1e0c9b9cd0be4d33f3f5db71",
-  "test/AxiomAudit.lean": "17b169bbffc874b43e44d5329f5266ab4c4f55a8ed6c502921305a5ba0077dc5",
+  "test/AxiomAudit.lean": "82c57080415f718a185eaaeb55371a822703f0695b647868135cf8dcf0e68bb1",
   "verify.py": "3f423c460094d115bace53d503f1c0664410417acaedb8557c257c30d8a26051",
   "verify.sh": "d0d4149242469231c29082e710913f985b98619a0cdcd6b34c10085f5b6fa924"
 }
