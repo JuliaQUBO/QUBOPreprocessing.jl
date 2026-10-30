@@ -1,30 +1,31 @@
 {
-  "checked_at_utc": "2026-10-30T15:26:11.193296+00:00",
+  "checked_at_utc": "2026-10-30T16:01:41.359044+00:00",
   "lean_version": "Lean (version 4.33.1, x86_64-unknown-linux-gnu, commit 819816b2e0a3bf405af45ae5c7af2491d8f5bee6, Release)",
   "status": "build_and_axiom_audit_passed",
   "build_method": "isolated source snapshot; every project module recompiled by Lean; dependency cache read-only",
   "audit_method": "compiler environment, private visibility, defining-module provenance, all constant kinds",
   "root_module": "QUBOPreprocessing",
-  "project_module_count": 6,
+  "project_module_count": 7,
   "project_modules": [
     "QUBOPreprocessing",
+    "QUBOPreprocessing.CoflipCancellation",
     "QUBOPreprocessing.CompositionRepair",
     "QUBOPreprocessing.CompressionAudit",
     "QUBOPreprocessing.GaugeCoercive",
     "QUBOPreprocessing.MaxCutTriangle",
     "QUBOPreprocessing.WalshDegree3"
   ],
-  "all_project_constant_count": 154,
+  "all_project_constant_count": 195,
   "constant_kinds": {
     "constructor": 2,
-    "definition": 54,
+    "definition": 67,
     "inductive": 2,
     "recursor": 2,
-    "theorem": 94
+    "theorem": 122
   },
   "private_constant_count": 0,
   "compiler_generated_partial_runtime_helpers": [],
-  "public_theorem_count": 83,
+  "public_theorem_count": 110,
   "public_theorem_count_method": "compiler theorem metadata matched to theorem/lemma source name-selection ranges; generated declarations counted separately",
   "axioms": [
     "Classical.choice",
@@ -33,12 +34,13 @@
   ],
   "source_snapshot_unchanged": true,
   "sha256": {
+    "QUBOPreprocessing/CoflipCancellation.lean": "df742e8d0ba4ade27eb4019a749cfd6a7aaeaf36f9e96deea51dbaa6b262910f",
     "QUBOPreprocessing/CompositionRepair.lean": "34aac17a548f257fd417f5a61f4f68c7cd9727a1e9298ba612f1e499ae498cfb",
     "QUBOPreprocessing/CompressionAudit.lean": "695cf59638438281f6ee9e37f6ac2cdf42e8cb11c74975071a59d9c9b94ff132",
     "QUBOPreprocessing/GaugeCoercive.lean": "19a5a721ff7652a30fe65a3d1a9bd8d7d39810139120737b52a53293c758bfbc",
     "QUBOPreprocessing/MaxCutTriangle.lean": "050794427649ea89c030a5b09a34257837132efe236f5295d2d300848b127186",
     "QUBOPreprocessing/WalshDegree3.lean": "ad0865db58bb26a8d3ef85b138e88019d2b39ff8b1324673d92c20c6ee03f8bd",
-    "QUBOPreprocessing.lean": "070cc75330a43be9bdae4e498eeb122d80891469148565983860dce24325ad2a",
+    "QUBOPreprocessing.lean": "526960747b4867cf0cd43f6e6131f3fd1472ce61a73bbbdd3c67ddd53389a3d5",
     "lake-manifest.json": "c95907221a30a13a4cdd23d68953259eaec205fb53263e9567342ac811566fb3",
     "lakefile.toml": "7a33683c5a987c7a55d49d4de41704abce0dfca4f92469b54fa8e973b1f50cbe",
     "lean-toolchain": "3aac669c7a910ec2389f4e4f921b605adf6ebf2d1e0c9b9cd0be4d33f3f5db71",
@@ -47,12 +49,13 @@
     "verify.sh": "d0d4149242469231c29082e710913f985b98619a0cdcd6b34c10085f5b6fa924"
   },
   "sha256_after": {
+    "QUBOPreprocessing/CoflipCancellation.lean": "df742e8d0ba4ade27eb4019a749cfd6a7aaeaf36f9e96deea51dbaa6b262910f",
     "QUBOPreprocessing/CompositionRepair.lean": "34aac17a548f257fd417f5a61f4f68c7cd9727a1e9298ba612f1e499ae498cfb",
     "QUBOPreprocessing/CompressionAudit.lean": "695cf59638438281f6ee9e37f6ac2cdf42e8cb11c74975071a59d9c9b94ff132",
     "QUBOPreprocessing/GaugeCoercive.lean": "19a5a721ff7652a30fe65a3d1a9bd8d7d39810139120737b52a53293c758bfbc",
     "QUBOPreprocessing/MaxCutTriangle.lean": "050794427649ea89c030a5b09a34257837132efe236f5295d2d300848b127186",
     "QUBOPreprocessing/WalshDegree3.lean": "ad0865db58bb26a8d3ef85b138e88019d2b39ff8b1324673d92c20c6ee03f8bd",
-    "QUBOPreprocessing.lean": "070cc75330a43be9bdae4e498eeb122d80891469148565983860dce24325ad2a",
+    "QUBOPreprocessing.lean": "526960747b4867cf0cd43f6e6131f3fd1472ce61a73bbbdd3c67ddd53389a3d5",
     "lake-manifest.json": "c95907221a30a13a4cdd23d68953259eaec205fb53263e9567342ac811566fb3",
     "lakefile.toml": "7a33683c5a987c7a55d49d4de41704abce0dfca4f92469b54fa8e973b1f50cbe",
     "lean-toolchain": "3aac669c7a910ec2389f4e4f921b605adf6ebf2d1e0c9b9cd0be4d33f3f5db71",
@@ -61,12 +64,13 @@
     "verify.sh": "d0d4149242469231c29082e710913f985b98619a0cdcd6b34c10085f5b6fa924"
   },
   "compiled_olean_sha256": {
+    "QUBOPreprocessing/CoflipCancellation.olean": "cae21b0e5a35f0b84e460bdea9767abd32c84e6b1f96c09c4a8f8913de9c480f",
     "QUBOPreprocessing/CompositionRepair.olean": "5c76fea2173278a83e608db7580de6bd20573a52fdaf2bed5a5dae3b9dc67c4d",
     "QUBOPreprocessing/CompressionAudit.olean": "05e812e48ea4b6f625ca3b5d91f00d5ad56892e8e34629be2c30925a95083bfd",
     "QUBOPreprocessing/GaugeCoercive.olean": "1a43059e0dae28ac99683c323d68ffe5bb78208e771a43d528961ac8c8019982",
     "QUBOPreprocessing/MaxCutTriangle.olean": "5902c04fcc90364c81e2a7d78ecd078069c96124f97c31e0974c0dd961fe1f7b",
     "QUBOPreprocessing/WalshDegree3.olean": "c3c6a1ca47ff35d25e49c2b80faba5660ecf82b8fdd64661cdce1550d2d32ee5",
-    "QUBOPreprocessing.olean": "a38922673d32fceae13284c40b241bb0ef47d6f9ffa2aae44f2bb7418201a06d"
+    "QUBOPreprocessing.olean": "756779550bfd2e1cae014ed695734e63ce0f4a2ba1ea8f9b509056abef3e8939"
   },
   "dependency_boundary": "Pinned Mathlib/Lean oleans are trusted imports, not rebuilt or independently kernel-replayed"
 }
