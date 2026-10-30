@@ -30,18 +30,23 @@ mutable struct _GaugeConstantCursor
     constants::Vector{_Exact}
 end
 
-function _source_gauged_bool_constant(s::_Snapshot, g::Tuple{Vararg{Int}})
+function _source_gauged_bool_constant(s::_Snapshot, @nospecialize(g::Tuple{Vararg{Int}}))
     is_bool = s.domain === QT.BoolDomain
     c = _to_exact(s.offset)
+    gref = Ref{Tuple{Vararg{Int}}}(g)
     _foreach_linear_term(s.linear) do i, v
-        val_i = is_bool ? ((1 - g[i]) ÷ 2) : -g[i]
+        gi = _entry_at(gref[], i)
+        val_i = is_bool ? ((1 - gi) ÷ 2) : -gi
         val_i == 0 && return nothing
         c += _to_exact(v) * val_i
         return nothing
     end
     _foreach_quadratic_term(s.quadratic) do i, j, v
-        val_i = is_bool ? ((1 - g[i]) ÷ 2) : -g[i]
-        val_j = is_bool ? ((1 - g[j]) ÷ 2) : -g[j]
+        gt = gref[]
+        gi = _entry_at(gt, i)
+        gj = _entry_at(gt, j)
+        val_i = is_bool ? ((1 - gi) ÷ 2) : -gi
+        val_j = is_bool ? ((1 - gj) ÷ 2) : -gj
         (val_i == 0 || val_j == 0) && return nothing
         c += _to_exact(v) * (val_i * val_j)
         return nothing
@@ -89,7 +94,7 @@ struct DomainGaugeMap
         sense::Symbol,
         scale::Float64,
         offset::Float64,
-        gauge::Tuple{Vararg{Int}},
+        @nospecialize(gauge::Tuple{Vararg{Int}}),
         _label_map::Dict{Any,Int},
         _source::_Snapshot;
         _allow_unvalidated::Bool=false,
@@ -140,7 +145,7 @@ struct DomainGaugeMap
         sense::Symbol,
         scale::Float64,
         offset::Float64,
-        gauge::Tuple{Vararg{Int}},
+        @nospecialize(gauge::Tuple{Vararg{Int}}),
         _label_map::Dict{Any,Int},
         _source::_Snapshot,
         _identity_gauge::Bool,
@@ -229,7 +234,11 @@ function domain_map(ws::Workspace; domain::Symbol=_domain_symbol(ws._snapshot.do
     g = _parse_gauge(ws, gauge)
     source = ws._snapshot
     _validate_label_copy(source.labels, _deepcopy_tuple(source.labels, IdDict()))
-    lmap = Dict{Any,Int}(v => i for (i, v) in enumerate(source.labels))
+    lmap = Dict{Any,Int}()
+    sizehint!(lmap, length(source.labels))
+    for i in 1:length(source.labels)
+        lmap[_entry_at(source.labels, i)] = i
+    end
     m = DomainGaugeMap(
         generation(ws),
         _domain_symbol(source.domain),
