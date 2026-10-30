@@ -848,6 +848,28 @@
         rep_cr_prob = contract_relations!(ws_cr_prob; enable_probing=true, max_rounds=2)
         @test rep_cr_prob.stop_reason === :quiescent
         @test rep_cr_prob.deductions >= 2
+
+        # Two-mediator fixture [:u, :v, :m1, :m2, :z1, :z2, :z3] where NO pair has a cheap 1-round
+        # relation (m1 is only forced on v = -1, m2 is only forced on v = +1), so contract_relations!(ws)
+        # finds 0 deductions without enable_probing=true, while enable_probing=true contracts :u => :v:
+        Q_pp2 = zeros(7, 7)
+        Q_pp2[1, 2] = -3.0; Q_pp2[1, 3] = -4.0; Q_pp2[1, 4] = -4.0; Q_pp2[1, 5] = 2.0
+        Q_pp2[2, 3] = -5.0; Q_pp2[2, 4] = -5.0; Q_pp2[2, 6] = 10.0; Q_pp2[2, 7] = 10.0
+        Q_pp2[5, 6] = 4.0;  Q_pp2[5, 7] = 4.0;  Q_pp2[6, 7] = 10.0
+        m_pp2 = rel_fixture(
+            [:u, :v, :m1, :m2, :z1, :z2, :z3],
+            [0.0, 0.0, 5.0, -5.0, 0.0, 0.0, 0.0],
+            Q_pp2;
+            domain=:spin, sense=:min,
+        )
+        ws_pp2_cheap = Workspace(m_pp2; rules=:relations)
+        @test contract_relations!(ws_pp2_cheap).deductions == 0
+        ws_pp2_prob = Workspace(m_pp2; rules=:relations)
+        rep_pp2_prob = contract_relations!(ws_pp2_prob; enable_probing=true, max_rounds=2)
+        @test rep_pp2_prob.stop_reason === :quiescent
+        @test rep_pp2_prob.deductions >= 1
+        @test relation_map(ws_pp2_prob, :u) == (:v => 1)
+        @test verify_certificate(ws_pp2_prob, export_certificate(ws_pp2_prob)).valid
         @test verify_certificate(ws_cr_prob, export_certificate(ws_cr_prob)).valid
         check_materialized_optima(ws_cr_prob, m_pp, :spin, :min)
 

@@ -1333,34 +1333,28 @@ function _elimination_witness(ws::Workspace, u::Int;
     return (step, :proved, :exact, visits, exact_work)
 end
 
+function _witness_satisfies_step(is_bool::Bool, pstep, w)
+    if pstep isa Union{DominanceStep,ProbingStep,RoofDualityStep,SubmodularCutStep}
+        return w[pstep.variable] == pstep.value
+    elseif pstep isa MaxCutStep && pstep.representative == 0
+        return w[pstep.eliminated] == pstep.value
+    elseif pstep isa Union{RelationStep,MaxCutStep}
+        s_u = is_bool ? (2 * w[pstep.eliminated] - 1) : w[pstep.eliminated]
+        s_v = is_bool ? (2 * w[pstep.representative] - 1) : w[pstep.representative]
+        return s_u == pstep.orig_sign * s_v
+    elseif pstep isa EliminationStep
+        idx = 1 + sum(((1 << (b - 1)) for (b, nbr) in enumerate(pstep.neighbors) if w[nbr] == 1); init=0)
+        return w[pstep.variable] == pstep.table[idx]
+    end
+    return true
+end
+
 function _witness_satisfies_trail(ws::Workspace, w::Vector{Int})
     s, st = ws._snapshot, ws._state
     is_bool = s.domain === QT.BoolDomain
     for pos in st.fixes
-        entry = st.trail[pos]
-        entry.proof === nothing && continue
-        pstep = entry.proof
-        if pstep isa Union{DominanceStep,ProbingStep,RoofDualityStep,SubmodularCutStep}
-            w[pstep.variable] == pstep.value || return false
-        elseif pstep isa MaxCutStep
-            if pstep.representative == 0
-                w[pstep.eliminated] == pstep.value || return false
-            else
-                s_u = is_bool ? (2 * w[pstep.eliminated] - 1) : w[pstep.eliminated]
-                s_v = is_bool ? (2 * w[pstep.representative] - 1) : w[pstep.representative]
-                s_u == pstep.orig_sign * s_v || return false
-            end
-        elseif pstep isa RelationStep
-            s_u = is_bool ? (2 * w[pstep.eliminated] - 1) : w[pstep.eliminated]
-            s_v = is_bool ? (2 * w[pstep.representative] - 1) : w[pstep.representative]
-            s_u == pstep.orig_sign * s_v || return false
-        elseif pstep isa EliminationStep
-            idx = 1
-            for (bit_pos, nbr) in enumerate(pstep.neighbors)
-                w[nbr] == 1 && (idx += 1 << (bit_pos - 1))
-            end
-            w[pstep.variable] == pstep.table[idx] || return false
-        end
+        pstep = st.trail[pos].proof
+        (pstep === nothing || _witness_satisfies_step(is_bool, pstep, w)) || return false
     end
     return true
 end
@@ -1438,6 +1432,28 @@ function _branch_steps_spin_margin(
         mk < m && (m = mk)
     end
     return m
+end
+
+function _build_probing_pair_step_from_branches(
+    ws::Workspace,
+    u::Int,
+    i::Int,
+    orig_σ::Int,
+    low_orig::Int,
+    bsteps_low,
+    bsteps_high,
+)
+    s, st = ws._snapshot, ws._state
+    M_low = _branch_steps_spin_margin(s.domain, bsteps_low, nothing)
+    M_high = _branch_steps_spin_margin(s.domain, bsteps_high, nothing)
+    lo_p, hi_p = minmax(M_low, M_high)
+    wit = orig_σ == 1 ?
+        _ProbingPairWitness(i, 1, bsteps_high, i, low_orig, bsteps_low) :
+        _ProbingPairWitness(i, low_orig, bsteps_low, i, 1, bsteps_high)
+    return RelationStep(
+        u, i, orig_σ, orig_σ, deepcopy(lo_p), deepcopy(hi_p), deepcopy(st.constant),
+        st.proof_count, :probing_pair, length(st.callers), :strong, wit,
+    )
 end
 
 function _run_trial_dominance_branch!(
@@ -1853,122 +1869,103 @@ function _probing_witness(
                 return (step, :proved, :interval, visits, fallbacks, exact_work)
             end
         end
-        if isfinite(hi_spin) && isfinite(hi_bpos) && isfinite(hi_bneg)
-            hi_float = max(hi_spin, hi_bpos, hi_bneg)
-            if _Exact(hi_float) <= U_exact
-                if double_probe
-                    rollback!(ws, probe_cp)
-                    st.star_hint = saved_star_hint
-                    st.rel_hint = saved_rel_hint
-                    dp_step, dp_reason, dp_method, dp_v, dp_fb, dp_ex = _double_probe_witness_for_var(
-                        ws, i;
-                        map=map, req_orig=req_orig, max_rounds=Int(max_rounds), max_trial_fixes=Int(max_trial_fixes),
-                        max_work=Int(max_work) - visits, max_exact_work=Int(max_exact_work) - exact_work,
-                        deadline_ns=deadline_ns, predecessors=predecessors, scope_length=scope_length,
-                    )
-                    visits += dp_v
-                    fallbacks += dp_fb
-                    exact_work += dp_ex
-                    dp_step !== nothing && return (dp_step, :proved, dp_method, visits, fallbacks, exact_work)
-                    dp_reason in (:deadline, :work_limit, :verification_limit) &&
-                        return (nothing, dp_reason, dp_method, visits, fallbacks, exact_work)
-                end
-                return (nothing, :not_strict, :interval, visits, fallbacks, exact_work)
-            end
-        end
-        2 * st.active_edges <= max_work - visits ||
-            return (nothing, :work_limit, :interval, visits, fallbacks, exact_work)
-        active_verts = count(==(2), st.fixed)
-        needed_exact = 1 + active_verts + st.active_edges
-        needed_exact <= max_exact_work - exact_work ||
-            return (nothing, :verification_limit, :interval, visits, fallbacks, exact_work)
-        fallbacks += 1
-        exact_work += 1
-        L_spin = direction * c_spin
-        L_bpos = direction * c_bpos
-        L_bneg = direction * c_bpos
-        if st.lower !== nothing && st.upper !== nothing && total_active_adj <= max_work - visits
-            sum_diff = _Exact(0)
-            sum_neg_qb2 = _Exact(0)
-            edge_deg_sum = 0
-            for u in 1:n
-                st.fixed[u] == 2 || continue
-                _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, fallbacks, exact_work + (edge_deg_sum ÷ 2))
-                h_u = direction * _spin_field(ws, u)
-                f_u = direction * _bool_field(ws, u)
-                L_spin -= abs(h_u)
-                L_bpos += min(_Exact(0), f_u)
-                L_bneg += min(2 * h_u, f_u - 2 * h_u)
-                diff_u = st.upper[u] - st.lower[u]
-                sum_diff += diff_u
-                if !is_spin_dom
-                    sum_neg_qb2 += direction > 0 ? (st.lower[u] - st.fields[u]) : (st.fields[u] - st.upper[u])
-                else
-                    sum_neg_qb2 += direction * (2 * st.fields[u] - st.dual_fields[u]) - diff_u
-                end
-                visits += length(st.adjacency[u])
-                exact_work += 1
-                edge_deg_sum += st.degrees[u]
-            end
-            exact_work += st.active_edges
-            L_spin -= is_spin_dom ? (sum_diff // 4) : (sum_diff // 8)
-            add_qb_tot = sum_neg_qb2 // 2
-            L_bpos += add_qb_tot
-            L_bneg += add_qb_tot
-        else
-            for u in 1:n
-                st.fixed[u] == 2 || continue
-                _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, fallbacks, exact_work)
-                h_u = direction * _spin_field(ws, u)
-                f_u = direction * _bool_field(ws, u)
-                L_spin -= abs(h_u)
-                L_bpos += min(_Exact(0), f_u)
-                L_bneg += min(2 * h_u, f_u - 2 * h_u)
-                exact_work += 1
-                for (v, q) in st.adjacency[u]
-                    _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, fallbacks, exact_work)
-                    visits += 1
-                    (st.fixed[v] == 2 && u < v) || continue
-                    J_uv = direction * _spin_coupling(ws, q)
-                    qb_uv = direction * _bool_coupling(ws, q)
-                    L_spin -= abs(J_uv)
-                    add_qb = min(_Exact(0), qb_uv)
-                    L_bpos += add_qb
-                    L_bneg += add_qb
+        not_strict_method = :interval
+        if !(isfinite(hi_spin) && isfinite(hi_bpos) && isfinite(hi_bneg) &&
+             _Exact(max(hi_spin, hi_bpos, hi_bneg)) <= U_exact)
+            2 * st.active_edges <= max_work - visits ||
+                return (nothing, :work_limit, :interval, visits, fallbacks, exact_work)
+            active_verts = count(==(2), st.fixed)
+            needed_exact = 1 + active_verts + st.active_edges
+            needed_exact <= max_exact_work - exact_work ||
+                return (nothing, :verification_limit, :interval, visits, fallbacks, exact_work)
+            fallbacks += 1
+            exact_work += 1
+            L_spin = direction * c_spin
+            L_bpos = direction * c_bpos
+            L_bneg = direction * c_bpos
+            if st.lower !== nothing && st.upper !== nothing && total_active_adj <= max_work - visits
+                sum_diff = _Exact(0)
+                sum_neg_qb2 = _Exact(0)
+                edge_deg_sum = 0
+                for u in 1:n
+                    st.fixed[u] == 2 || continue
+                    _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, fallbacks, exact_work + (edge_deg_sum ÷ 2))
+                    h_u = direction * _spin_field(ws, u)
+                    f_u = direction * _bool_field(ws, u)
+                    L_spin -= abs(h_u)
+                    L_bpos += min(_Exact(0), f_u)
+                    L_bneg += min(2 * h_u, f_u - 2 * h_u)
+                    diff_u = st.upper[u] - st.lower[u]
+                    sum_diff += diff_u
+                    if !is_spin_dom
+                        sum_neg_qb2 += direction > 0 ? (st.lower[u] - st.fields[u]) : (st.fields[u] - st.upper[u])
+                    else
+                        sum_neg_qb2 += direction * (2 * st.fields[u] - st.dual_fields[u]) - diff_u
+                    end
+                    visits += length(st.adjacency[u])
                     exact_work += 1
+                    edge_deg_sum += st.degrees[u]
+                end
+                exact_work += st.active_edges
+                L_spin -= is_spin_dom ? (sum_diff // 4) : (sum_diff // 8)
+                add_qb_tot = sum_neg_qb2 // 2
+                L_bpos += add_qb_tot
+                L_bneg += add_qb_tot
+            else
+                for u in 1:n
+                    st.fixed[u] == 2 || continue
+                    _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, fallbacks, exact_work)
+                    h_u = direction * _spin_field(ws, u)
+                    f_u = direction * _bool_field(ws, u)
+                    L_spin -= abs(h_u)
+                    L_bpos += min(_Exact(0), f_u)
+                    L_bneg += min(2 * h_u, f_u - 2 * h_u)
+                    exact_work += 1
+                    for (v, q) in st.adjacency[u]
+                        _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, fallbacks, exact_work)
+                        visits += 1
+                        (st.fixed[v] == 2 && u < v) || continue
+                        J_uv = direction * _spin_coupling(ws, q)
+                        qb_uv = direction * _bool_coupling(ws, q)
+                        L_spin -= abs(J_uv)
+                        add_qb = min(_Exact(0), qb_uv)
+                        L_bpos += add_qb
+                        L_bneg += add_qb
+                        exact_work += 1
+                    end
                 end
             end
-        end
-        _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, fallbacks, exact_work)
-        L_exact = max(L_spin, L_bpos, L_bneg)
-        if L_exact > U_exact
-            step = ProbingStep(
-                i, target_orig, probed_orig,
-                deepcopy(L_exact), deepcopy(U_exact),
-                Tuple(w_vec), Tuple(branch_steps),
-                c_parent, predecessors, :exact, scope_length, :strong,
-            )
-            return (step, :proved, :exact, visits, fallbacks, exact_work)
-        else
-            if double_probe
-                rollback!(ws, probe_cp)
-                st.star_hint = saved_star_hint
-                st.rel_hint = saved_rel_hint
-                dp_step, dp_reason, dp_method, dp_v, dp_fb, dp_ex = _double_probe_witness_for_var(
-                    ws, i;
-                    map=map, req_orig=req_orig, max_rounds=Int(max_rounds), max_trial_fixes=Int(max_trial_fixes),
-                    max_work=Int(max_work) - visits, max_exact_work=Int(max_exact_work) - exact_work,
-                    deadline_ns=deadline_ns, predecessors=predecessors, scope_length=scope_length,
+            _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, fallbacks, exact_work)
+            L_exact = max(L_spin, L_bpos, L_bneg)
+            if L_exact > U_exact
+                step = ProbingStep(
+                    i, target_orig, probed_orig,
+                    deepcopy(L_exact), deepcopy(U_exact),
+                    Tuple(w_vec), Tuple(branch_steps),
+                    c_parent, predecessors, :exact, scope_length, :strong,
                 )
-                visits += dp_v
-                fallbacks += dp_fb
-                exact_work += dp_ex
-                dp_step !== nothing && return (dp_step, :proved, dp_method, visits, fallbacks, exact_work)
-                dp_reason in (:deadline, :work_limit, :verification_limit) &&
-                    return (nothing, dp_reason, dp_method, visits, fallbacks, exact_work)
+                return (step, :proved, :exact, visits, fallbacks, exact_work)
             end
-            return (nothing, :not_strict, :exact, visits, fallbacks, exact_work)
+            not_strict_method = :exact
         end
+        if double_probe
+            rollback!(ws, probe_cp)
+            st.star_hint = saved_star_hint
+            st.rel_hint = saved_rel_hint
+            dp_step, dp_reason, dp_method, dp_v, dp_fb, dp_ex = _double_probe_witness_for_var(
+                ws, i;
+                map=map, req_orig=req_orig, max_rounds=Int(max_rounds), max_trial_fixes=Int(max_trial_fixes),
+                max_work=Int(max_work) - visits, max_exact_work=Int(max_exact_work) - exact_work,
+                deadline_ns=deadline_ns, predecessors=predecessors, scope_length=scope_length,
+            )
+            visits += dp_v
+            fallbacks += dp_fb
+            exact_work += dp_ex
+            dp_step !== nothing && return (dp_step, :proved, dp_method, visits, fallbacks, exact_work)
+            dp_reason in (:deadline, :work_limit, :verification_limit) &&
+                return (nothing, dp_reason, dp_method, visits, fallbacks, exact_work)
+        end
+        return (nothing, :not_strict, not_strict_method, visits, fallbacks, exact_work)
     finally
         if length(st.trail) > probe_cp._depth
             rollback!(ws, probe_cp)
@@ -4399,27 +4396,7 @@ function _verify_poly_witness_state(
         w[idx] == val || return (false, :invalid_witness, _Exact(0))
     end
     for pstep in prefix_steps
-        if pstep isa Union{DominanceStep,ProbingStep,RoofDualityStep,SubmodularCutStep}
-            w[pstep.variable] == pstep.value || return (false, :invalid_witness, _Exact(0))
-        elseif pstep isa MaxCutStep
-            if pstep.representative == 0
-                w[pstep.eliminated] == pstep.value || return (false, :invalid_witness, _Exact(0))
-            else
-                s_elim = is_bool ? (2 * w[pstep.eliminated] - 1) : w[pstep.eliminated]
-                s_rep = is_bool ? (2 * w[pstep.representative] - 1) : w[pstep.representative]
-                s_elim == pstep.orig_sign * s_rep || return (false, :invalid_witness, _Exact(0))
-            end
-        elseif pstep isa RelationStep
-            s_elim = is_bool ? (2 * w[pstep.eliminated] - 1) : w[pstep.eliminated]
-            s_rep = is_bool ? (2 * w[pstep.representative] - 1) : w[pstep.representative]
-            s_elim == pstep.orig_sign * s_rep || return (false, :invalid_witness, _Exact(0))
-        elseif pstep isa EliminationStep
-            idx = 1
-            for (bit_pos, nbr) in enumerate(pstep.neighbors)
-                w[nbr] == 1 && (idx += 1 << (bit_pos - 1))
-            end
-            w[pstep.variable] == pstep.table[idx] || return (false, :invalid_witness, _Exact(0))
-        end
+        _witness_satisfies_step(is_bool, pstep, w) || return (false, :invalid_witness, _Exact(0))
     end
     w_energy = p.constant
     for v_idx in 1:p.n

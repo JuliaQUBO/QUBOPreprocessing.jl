@@ -920,15 +920,9 @@ function probe_variables!(
                     _contraction_fill(st, u, i) <= mf || continue
                     orig_σ = (bs_low.value == low_orig && bs_high.value == 1) ? 1 : -1
                     rel_step = if !branch_dirty
-                        bsteps_1 = Tuple(steps_low[1:k_low])
-                        bsteps_2 = Tuple(steps_high[1:k_high])
-                        M_1 = _branch_steps_spin_margin(s.domain, bsteps_1, nothing)
-                        M_2 = _branch_steps_spin_margin(s.domain, bsteps_2, nothing)
-                        lo_p, hi_p = minmax(M_1, M_2)
-                        wit = _ProbingPairWitness(i, low_orig, bsteps_1, i, 1, bsteps_2)
-                        RelationStep(
-                            u, i, orig_σ, orig_σ, deepcopy(lo_p), deepcopy(hi_p), deepcopy(st.constant),
-                            st.proof_count, :probing_pair, length(st.callers), :strong, wit,
+                        _build_probing_pair_step_from_branches(
+                            ws, u, i, orig_σ, low_orig,
+                            Tuple(steps_low[1:k_low]), Tuple(steps_high[1:k_high]),
                         )
                     else
                         s_rel, r_rel, _, v_rel, fb_rel, ex_rel = _probing_relation_witness(
@@ -992,27 +986,6 @@ struct RoofDualityReport{V,S}
     exact_work::Int
     contracted_count::Int
     contractions::Vector{Tuple{V,V,Int}}
-end
-
-function RoofDualityReport{V,S}(
-    stop_reason::Symbol,
-    lower_bound::Union{Nothing,_Exact},
-    objective_bound::Union{Nothing,_Exact},
-    max_flow::Union{Nothing,_Exact},
-    fixed_count::Int,
-    fixings::Vector{Pair{V,S}},
-    graph_work::Int,
-    flow_work::Int,
-    verification_work::Int,
-    materialization_work::Int,
-    edge_visits::Int,
-    exact_work::Int,
-) where {V,S}
-    return RoofDualityReport{V,S}(
-        stop_reason, lower_bound, objective_bound, max_flow, fixed_count, fixings,
-        graph_work, flow_work, verification_work, materialization_work, edge_visits, exact_work,
-        0, Tuple{V,V,Int}[],
-    )
 end
 
 """
@@ -2821,15 +2794,9 @@ function contract_relations!(
                     bs_low.value != bs_high.value || continue
                     _contraction_fill(st, u, i) <= mf || continue
                     orig_σ = (bs_low.value == low_orig && bs_high.value == 1) ? 1 : -1
-                    bsteps_1 = Tuple(steps_low[1:k_low])
-                    bsteps_2 = Tuple(steps_high[1:k_high])
-                    M_1 = _branch_steps_spin_margin(s.domain, bsteps_1, nothing)
-                    M_2 = _branch_steps_spin_margin(s.domain, bsteps_2, nothing)
-                    lo_p, hi_p = minmax(M_1, M_2)
-                    wit = _ProbingPairWitness(i, low_orig, bsteps_1, i, 1, bsteps_2)
-                    rel_step = RelationStep(
-                        u, i, orig_σ, orig_σ, deepcopy(lo_p), deepcopy(hi_p), deepcopy(st.constant),
-                        st.proof_count, :probing_pair, length(st.callers), :strong, wit,
+                    rel_step = _build_probing_pair_step_from_branches(
+                        ws, u, i, orig_σ, low_orig,
+                        Tuple(steps_low[1:k_low]), Tuple(steps_high[1:k_high]),
                     )
                     cd, fd, qd = _relation_deltas(ws, u, i, orig_σ)
                     rep_rel = _apply_reduction!(
