@@ -1,7 +1,7 @@
 # Kernel-checked Lean 4 formalization for `QUBOPreprocessing.jl`
 
-This directory contains a standalone Lean `v4.33.1` / Mathlib `v4.33.1` formalization of the six
-core mathematical results underlying `QUBOPreprocessing.jl` (Issues `#54`, `#68`, and `#72` and `docs/src/dominance.md`):
+This directory contains a standalone Lean `v4.33.1` / Mathlib `v4.33.1` formalization of the seven
+core mathematical results underlying `QUBOPreprocessing.jl` (Issues `#54`, `#68`, `#72`, and `#74` and `docs/src/dominance.md`):
 
 1. **Proposition 1 (`QUBOPreprocessing.GaugeCoercive`)**: Exact affine bijection $s_i = 2 x_i - 1$
    ($x_i = (s_i + 1) / 2$) between Boolean variables $x_i \in \{0, 1\}$ and Ising spins
@@ -77,6 +77,26 @@ core mathematical results underlying `QUBOPreprocessing.jl` (Issues `#54`, `#68`
    `ReductionStep` and `StrongReductionStep` bridges for pair contraction $s_u = \sigma s_v$
    (`pairContractedEnergy_eq_merged`, `coflip_reductionStep`, `coflip_strongReductionStep`,
    `coflip_preserves_global_min`, `coflip_strong_image_global_min_eq`).
+7. **Theorem 7 (`QUBOPreprocessing.ProbingMargin`)**: Sequential trial-dominance probing margins,
+   witness-free double probing (`:double_probe`), and two-branch 2-SAT pair equivalence probing
+   (`:probing_pair`) (`_dominance_step_spin_margin`, `_branch_steps_spin_margin`,
+   `_double_probe_witness_for_var`, `_probing_relation_witness`, `_verify_probing_step`, and
+   `_verify_relation_step` in `src/certificates.jl:1658-1703, 1834-1871, 2288-2400, 4794-4837,
+   5352-5387`): single-step spin margin and Boolean-to-spin normalization (`domSpinMargin`,
+   `boolToSpinMargin_eq`, `single_step_spin_margin_pos_lo`, `single_step_spin_margin_neg_hi`,
+   `single_step_spin_margin_sound`); sequential trial-dominance branch cascade `ValidCascade` with
+   both first-divergence single-step repair (`cascade_first_divergence_repair`,
+   `cascade_terminal_refutation`) and full-cascade telescoping repair
+   (`cascadeFullRepair_satisfies_and_telescopes`, `cascadeFullRepair_drop_ge_branchSpinMargin`);
+   witness-free `:double_probe` soundness and `ReductionStep` / `StrongReductionStep` bridges
+   (`double_probe_sound`, `double_probe_global_min_fixes_target`, `double_probe_cascade_sound`,
+   `double_probe_reductionStep`, `double_probe_strongReductionStep`,
+   `double_probe_preserves_global_min`, `double_probe_strong_image_global_min_eq`); and 2-SAT
+   `:probing_pair` violation partition, four-pattern refutation (`okPat1_refutes_clause1`,
+   `okPat2_refutes_clause2`), soundness (`probing_pair_sound`,
+   `probing_pair_global_min_satisfies_relation`), and `ReductionStep` / `StrongReductionStep`
+   bridges (`probing_pair_reductionStep`, `probing_pair_strongReductionStep`,
+   `probing_pair_preserves_global_min`, `probing_pair_strong_image_global_min_eq`).
 
 ## Reproducing Verification
 
@@ -104,8 +124,8 @@ If `lake` is installed in a non-default location, pass `QUBO_LAKE=/path/to/lake 
 4. Writes machine-readable audit artifacts to `lean/verification/` (`result.json`,
    `environment.json`, `axioms.log`, `imports.json`, `sources.before.json`, `sources.after.json`).
 
-The current verified audit (`lean/verification/result.json`) checks **110 public source theorems**
-and **195 total project constants** across **7 modules**, with zero compiler warnings and only
+The current verified audit (`lean/verification/result.json`) checks **147 public source theorems**
+and **295 total project constants** across **8 modules**, with zero compiler warnings and only
 Lean's three standard foundational axioms (`Classical.choice`, `Quot.sound`, `propext`).
 
 ## Module and Theorem Summary
@@ -118,3 +138,4 @@ Lean's three standard foundational axioms (`Classical.choice`, `Quot.sound`, `pr
 | `QUBOPreprocessing.CompressionAudit` | `endpoint_tie_counterexample`, `quadratic_endpoint_tie_counterexample`, `negative_quadratic_lost_optimum_counterexample`, `diagonal_compression_subsumed_by_dominance`, `pair_excluded_lower_eq_full_of_pos`, `positive_quadratic_sparsification_subsumed_by_dominance`, `in_place_compression_nonconstant_shift` | Theorem 4 (`docs/src/dominance.md`, `src/compression.jl`, `test/compression.jl`) |
 | `QUBOPreprocessing.WalshDegree3` | `walshQuadPoly_add_cubic_eq`, `walshQuadPoly_eq_of_cubic_zero`, `walshCubic_zero_of_walshQuadPoly_eq`, `walshQuadPoly_eq_iff_cubic_zero`, `deg3StarMin_le`, `deg3StarMin_achieved`, `deg3StarMin_eq_walshQuadPoly_of_cubic_zero`, `deg3StarMin_eq_walshQuadPoly_iff_cubic_zero`, `deg3StarOptSpin_isSpin`, `deg3StarOptSpin_achieves`, `deg3Star_elimination_is_reduction`, `deg3Star_elimination_preserves_global_min`, `deg3StarMin_cubic_zero_of_h0_zero`, `walshQuadPoly_deg3StarMin_zero_eq_starTriPoly`, `deg3StarMin_cubic_zero_of_field_dominant`, `deg3StarMin_quad_couplings_zero_of_field_dominant`, `deg3StarMin_cubic_zero_of_heavy_edge1`, `deg3StarMin_cubic_zero_of_heavy_edge2`, `deg3StarMin_cubic_zero_of_heavy_edge3`, `deg3StarMin_cubic_of_additive_cone`, `deg3StarMin_cubic_zero_iff_of_additive_cone`, `deg3StarMin_cubic_of_plateau_cone_pos`, `deg3StarMin_cubic_of_plateau_cone_neg`, `deg3StarMin_not_quad_representable_of_plateau_pos` | Theorem 5 (`docs/src/dominance.md`, `src/certificates.jl`, `test/elimination.jl`) |
 | `QUBOPreprocessing.CoflipCancellation` | `deltaFlipU_eq`, `deltaFlipV_eq`, `spin_rel_or_viol`, `repair_u_satisfies_relation`, `repair_v_satisfies_relation`, `coflip_average_eq`, `coflipRadius_nonneg`, `coflipLower_le_coflipUpper`, `abs_coflip_fluctuation_le_two_mul_coflipRadius`, `coflip_average_enclosure`, `min_deltaFlip_le_neg_two_mul_coflipLower`, `coflip_pair_strong_persistency`, `coflip_pair_weak_persistency`, `coflipRadius_eq_zero_of_twin`, `coflipLower_eq_center_of_twin`, `nonadjacent_twin_weak_contraction`, `coupled_twin_strong_contraction`, `one_sided_diff_sum_eq`, `coflipDelta_nonneg`, `abs_coflip_diff_le_add_abs`, `abs_coflip_diff_lt_add_abs_of_aligned`, `coflipRadius_le_glk_sum_radius`, `pairContractedEnergy_eq_merged`, `coflip_reductionStep`, `coflip_strongReductionStep`, `coflip_preserves_global_min`, `coflip_strong_image_global_min_eq` | Theorem 6 (`docs/src/dominance.md`, `src/certificates.jl`, `test/relations.jl`) |
+| `QUBOPreprocessing.ProbingMargin` | `boolToSpinMargin_eq`, `singleSpinFlipDelta_eq`, `domSpinMargin_eq_left_of_lo_pos`, `domSpinMargin_eq_right_of_hi_neg`, `single_step_spin_margin_pos_lo`, `single_step_spin_margin_neg_hi`, `single_step_spin_margin_sound`, `branchSpinMargin_le_of_mem`, `branchSpinMargin_pos_iff`, `branchSpinMargin_nonneg_iff`, `allCascadePreds_imp_mem`, `cascade_first_divergence_repair`, `cascade_terminal_refutation`, `cascadeFullRepair_satisfies_and_telescopes`, `cascadeTelescopingMargin_nonneg`, `exists_le_cascadeTelescopingMargin`, `cascadeFullRepair_drop_ge_branchSpinMargin`, `doubleProbeMargin_pos_iff`, `double_probe_sound`, `double_probe_global_min_fixes_target`, `double_probe_cascade_sound`, `double_probe_reductionStep`, `double_probe_strongReductionStep`, `double_probe_preserves_global_min`, `double_probe_strong_image_global_min_eq`, `probing_pair_violation_iff`, `probing_pair_viol_eq_iff`, `okPat1_refutes_clause1`, `okPat2_refutes_clause2`, `probing_pair_sound`, `probing_pair_global_min_satisfies_relation`, `probing_pair_reductionStep`, `probing_pair_strongReductionStep`, `probing_pair_preserves_global_min`, `probing_pair_strong_image_global_min_eq` | Theorem 7 (`docs/src/dominance.md`, `src/certificates.jl`, `test/probing.jl`, `test/relations.jl`) |
