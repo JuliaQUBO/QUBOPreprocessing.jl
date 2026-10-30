@@ -1,4 +1,12 @@
 {
+  "QUBOPreprocessing.BlockElimination": [
+    "Init",
+    "Init",
+    "Mathlib",
+    "QUBOPreprocessing.GaugeCoercive",
+    "QUBOPreprocessing.CompositionRepair",
+    "QUBOPreprocessing.WalshDegree3"
+  ],
   "QUBOPreprocessing.CoflipCancellation": [
     "Init",
     "Init",
@@ -53,6 +61,7 @@
     "QUBOPreprocessing.CompressionAudit",
     "QUBOPreprocessing.WalshDegree3",
     "QUBOPreprocessing.CoflipCancellation",
-    "QUBOPreprocessing.ProbingMargin"
+    "QUBOPreprocessing.ProbingMargin",
+    "QUBOPreprocessing.BlockElimination"
   ]
 }

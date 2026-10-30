@@ -1,7 +1,7 @@
 # Kernel-checked Lean 4 formalization for `QUBOPreprocessing.jl`
 
-This directory contains a standalone Lean `v4.33.1` / Mathlib `v4.33.1` formalization of the seven
-core mathematical results underlying `QUBOPreprocessing.jl` (Issues `#54`, `#68`, `#72`, and `#74` and `docs/src/dominance.md`):
+This directory contains a standalone Lean `v4.33.1` / Mathlib `v4.33.1` formalization of the eight
+core mathematical results underlying `QUBOPreprocessing.jl` (Issues `#54`, `#68`, `#72`, `#74`, and `#76` and `docs/src/dominance.md`):
 
 1. **Proposition 1 (`QUBOPreprocessing.GaugeCoercive`)**: Exact affine bijection $s_i = 2 x_i - 1$
    ($x_i = (s_i + 1) / 2$) between Boolean variables $x_i \in \{0, 1\}$ and Ising spins
@@ -97,6 +97,27 @@ core mathematical results underlying `QUBOPreprocessing.jl` (Issues `#54`, `#68`
    `probing_pair_global_min_satisfies_relation`), and `ReductionStep` / `StrongReductionStep`
    bridges (`probing_pair_reductionStep`, `probing_pair_strongReductionStep`,
    `probing_pair_preserves_global_min`, `probing_pair_strong_image_global_min_eq`).
+8. **Theorem 8 (`QUBOPreprocessing.BlockElimination`)**: Multi-variable connected block elimination
+   and separator interpolation (`_interpolate_quadratic_deltas`, `_block_elimination_witness`,
+   `prove_block_elimination`, `eliminate_blocks!`, and `_verify_elimination_step` in
+   `src/certificates.jl:1258-1298, 1393-1580, 5050-5217`): separator-conditioned block
+   marginalization (`block_elimination_reductionStep`, `block_elimination_repair_monotone`,
+   `block_elimination_preserves_global_min`) and unique-argmin strong persistency
+   (`block_elimination_unique_argmin_iff`, `block_elimination_strongReductionStep`,
+   `block_elimination_strong_image_global_min_eq`); universal exactness of 0-, 1-, and 2-separator
+   Boolean and Spin quadratic interpolation (`interp0Poly_eq`, `bool1Poly_eq`, `spin1Poly_eq`,
+   `bool2QuadPoly_eq`, `spin2QuadPoly_eq`) and equivalence of the Möbius-to-spin conversion formulas
+   with 4-point Walsh–Hadamard averages (`spin2Const_eq_walsh`, `spin2H1_eq_walsh`,
+   `spin2H2_eq_walsh`, `spin2J12_eq_walsh`); batch $k$-step zero-delta materialization and
+   coordinate-wise table reconstruction (`batchStepDelta_lt_last`, `batchStepDelta_last`,
+   `sum_batchStepDelta_eq`, `coordBlockTable_eq_joint`, `reconstruct_coordBlockTable_eq`); and
+   concrete 0-, 1-, 2-, and ($\alpha_{123} = 0$) 3-separator spin block elimination theorems
+   (`sep0_block_reductionStep`, `sep0_block_strongReductionStep`, `sep1_spin_block_reductionStep`,
+   `sep1_spin_block_strongReductionStep`, `sep2_spin_block_reductionStep`,
+   `sep2_spin_block_strongReductionStep`, `sep2_spin_block_preserves_global_min`,
+   `sep2_spin_block_strong_image_global_min_eq`,
+   `sep3_spin_block_reductionStep_of_cubic_zero`,
+   `sep3_spin_block_strongReductionStep_of_cubic_zero`).
 
 ## Reproducing Verification
 
@@ -124,8 +145,8 @@ If `lake` is installed in a non-default location, pass `QUBO_LAKE=/path/to/lake 
 4. Writes machine-readable audit artifacts to `lean/verification/` (`result.json`,
    `environment.json`, `axioms.log`, `imports.json`, `sources.before.json`, `sources.after.json`).
 
-The current verified audit (`lean/verification/result.json`) checks **147 public source theorems**
-and **295 total project constants** across **8 modules**, with zero compiler warnings and only
+The current verified audit (`lean/verification/result.json`) checks **180 public source theorems**
+and **360 total project constants** across **9 modules**, with zero compiler warnings and only
 Lean's three standard foundational axioms (`Classical.choice`, `Quot.sound`, `propext`).
 
 ## Module and Theorem Summary
@@ -139,3 +160,4 @@ Lean's three standard foundational axioms (`Classical.choice`, `Quot.sound`, `pr
 | `QUBOPreprocessing.WalshDegree3` | `walshQuadPoly_add_cubic_eq`, `walshQuadPoly_eq_of_cubic_zero`, `walshCubic_zero_of_walshQuadPoly_eq`, `walshQuadPoly_eq_iff_cubic_zero`, `deg3StarMin_le`, `deg3StarMin_achieved`, `deg3StarMin_eq_walshQuadPoly_of_cubic_zero`, `deg3StarMin_eq_walshQuadPoly_iff_cubic_zero`, `deg3StarOptSpin_isSpin`, `deg3StarOptSpin_achieves`, `deg3Star_elimination_is_reduction`, `deg3Star_elimination_preserves_global_min`, `deg3StarMin_cubic_zero_of_h0_zero`, `walshQuadPoly_deg3StarMin_zero_eq_starTriPoly`, `deg3StarMin_cubic_zero_of_field_dominant`, `deg3StarMin_quad_couplings_zero_of_field_dominant`, `deg3StarMin_cubic_zero_of_heavy_edge1`, `deg3StarMin_cubic_zero_of_heavy_edge2`, `deg3StarMin_cubic_zero_of_heavy_edge3`, `deg3StarMin_cubic_of_additive_cone`, `deg3StarMin_cubic_zero_iff_of_additive_cone`, `deg3StarMin_cubic_of_plateau_cone_pos`, `deg3StarMin_cubic_of_plateau_cone_neg`, `deg3StarMin_not_quad_representable_of_plateau_pos` | Theorem 5 (`docs/src/dominance.md`, `src/certificates.jl`, `test/elimination.jl`) |
 | `QUBOPreprocessing.CoflipCancellation` | `deltaFlipU_eq`, `deltaFlipV_eq`, `spin_rel_or_viol`, `repair_u_satisfies_relation`, `repair_v_satisfies_relation`, `coflip_average_eq`, `coflipRadius_nonneg`, `coflipLower_le_coflipUpper`, `abs_coflip_fluctuation_le_two_mul_coflipRadius`, `coflip_average_enclosure`, `min_deltaFlip_le_neg_two_mul_coflipLower`, `coflip_pair_strong_persistency`, `coflip_pair_weak_persistency`, `coflipRadius_eq_zero_of_twin`, `coflipLower_eq_center_of_twin`, `nonadjacent_twin_weak_contraction`, `coupled_twin_strong_contraction`, `one_sided_diff_sum_eq`, `coflipDelta_nonneg`, `abs_coflip_diff_le_add_abs`, `abs_coflip_diff_lt_add_abs_of_aligned`, `coflipRadius_le_glk_sum_radius`, `pairContractedEnergy_eq_merged`, `coflip_reductionStep`, `coflip_strongReductionStep`, `coflip_preserves_global_min`, `coflip_strong_image_global_min_eq` | Theorem 6 (`docs/src/dominance.md`, `src/certificates.jl`, `test/relations.jl`) |
 | `QUBOPreprocessing.ProbingMargin` | `boolToSpinMargin_eq`, `singleSpinFlipDelta_eq`, `domSpinMargin_eq_left_of_lo_pos`, `domSpinMargin_eq_right_of_hi_neg`, `single_step_spin_margin_pos_lo`, `single_step_spin_margin_neg_hi`, `single_step_spin_margin_sound`, `branchSpinMargin_le_of_mem`, `branchSpinMargin_pos_iff`, `branchSpinMargin_nonneg_iff`, `allCascadePreds_imp_mem`, `cascade_first_divergence_repair`, `cascade_terminal_refutation`, `cascadeFullRepair_satisfies_and_telescopes`, `cascadeTelescopingMargin_nonneg`, `exists_le_cascadeTelescopingMargin`, `cascadeFullRepair_drop_ge_branchSpinMargin`, `doubleProbeMargin_pos_iff`, `double_probe_sound`, `double_probe_global_min_fixes_target`, `double_probe_cascade_sound`, `double_probe_reductionStep`, `double_probe_strongReductionStep`, `double_probe_preserves_global_min`, `double_probe_strong_image_global_min_eq`, `probing_pair_violation_iff`, `probing_pair_viol_eq_iff`, `okPat1_refutes_clause1`, `okPat2_refutes_clause2`, `probing_pair_sound`, `probing_pair_global_min_satisfies_relation`, `probing_pair_reductionStep`, `probing_pair_strongReductionStep`, `probing_pair_preserves_global_min`, `probing_pair_strong_image_global_min_eq` | Theorem 7 (`docs/src/dominance.md`, `src/certificates.jl`, `test/probing.jl`, `test/relations.jl`) |
+| `QUBOPreprocessing.BlockElimination` | `block_elimination_unique_argmin_iff`, `block_elimination_reductionStep`, `block_elimination_repair_monotone`, `block_elimination_preserves_global_min`, `block_elimination_strongReductionStep`, `block_elimination_strong_image_global_min_eq`, `interp0Poly_eq`, `bool1Poly_eq`, `spin1Const_eq_walsh`, `spin1Field_eq_walsh`, `spin1Poly_eq`, `bool2QuadPoly_eq`, `spin2Const_eq_walsh`, `spin2H1_eq_walsh`, `spin2H2_eq_walsh`, `spin2J12_eq_walsh`, `spin2QuadPoly_eq`, `batchStepDelta_lt_last`, `batchStepDelta_last`, `sum_batchStepDelta_eq`, `coordBlockTable_apply`, `coordBlockTable_eq_joint`, `reconstruct_coordBlockTable_eq`, `sep0_block_reductionStep`, `sep0_block_strongReductionStep`, `sep1_spin_block_reductionStep`, `sep1_spin_block_strongReductionStep`, `sep2_spin_block_reductionStep`, `sep2_spin_block_strongReductionStep`, `sep2_spin_block_preserves_global_min`, `sep2_spin_block_strong_image_global_min_eq`, `sep3_spin_block_reductionStep_of_cubic_zero`, `sep3_spin_block_strongReductionStep_of_cubic_zero` | Theorem 8 (`docs/src/dominance.md`, `src/certificates.jl`, `test/elimination.jl`) |
