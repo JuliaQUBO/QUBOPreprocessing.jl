@@ -222,14 +222,11 @@ end
 function _checkpoint_at(ws::Workspace,depth::Int)
     st = ws._state
     t = st.trail
-    # A checkpoint at the tip follows every pin so far; an earlier depth
-    # follows only the pins requested while the trail was at most that long.
-    pin = depth == length(t) ? st.pin_serial : 0
-    if depth < length(t)
-        for p in st.pins
-            p[3] <= depth || break
-            pin = p[4]
-        end
+    # Record the latest active pin requested while the trail was at most `depth` long.
+    pin = 0
+    for p in st.pins
+        p[3] <= depth || break
+        pin = p[4]
     end
     return Checkpoint(generation(ws),st.epoch,depth,depth == 0 ? 0 : t[depth].serial,
                       depth == 0 ? 0 : t[depth].fix_depth,pin)
