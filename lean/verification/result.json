@@ -1,5 +1,5 @@
 {
-  "checked_at_utc": "2026-10-30T14:41:23.689770+00:00",
+  "checked_at_utc": "2026-10-30T15:26:11.193296+00:00",
   "lean_version": "Lean (version 4.33.1, x86_64-unknown-linux-gnu, commit 819816b2e0a3bf405af45ae5c7af2491d8f5bee6, Release)",
   "status": "build_and_axiom_audit_passed",
   "build_method": "isolated source snapshot; every project module recompiled by Lean; dependency cache read-only",
@@ -14,17 +14,17 @@
     "QUBOPreprocessing.MaxCutTriangle",
     "QUBOPreprocessing.WalshDegree3"
   ],
-  "all_project_constant_count": 144,
+  "all_project_constant_count": 154,
   "constant_kinds": {
     "constructor": 2,
-    "definition": 48,
+    "definition": 54,
     "inductive": 2,
     "recursor": 2,
-    "theorem": 90
+    "theorem": 94
   },
   "private_constant_count": 0,
   "compiler_generated_partial_runtime_helpers": [],
-  "public_theorem_count": 79,
+  "public_theorem_count": 83,
   "public_theorem_count_method": "compiler theorem metadata matched to theorem/lemma source name-selection ranges; generated declarations counted separately",
   "axioms": [
     "Classical.choice",
@@ -37,7 +37,7 @@
     "QUBOPreprocessing/CompressionAudit.lean": "695cf59638438281f6ee9e37f6ac2cdf42e8cb11c74975071a59d9c9b94ff132",
     "QUBOPreprocessing/GaugeCoercive.lean": "19a5a721ff7652a30fe65a3d1a9bd8d7d39810139120737b52a53293c758bfbc",
     "QUBOPreprocessing/MaxCutTriangle.lean": "050794427649ea89c030a5b09a34257837132efe236f5295d2d300848b127186",
-    "QUBOPreprocessing/WalshDegree3.lean": "ad8e074f6768021836c2501753a5acb041ea57a7d274615f58a1729df07abefe",
+    "QUBOPreprocessing/WalshDegree3.lean": "ad0865db58bb26a8d3ef85b138e88019d2b39ff8b1324673d92c20c6ee03f8bd",
     "QUBOPreprocessing.lean": "070cc75330a43be9bdae4e498eeb122d80891469148565983860dce24325ad2a",
     "lake-manifest.json": "c95907221a30a13a4cdd23d68953259eaec205fb53263e9567342ac811566fb3",
     "lakefile.toml": "7a33683c5a987c7a55d49d4de41704abce0dfca4f92469b54fa8e973b1f50cbe",
@@ -51,7 +51,7 @@
     "QUBOPreprocessing/CompressionAudit.lean": "695cf59638438281f6ee9e37f6ac2cdf42e8cb11c74975071a59d9c9b94ff132",
     "QUBOPreprocessing/GaugeCoercive.lean": "19a5a721ff7652a30fe65a3d1a9bd8d7d39810139120737b52a53293c758bfbc",
     "QUBOPreprocessing/MaxCutTriangle.lean": "050794427649ea89c030a5b09a34257837132efe236f5295d2d300848b127186",
-    "QUBOPreprocessing/WalshDegree3.lean": "ad8e074f6768021836c2501753a5acb041ea57a7d274615f58a1729df07abefe",
+    "QUBOPreprocessing/WalshDegree3.lean": "ad0865db58bb26a8d3ef85b138e88019d2b39ff8b1324673d92c20c6ee03f8bd",
     "QUBOPreprocessing.lean": "070cc75330a43be9bdae4e498eeb122d80891469148565983860dce24325ad2a",
     "lake-manifest.json": "c95907221a30a13a4cdd23d68953259eaec205fb53263e9567342ac811566fb3",
     "lakefile.toml": "7a33683c5a987c7a55d49d4de41704abce0dfca4f92469b54fa8e973b1f50cbe",
@@ -65,7 +65,7 @@
     "QUBOPreprocessing/CompressionAudit.olean": "05e812e48ea4b6f625ca3b5d91f00d5ad56892e8e34629be2c30925a95083bfd",
     "QUBOPreprocessing/GaugeCoercive.olean": "1a43059e0dae28ac99683c323d68ffe5bb78208e771a43d528961ac8c8019982",
     "QUBOPreprocessing/MaxCutTriangle.olean": "5902c04fcc90364c81e2a7d78ecd078069c96124f97c31e0974c0dd961fe1f7b",
-    "QUBOPreprocessing/WalshDegree3.olean": "8a2eba13826473760769099b250c685f1a4d4d40d73dcc2ac3bdace7255d89bc",
+    "QUBOPreprocessing/WalshDegree3.olean": "c3c6a1ca47ff35d25e49c2b80faba5660ecf82b8fdd64661cdce1550d2d32ee5",
     "QUBOPreprocessing.olean": "a38922673d32fceae13284c40b241bb0ef47d6f9ffa2aae44f2bb7418201a06d"
   },
   "dependency_boundary": "Pinned Mathlib/Lean oleans are trusted imports, not rebuilt or independently kernel-replayed"

@@ -49,7 +49,10 @@ core mathematical results underlying `QUBOPreprocessing.jl` (Issues `#54` and `#
    $\alpha_{123}(\phi) = 0$ for exact quadratic representability (`walshQuadPoly_eq_iff_cubic_zero`);
    general degree-3 Ising spin marginalization with a non-zero local field $h_0$
    (`deg3StarMin`, `deg3StarMin_le`, `deg3StarMin_achieved`,
-   `deg3StarMin_eq_walshQuadPoly_iff_cubic_zero`); the full-dimensional $\alpha_{123} = 0$
+   `deg3StarMin_eq_walshQuadPoly_iff_cubic_zero`) and its instantiation as a certified
+   `ReductionStep` (`deg3StarOptSpin_isSpin`, `deg3StarOptSpin_achieves`,
+   `deg3Star_elimination_is_reduction`, `deg3Star_elimination_preserves_global_min`);
+   the full-dimensional $\alpha_{123} = 0$
    trichotomy cones (`deg3StarMin_cubic_zero_of_h0_zero`,
    `deg3StarMin_cubic_zero_of_field_dominant`,
    `deg3StarMin_quad_couplings_zero_of_field_dominant`,
@@ -85,8 +88,8 @@ If `lake` is installed in a non-default location, pass `QUBO_LAKE=/path/to/lake 
 4. Writes machine-readable audit artifacts to `lean/verification/` (`result.json`,
    `environment.json`, `axioms.log`, `imports.json`, `sources.before.json`, `sources.after.json`).
 
-The current verified audit (`lean/verification/result.json`) checks **79 public source theorems**
-and **144 total project constants** across **6 modules**, with zero compiler warnings and only
+The current verified audit (`lean/verification/result.json`) checks **83 public source theorems**
+and **154 total project constants** across **6 modules**, with zero compiler warnings and only
 Lean's three standard foundational axioms (`Classical.choice`, `Quot.sound`, `propext`).
 
 ## Module and Theorem Summary
@@ -97,4 +100,4 @@ Lean's three standard foundational axioms (`Classical.choice`, `Quot.sound`, `pr
 | `QUBOPreprocessing.CompositionRepair` | `ReductionStep.id`, `ReductionStep.comp`, `ReductionStep.preserves_global_min`, `ReductionStep.global_min_value_eq`, `StrongReductionStep.comp`, `StrongReductionStep.image_global_min_eq`, `conditional_elimination_is_reduction`, `repair_monotone`, `repair_strict_improvement`, `starMin_le`, `starMin_achieved`, `starMin_even`, `starMin_cubic_walsh_zero`, `starTriPoly_eq_starMin` | Theorem 2, Corollary 2.1, Eq. (4) (`docs/src/dominance.md`) |
 | `QUBOPreprocessing.MaxCutTriangle` | `triEnergy_flip_a`, `triEnergy_flip_ac`, `gammaTriangle_supportive`, `gammaTriangle_frustrated`, `gammaTriangle_zero_residual`, `maxcut_triangle_dominance_sound`, `maxcut_triangle_strict_improvement`, `uncorrected_multicut_triangle_counterexample` | Proposition 3 (`docs/src/dominance.md`, `src/maxcut.jl`, `test/maxcut.jl`) |
 | `QUBOPreprocessing.CompressionAudit` | `endpoint_tie_counterexample`, `quadratic_endpoint_tie_counterexample`, `negative_quadratic_lost_optimum_counterexample`, `diagonal_compression_subsumed_by_dominance`, `pair_excluded_lower_eq_full_of_pos`, `positive_quadratic_sparsification_subsumed_by_dominance`, `in_place_compression_nonconstant_shift` | Theorem 4 (`docs/src/dominance.md`, `src/compression.jl`, `test/compression.jl`) |
-| `QUBOPreprocessing.WalshDegree3` | `walshQuadPoly_add_cubic_eq`, `walshQuadPoly_eq_of_cubic_zero`, `walshCubic_zero_of_walshQuadPoly_eq`, `walshQuadPoly_eq_iff_cubic_zero`, `deg3StarMin_le`, `deg3StarMin_achieved`, `deg3StarMin_eq_walshQuadPoly_of_cubic_zero`, `deg3StarMin_eq_walshQuadPoly_iff_cubic_zero`, `deg3StarMin_cubic_zero_of_h0_zero`, `walshQuadPoly_deg3StarMin_zero_eq_starTriPoly`, `deg3StarMin_cubic_zero_of_field_dominant`, `deg3StarMin_quad_couplings_zero_of_field_dominant`, `deg3StarMin_cubic_zero_of_heavy_edge1`, `deg3StarMin_cubic_zero_of_heavy_edge2`, `deg3StarMin_cubic_zero_of_heavy_edge3`, `deg3StarMin_cubic_of_additive_cone`, `deg3StarMin_cubic_zero_iff_of_additive_cone`, `deg3StarMin_cubic_of_plateau_cone_pos`, `deg3StarMin_cubic_of_plateau_cone_neg`, `deg3StarMin_not_quad_representable_of_plateau_pos` | Theorem 5 (`docs/src/dominance.md`, `src/certificates.jl`, `test/elimination.jl`) |
+| `QUBOPreprocessing.WalshDegree3` | `walshQuadPoly_add_cubic_eq`, `walshQuadPoly_eq_of_cubic_zero`, `walshCubic_zero_of_walshQuadPoly_eq`, `walshQuadPoly_eq_iff_cubic_zero`, `deg3StarMin_le`, `deg3StarMin_achieved`, `deg3StarMin_eq_walshQuadPoly_of_cubic_zero`, `deg3StarMin_eq_walshQuadPoly_iff_cubic_zero`, `deg3StarOptSpin_isSpin`, `deg3StarOptSpin_achieves`, `deg3Star_elimination_is_reduction`, `deg3Star_elimination_preserves_global_min`, `deg3StarMin_cubic_zero_of_h0_zero`, `walshQuadPoly_deg3StarMin_zero_eq_starTriPoly`, `deg3StarMin_cubic_zero_of_field_dominant`, `deg3StarMin_quad_couplings_zero_of_field_dominant`, `deg3StarMin_cubic_zero_of_heavy_edge1`, `deg3StarMin_cubic_zero_of_heavy_edge2`, `deg3StarMin_cubic_zero_of_heavy_edge3`, `deg3StarMin_cubic_of_additive_cone`, `deg3StarMin_cubic_zero_iff_of_additive_cone`, `deg3StarMin_cubic_of_plateau_cone_pos`, `deg3StarMin_cubic_of_plateau_cone_neg`, `deg3StarMin_not_quad_representable_of_plateau_pos` | Theorem 5 (`docs/src/dominance.md`, `src/certificates.jl`, `test/elimination.jl`) |

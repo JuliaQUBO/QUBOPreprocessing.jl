@@ -3,7 +3,7 @@
   "QUBOPreprocessing/CompressionAudit.lean": "695cf59638438281f6ee9e37f6ac2cdf42e8cb11c74975071a59d9c9b94ff132",
   "QUBOPreprocessing/GaugeCoercive.lean": "19a5a721ff7652a30fe65a3d1a9bd8d7d39810139120737b52a53293c758bfbc",
   "QUBOPreprocessing/MaxCutTriangle.lean": "050794427649ea89c030a5b09a34257837132efe236f5295d2d300848b127186",
-  "QUBOPreprocessing/WalshDegree3.lean": "ad8e074f6768021836c2501753a5acb041ea57a7d274615f58a1729df07abefe",
+  "QUBOPreprocessing/WalshDegree3.lean": "ad0865db58bb26a8d3ef85b138e88019d2b39ff8b1324673d92c20c6ee03f8bd",
   "QUBOPreprocessing.lean": "070cc75330a43be9bdae4e498eeb122d80891469148565983860dce24325ad2a",
   "lake-manifest.json": "c95907221a30a13a4cdd23d68953259eaec205fb53263e9567342ac811566fb3",
   "lakefile.toml": "7a33683c5a987c7a55d49d4de41704abce0dfca4f92469b54fa8e973b1f50cbe",

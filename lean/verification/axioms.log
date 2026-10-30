@@ -11,9 +11,11 @@ QUBOPreprocessing.GaugeCoercive | definition | QUBOPreprocessing.isingEnergy | a
 QUBOPreprocessing.GaugeCoercive | definition | QUBOPreprocessing.quboEnergy | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.CompositionRepair | theorem | QUBOPreprocessing.StrongReductionStep.toReductionStep | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.CompositionRepair | theorem | QUBOPreprocessing.ReductionStep.id | axioms: propext, Classical.choice, Quot.sound
+QUBOPreprocessing.WalshDegree3 | definition | QUBOPreprocessing.deg3StarEnergy | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.CompositionRepair | theorem | QUBOPreprocessing.ReductionStep.global_min_value_eq | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.GaugeCoercive | theorem | QUBOPreprocessing.abs_neighbor_sum_le_couplingNorm1 | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.GaugeCoercive | theorem | QUBOPreprocessing.isingOffset._proof_1 | axioms: propext
+QUBOPreprocessing.WalshDegree3 | theorem | QUBOPreprocessing.deg3Star_elimination_is_reduction | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.GaugeCoercive | theorem | QUBOPreprocessing.qubo_upper_grad_eq_two_mul_ising_margin | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.CompositionRepair | definition | QUBOPreprocessing.eps2 | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.MaxCutTriangle | theorem | QUBOPreprocessing.maxcut_triangle_dominance_sound | axioms: propext, Classical.choice, Quot.sound
@@ -35,6 +37,7 @@ QUBOPreprocessing.GaugeCoercive | theorem | QUBOPreprocessing.abs_of_isSpin | ax
 QUBOPreprocessing.CompositionRepair | definition | QUBOPreprocessing.IsGlobalMin | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.GaugeCoercive | theorem | QUBOPreprocessing.coercive_pos_strictly_favors_neg_one | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.MaxCutTriangle | definition | QUBOPreprocessing.triEnergy | axioms: propext, Classical.choice, Quot.sound
+QUBOPreprocessing.WalshDegree3 | definition | QUBOPreprocessing.deg3Star_elimination_is_reduction.match_1_1 | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.CompressionAudit | theorem | QUBOPreprocessing.positive_quadratic_sparsification_subsumed_by_dominance | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.CompressionAudit | theorem | QUBOPreprocessing.negative_quadratic_lost_optimum_counterexample | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.WalshDegree3 | theorem | QUBOPreprocessing.deg3StarMin_cubic_zero_of_h0_zero | axioms: propext, Classical.choice, Quot.sound
@@ -61,11 +64,13 @@ QUBOPreprocessing.CompositionRepair | recursor | QUBOPreprocessing.ReductionStep
 QUBOPreprocessing.WalshDegree3 | theorem | QUBOPreprocessing.deg3StarMin_not_quad_representable_of_plateau_pos | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.MaxCutTriangle | theorem | QUBOPreprocessing.uncorrected_multicut_triangle_counterexample | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.CompressionAudit | theorem | QUBOPreprocessing.in_place_compression_nonconstant_shift | axioms: propext, Classical.choice, Quot.sound
+QUBOPreprocessing.WalshDegree3 | definition | QUBOPreprocessing.deg3StarOptSpin | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.CompositionRepair | theorem | QUBOPreprocessing.ReductionStep.maps_into | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.GaugeCoercive | theorem | QUBOPreprocessing.spinToBool_boolToSpin | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.GaugeCoercive | theorem | QUBOPreprocessing.boolToSpin_spinToBool | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.CompositionRepair | definition | QUBOPreprocessing.starTriPoly | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.WalshDegree3 | definition | QUBOPreprocessing.walshH2 | axioms: propext, Classical.choice, Quot.sound
+QUBOPreprocessing.WalshDegree3 | theorem | QUBOPreprocessing.deg3StarOptSpin_achieves | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.CompositionRepair | theorem | QUBOPreprocessing.ReductionStep.weak_dom | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.CompositionRepair | recursor | QUBOPreprocessing.StrongReductionStep.rec | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.WalshDegree3 | definition | QUBOPreprocessing.walshJ12 | axioms: propext, Classical.choice, Quot.sound
@@ -78,6 +83,7 @@ QUBOPreprocessing.CompositionRepair | definition | QUBOPreprocessing.eps1 | axio
 QUBOPreprocessing.CompositionRepair | definition | QUBOPreprocessing.starTriJ23 | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.WalshDegree3 | theorem | QUBOPreprocessing.walshQuadPoly_eq_of_cubic_zero | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.GaugeCoercive | theorem | QUBOPreprocessing.isSpin_boolToSpin_iff | axioms: propext, Classical.choice, Quot.sound
+QUBOPreprocessing.WalshDegree3 | definition | QUBOPreprocessing.spinSet | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.MaxCutTriangle | theorem | QUBOPreprocessing.gammaTriangle_zero_residual | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.WalshDegree3 | theorem | QUBOPreprocessing.deg3StarMin_eq_walshQuadPoly_of_cubic_zero | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.GaugeCoercive | theorem | QUBOPreprocessing.isingH_eq_erase | axioms: propext, Classical.choice, Quot.sound
@@ -87,14 +93,17 @@ QUBOPreprocessing.GaugeCoercive | definition | QUBOPreprocessing.boolToSpin | ax
 QUBOPreprocessing.GaugeCoercive | theorem | QUBOPreprocessing.couplingNorm1_gauge_invariant | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.MaxCutTriangle | definition | QUBOPreprocessing.gammaTriangle | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.CompositionRepair | inductive | QUBOPreprocessing.ReductionStep | axioms: propext, Classical.choice, Quot.sound
+QUBOPreprocessing.WalshDegree3 | theorem | QUBOPreprocessing.deg3Star_elimination_preserves_global_min | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.GaugeCoercive | theorem | QUBOPreprocessing.linear_term_spin_eq | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.WalshDegree3 | theorem | QUBOPreprocessing.walshConst._proof_1 | axioms: propext
+QUBOPreprocessing.WalshDegree3 | definition | QUBOPreprocessing.spinTripleSet | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.GaugeCoercive | theorem | QUBOPreprocessing.abs_gaugeJ_eq | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.CompositionRepair | definition | QUBOPreprocessing.starMin | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.CompressionAudit | theorem | QUBOPreprocessing.quadratic_endpoint_tie_counterexample | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.WalshDegree3 | theorem | QUBOPreprocessing.walshQuadPoly_eq_iff_cubic_zero | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.GaugeCoercive | theorem | QUBOPreprocessing.isBool_spinToBool_iff | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.WalshDegree3 | theorem | QUBOPreprocessing.deg3StarMin_cubic_zero_iff_of_additive_cone | axioms: propext, Classical.choice, Quot.sound
+QUBOPreprocessing.WalshDegree3 | definition | QUBOPreprocessing.deg3StarQuadReducedEnergy | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.WalshDegree3 | theorem | QUBOPreprocessing.walshQuadPoly_deg3StarMin_zero_eq_starTriPoly | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.MaxCutTriangle | theorem | QUBOPreprocessing.triEnergy_flip_ac | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.CompositionRepair | definition | QUBOPreprocessing.ReductionStep.recOn | axioms: propext, Classical.choice, Quot.sound
@@ -104,6 +113,7 @@ QUBOPreprocessing.GaugeCoercive | definition | QUBOPreprocessing.localField | ax
 QUBOPreprocessing.CompressionAudit | theorem | QUBOPreprocessing.endpoint_tie_counterexample | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.GaugeCoercive | theorem | QUBOPreprocessing.isingJ._proof_1 | axioms: propext
 QUBOPreprocessing.GaugeCoercive | theorem | QUBOPreprocessing.qubo_lower_grad_eq_two_mul_ising_margin | axioms: propext, Classical.choice, Quot.sound
+QUBOPreprocessing.WalshDegree3 | theorem | QUBOPreprocessing.deg3StarOptSpin_isSpin | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.MaxCutTriangle | theorem | QUBOPreprocessing.gammaTriangle_frustrated | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.GaugeCoercive | theorem | QUBOPreprocessing.isingEnergy_gauge_invariant | axioms: propext, Classical.choice, Quot.sound
 QUBOPreprocessing.CompositionRepair | inductive | QUBOPreprocessing.StrongReductionStep | axioms: propext, Classical.choice, Quot.sound

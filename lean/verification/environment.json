@@ -10565,11 +10565,11 @@
       "unsafe": false,
       "selection": {
         "start": {
-          "line": 68,
+          "line": 71,
           "column": 18
         },
         "end": {
-          "line": 68,
+          "line": 71,
           "column": 25
         }
       },
@@ -10597,11 +10597,11 @@
       ],
       "range": {
         "start": {
-          "line": 67,
+          "line": 70,
           "column": 0
         },
         "end": {
-          "line": 70,
+          "line": 73,
           "column": 69
         }
       },
@@ -11000,11 +11000,11 @@
       "unsafe": false,
       "selection": {
         "start": {
-          "line": 385,
+          "line": 474,
           "column": 8
         },
         "end": {
-          "line": 385,
+          "line": 474,
           "column": 45
         }
       },
@@ -11205,11 +11205,11 @@
       ],
       "range": {
         "start": {
-          "line": 382,
+          "line": 471,
           "column": 0
         },
         "end": {
-          "line": 420,
+          "line": 509,
           "column": 28
         }
       },
@@ -11576,6 +11576,56 @@
       "unsafe": false,
       "selection": {
         "start": {
+          "line": 210,
+          "column": 4
+        },
+        "end": {
+          "line": 210,
+          "column": 18
+        }
+      },
+      "references": [
+        "Real",
+        "Prod",
+        "Real",
+        "Prod",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "Prod.fst",
+        "HMul.hMul",
+        "instHMul",
+        "Real.instMul",
+        "Prod.snd"
+      ],
+      "range": {
+        "start": {
+          "line": 208,
+          "column": 0
+        },
+        "end": {
+          "line": 212,
+          "column": 68
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.deg3StarEnergy",
+      "module": "QUBOPreprocessing.WalshDegree3",
+      "kind": "definition",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
           "line": 79,
           "column": 8
         },
@@ -11884,6 +11934,205 @@
       "extern": false,
       "axioms": [
         "propext"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 250,
+          "column": 8
+        },
+        "end": {
+          "line": 250,
+          "column": 41
+        }
+      },
+      "references": [
+        "Real",
+        "Prod",
+        "Eq",
+        "QUBOPreprocessing.walshCubic",
+        "QUBOPreprocessing.deg3StarMin",
+        "OfNat.ofNat",
+        "Zero.toOfNat0",
+        "Real.instZero",
+        "QUBOPreprocessing.ReductionStep",
+        "SProd.sprod",
+        "Set",
+        "Set.instSProd",
+        "QUBOPreprocessing.spinTripleSet",
+        "QUBOPreprocessing.spinSet",
+        "QUBOPreprocessing.deg3StarEnergy",
+        "QUBOPreprocessing.deg3StarQuadReducedEnergy",
+        "QUBOPreprocessing.reconstruct",
+        "QUBOPreprocessing.deg3StarOptSpin",
+        "Real",
+        "Prod",
+        "Eq",
+        "QUBOPreprocessing.walshCubic",
+        "QUBOPreprocessing.deg3StarMin",
+        "OfNat.ofNat",
+        "Zero.toOfNat0",
+        "Real.instZero",
+        "QUBOPreprocessing.ReductionStep.mk",
+        "SProd.sprod",
+        "Set",
+        "Set.instSProd",
+        "QUBOPreprocessing.spinTripleSet",
+        "QUBOPreprocessing.spinSet",
+        "QUBOPreprocessing.deg3StarEnergy",
+        "QUBOPreprocessing.deg3StarQuadReducedEnergy",
+        "QUBOPreprocessing.reconstruct",
+        "QUBOPreprocessing.deg3StarOptSpin",
+        "Membership.mem",
+        "Set.instMembership",
+        "And.intro",
+        "Prod.fst",
+        "Prod.snd",
+        "QUBOPreprocessing.deg3StarOptSpin_isSpin",
+        "And.casesOn",
+        "QUBOPreprocessing.isSpin",
+        "And",
+        "id",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "HMul.hMul",
+        "instHMul",
+        "Real.instMul",
+        "QUBOPreprocessing.walshQuadPoly",
+        "Prod.mk",
+        "Eq.mpr",
+        "congrArg",
+        "QUBOPreprocessing.deg3StarOptSpin_achieves",
+        "QUBOPreprocessing.deg3StarMin_eq_walshQuadPoly_of_cubic_zero",
+        "Eq.refl",
+        "QUBOPreprocessing.deg3Star_elimination_is_reduction.match_1_1",
+        "Exists",
+        "LE.le",
+        "Real.instLE",
+        "Exists.intro",
+        "QUBOPreprocessing.deg3StarMin_le",
+        "le_of_not_gt",
+        "Real.linearOrder",
+        "LT.lt",
+        "Preorder.toLT",
+        "PartialOrder.toPreorder",
+        "LinearOrder.toPartialOrder",
+        "Mathlib.Tactic.Linarith.lt_irrefl",
+        "Real.instPreorder",
+        "Eq.mp",
+        "Real.partialOrder",
+        "AddSemigroup.toAdd",
+        "AddMonoid.toAddSemigroup",
+        "Real.instAddMonoid",
+        "HSub.hSub",
+        "instHSub",
+        "SubNegMonoid.toSub",
+        "AddGroup.toSubNegMonoid",
+        "AddGroupWithOne.toAddGroup",
+        "Ring.toAddGroupWithOne",
+        "Real.instRing",
+        "MulZeroClass.toZero",
+        "instMulZeroClassOfSemiring",
+        "Ring.toSemiring",
+        "Mathlib.Tactic.Ring.of_eq",
+        "CommSemiring.toSemiring",
+        "Real.instCommSemiring",
+        "Mathlib.Tactic.Ring.Common.add_congr",
+        "Distrib.toAdd",
+        "instDistribOfSemiring",
+        "Distrib.toMul",
+        "HPow.hPow",
+        "Nat",
+        "instHPow",
+        "NPow.toPow",
+        "Monoid.toNPow",
+        "Semiring.toMonoid",
+        "Nat.rawCast",
+        "AddCommMonoidWithOne.toAddMonoidWithOne",
+        "NonAssocSemiring.toAddCommMonoidWithOne",
+        "Semiring.toNonAssocSemiring",
+        "Nat.instCommSemiring",
+        "Int.rawCast",
+        "inferInstance",
+        "Ring",
+        "CommRing.toRing",
+        "Real.commRing",
+        "Int.negOfNat",
+        "Mathlib.Tactic.Ring.Common.sub_congr",
+        "Mathlib.Tactic.Ring.Common.atom_pf",
+        "rfl",
+        "Eq.symm",
+        "Mathlib.Tactic.Ring.Common.mul_congr",
+        "Mathlib.Tactic.Ring.Common.add_mul",
+        "Mathlib.Tactic.Ring.Common.mul_add",
+        "Mathlib.Tactic.Ring.Common.mul_pf_left",
+        "Mathlib.Tactic.Ring.Common.mul_pf_right",
+        "Mathlib.Meta.NormNum.IsNat.to_raw_eq",
+        "Mathlib.Meta.NormNum.isNat_mul",
+        "Mathlib.Meta.NormNum.IsNat.of_raw",
+        "Mathlib.Tactic.Ring.Common.mul_zero",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_zero",
+        "Mathlib.Tactic.Ring.Common.zero_mul",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_lt",
+        "Mathlib.Tactic.Ring.Common.add_pf_zero_add",
+        "Mathlib.Tactic.Ring.Common.sub_pf",
+        "Mathlib.Tactic.Ring.Common.neg_add",
+        "Mathlib.Tactic.Ring.Common.neg_mul",
+        "Mathlib.Meta.NormNum.IsInt.to_raw_eq",
+        "Neg.neg",
+        "NegZeroClass.toNeg",
+        "SubNegZeroMonoid.toNegZeroClass",
+        "SubtractionMonoid.toSubNegZeroMonoid",
+        "SubtractionCommMonoid.toSubtractionMonoid",
+        "AddCommGroup.toDivisionAddCommMonoid",
+        "Ring.toAddCommGroup",
+        "Mathlib.Meta.NormNum.isInt_neg",
+        "Int.ofNat",
+        "Mathlib.Meta.NormNum.IsNat.to_isInt",
+        "Int",
+        "Mathlib.Tactic.Ring.Common.neg_zero",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_gt",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_overlap_zero",
+        "Mathlib.Tactic.Ring.Common.add_overlap_pf_zero",
+        "Mathlib.Meta.NormNum.IsInt.to_isNat",
+        "Mathlib.Meta.NormNum.isInt_add",
+        "Mathlib.Meta.NormNum.IsInt.of_raw",
+        "Mathlib.Tactic.Ring.cast_zero",
+        "Mathlib.Meta.NormNum.isNat_ofNat",
+        "AddGroupWithOne.toAddMonoidWithOne",
+        "Nat.cast_zero",
+        "Mathlib.Tactic.Linarith.add_lt_of_le_of_neg",
+        "Real.semiring",
+        "Real.instIsStrictOrderedRing",
+        "Mathlib.Tactic.Linarith.sub_nonpos_of_le",
+        "Real.instIsOrderedRing",
+        "Mathlib.Tactic.Linarith.sub_neg_of_lt"
+      ],
+      "range": {
+        "start": {
+          "line": 244,
+          "column": 0
+        },
+        "end": {
+          "line": 270,
+          "column": 12
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.deg3Star_elimination_is_reduction",
+      "module": "QUBOPreprocessing.WalshDegree3",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
       ]
     },
     {
@@ -12394,11 +12643,11 @@
       "unsafe": false,
       "selection": {
         "start": {
-          "line": 305,
+          "line": 394,
           "column": 8
         },
         "end": {
-          "line": 305,
+          "line": 394,
           "column": 45
         }
       },
@@ -12599,11 +12848,11 @@
       ],
       "range": {
         "start": {
-          "line": 301,
+          "line": 390,
           "column": 0
         },
         "end": {
-          "line": 340,
+          "line": 429,
           "column": 28
         }
       },
@@ -12683,11 +12932,11 @@
       "unsafe": false,
       "selection": {
         "start": {
-          "line": 224,
+          "line": 313,
           "column": 8
         },
         "end": {
-          "line": 224,
+          "line": 313,
           "column": 48
         }
       },
@@ -12883,11 +13132,11 @@
       ],
       "range": {
         "start": {
-          "line": 221,
+          "line": 310,
           "column": 0
         },
         "end": {
-          "line": 258,
+          "line": 347,
           "column": 8
         }
       },
@@ -14014,11 +14263,11 @@
       "unsafe": false,
       "selection": {
         "start": {
-          "line": 158,
+          "line": 161,
           "column": 8
         },
         "end": {
-          "line": 158,
+          "line": 161,
           "column": 22
         }
       },
@@ -14170,11 +14419,11 @@
       ],
       "range": {
         "start": {
-          "line": 156,
+          "line": 159,
           "column": 0
         },
         "end": {
-          "line": 165,
+          "line": 168,
           "column": 12
         }
       },
@@ -14595,6 +14844,58 @@
     },
     {
       "unsafe": false,
+      "selection": null,
+      "references": [
+        "Prod",
+        "Real",
+        "Membership.mem",
+        "Set",
+        "Set.instMembership",
+        "SProd.sprod",
+        "Set.instSProd",
+        "QUBOPreprocessing.spinTripleSet",
+        "QUBOPreprocessing.spinSet",
+        "QUBOPreprocessing.isSpin",
+        "Prod.fst",
+        "Prod.mk",
+        "Prod.snd",
+        "And.intro",
+        "And",
+        "Prod",
+        "Real",
+        "Membership.mem",
+        "Set",
+        "Set.instMembership",
+        "SProd.sprod",
+        "Set.instSProd",
+        "QUBOPreprocessing.spinTripleSet",
+        "QUBOPreprocessing.spinSet",
+        "QUBOPreprocessing.isSpin",
+        "Prod.fst",
+        "Prod.mk",
+        "Prod.snd",
+        "And.intro",
+        "And",
+        "Prod.casesOn",
+        "And.casesOn"
+      ],
+      "range": null,
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.deg3Star_elimination_is_reduction.match_1_1",
+      "module": "QUBOPreprocessing.WalshDegree3",
+      "kind": "definition",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
       "selection": {
         "start": {
           "line": 140,
@@ -14997,11 +15298,11 @@
       "unsafe": false,
       "selection": {
         "start": {
-          "line": 203,
+          "line": 292,
           "column": 8
         },
         "end": {
-          "line": 203,
+          "line": 292,
           "column": 41
         }
       },
@@ -15197,11 +15498,11 @@
       ],
       "range": {
         "start": {
-          "line": 201,
+          "line": 290,
           "column": 0
         },
         "end": {
-          "line": 208,
+          "line": 297,
           "column": 10
         }
       },
@@ -15223,11 +15524,11 @@
       "unsafe": false,
       "selection": {
         "start": {
-          "line": 345,
+          "line": 434,
           "column": 8
         },
         "end": {
-          "line": 345,
+          "line": 434,
           "column": 45
         }
       },
@@ -15428,11 +15729,11 @@
       ],
       "range": {
         "start": {
-          "line": 342,
+          "line": 431,
           "column": 0
         },
         "end": {
-          "line": 380,
+          "line": 469,
           "column": 28
         }
       },
@@ -15803,11 +16104,11 @@
       "unsafe": false,
       "selection": {
         "start": {
-          "line": 431,
+          "line": 520,
           "column": 8
         },
         "end": {
-          "line": 431,
+          "line": 520,
           "column": 42
         }
       },
@@ -16034,11 +16335,11 @@
       ],
       "range": {
         "start": {
-          "line": 426,
+          "line": 515,
           "column": 0
         },
         "end": {
-          "line": 447,
+          "line": 536,
           "column": 6
         }
       },
@@ -16060,11 +16361,11 @@
       "unsafe": false,
       "selection": {
         "start": {
-          "line": 88,
+          "line": 91,
           "column": 18
         },
         "end": {
-          "line": 88,
+          "line": 91,
           "column": 28
         }
       },
@@ -16092,11 +16393,11 @@
       ],
       "range": {
         "start": {
-          "line": 87,
+          "line": 90,
           "column": 0
         },
         "end": {
-          "line": 90,
+          "line": 93,
           "column": 69
         }
       },
@@ -16532,11 +16833,11 @@
       "unsafe": false,
       "selection": {
         "start": {
-          "line": 53,
+          "line": 56,
           "column": 18
         },
         "end": {
-          "line": 53,
+          "line": 56,
           "column": 28
         }
       },
@@ -16561,11 +16862,11 @@
       ],
       "range": {
         "start": {
-          "line": 52,
+          "line": 55,
           "column": 0
         },
         "end": {
-          "line": 55,
+          "line": 58,
           "column": 69
         }
       },
@@ -16587,11 +16888,11 @@
       "unsafe": false,
       "selection": {
         "start": {
-          "line": 94,
+          "line": 97,
           "column": 18
         },
         "end": {
-          "line": 94,
+          "line": 97,
           "column": 31
         }
       },
@@ -16614,11 +16915,11 @@
       ],
       "range": {
         "start": {
-          "line": 92,
+          "line": 95,
           "column": 0
         },
         "end": {
-          "line": 97,
+          "line": 100,
           "column": 70
         }
       },
@@ -17173,11 +17474,11 @@
       "unsafe": false,
       "selection": {
         "start": {
-          "line": 78,
+          "line": 81,
           "column": 18
         },
         "end": {
-          "line": 78,
+          "line": 81,
           "column": 26
         }
       },
@@ -17205,11 +17506,11 @@
       ],
       "range": {
         "start": {
-          "line": 77,
+          "line": 80,
           "column": 0
         },
         "end": {
-          "line": 80,
+          "line": 83,
           "column": 69
         }
       },
@@ -17377,11 +17678,11 @@
       "unsafe": false,
       "selection": {
         "start": {
-          "line": 503,
+          "line": 592,
           "column": 8
         },
         "end": {
-          "line": 503,
+          "line": 592,
           "column": 57
         }
       },
@@ -17580,11 +17881,11 @@
       ],
       "range": {
         "start": {
-          "line": 499,
+          "line": 588,
           "column": 0
         },
         "end": {
-          "line": 510,
+          "line": 599,
           "column": 10
         }
       },
@@ -18014,6 +18315,67 @@
       "name": "QUBOPreprocessing.in_place_compression_nonconstant_shift",
       "module": "QUBOPreprocessing.CompressionAudit",
       "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 221,
+          "column": 18
+        },
+        "end": {
+          "line": 221,
+          "column": 33
+        }
+      },
+      "references": [
+        "Real",
+        "Prod",
+        "Real",
+        "Prod",
+        "ite",
+        "LE.le",
+        "Real.instLE",
+        "OfNat.ofNat",
+        "Zero.toOfNat0",
+        "Real.instZero",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "HMul.hMul",
+        "instHMul",
+        "Real.instMul",
+        "Prod.fst",
+        "Prod.snd",
+        "Real.decidableLE",
+        "Neg.neg",
+        "Real.instNeg",
+        "One.toOfNat1",
+        "Real.instOne"
+      ],
+      "range": {
+        "start": {
+          "line": 220,
+          "column": 0
+        },
+        "end": {
+          "line": 222,
+          "column": 63
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.deg3StarOptSpin",
+      "module": "QUBOPreprocessing.WalshDegree3",
+      "kind": "definition",
       "internal": false,
       "implemented_by": null,
       "extern": false,
@@ -18460,11 +18822,11 @@
       "unsafe": false,
       "selection": {
         "start": {
-          "line": 63,
+          "line": 66,
           "column": 18
         },
         "end": {
-          "line": 63,
+          "line": 66,
           "column": 25
         }
       },
@@ -18492,11 +18854,11 @@
       ],
       "range": {
         "start": {
-          "line": 62,
+          "line": 65,
           "column": 0
         },
         "end": {
-          "line": 65,
+          "line": 68,
           "column": 69
         }
       },
@@ -18505,6 +18867,198 @@
       "name": "QUBOPreprocessing.walshH2",
       "module": "QUBOPreprocessing.WalshDegree3",
       "kind": "definition",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 233,
+          "column": 8
+        },
+        "end": {
+          "line": 233,
+          "column": 32
+        }
+      },
+      "references": [
+        "Real",
+        "Prod",
+        "Eq",
+        "HMul.hMul",
+        "instHMul",
+        "Real.instMul",
+        "QUBOPreprocessing.deg3StarOptSpin",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "Prod.fst",
+        "Prod.snd",
+        "QUBOPreprocessing.deg3StarMin",
+        "Real",
+        "Prod",
+        "id",
+        "Eq",
+        "HMul.hMul",
+        "instHMul",
+        "Real.instMul",
+        "QUBOPreprocessing.deg3StarOptSpin",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "Prod.fst",
+        "Prod.snd",
+        "QUBOPreprocessing.deg3StarMin",
+        "ite",
+        "LE.le",
+        "Real.instLE",
+        "OfNat.ofNat",
+        "Zero.toOfNat0",
+        "Real.instZero",
+        "Real.decidableLE",
+        "Neg.neg",
+        "Real.instNeg",
+        "One.toOfNat1",
+        "Real.instOne",
+        "dite",
+        "abs",
+        "Real.lattice",
+        "Real.instAddGroup",
+        "Eq.mpr",
+        "congrFun'",
+        "congrArg",
+        "if_pos",
+        "abs_of_nonneg",
+        "IsOrderedAddMonoid.toAddLeftMono",
+        "Real.instAddCommMonoid",
+        "Real.instPreorder",
+        "Real.instIsOrderedAddMonoid",
+        "Mathlib.Tactic.Ring.of_eq",
+        "Distrib.toAdd",
+        "instDistribOfSemiring",
+        "CommSemiring.toSemiring",
+        "Real.instCommSemiring",
+        "Distrib.toMul",
+        "HPow.hPow",
+        "Nat",
+        "instHPow",
+        "NPow.toPow",
+        "Monoid.toNPow",
+        "Semiring.toMonoid",
+        "Nat.rawCast",
+        "AddCommMonoidWithOne.toAddMonoidWithOne",
+        "NonAssocSemiring.toAddCommMonoidWithOne",
+        "Semiring.toNonAssocSemiring",
+        "Nat.instCommSemiring",
+        "Int.rawCast",
+        "inferInstance",
+        "Ring",
+        "CommRing.toRing",
+        "Real.commRing",
+        "Int.negOfNat",
+        "MulZeroClass.toZero",
+        "instMulZeroClassOfSemiring",
+        "Mathlib.Tactic.Ring.Common.mul_congr",
+        "Mathlib.Tactic.Ring.Common.neg_congr",
+        "Mathlib.Tactic.Ring.cast_pos",
+        "Mathlib.Meta.NormNum.isNat_ofNat",
+        "AddGroupWithOne.toAddMonoidWithOne",
+        "Ring.toAddGroupWithOne",
+        "Real.instRing",
+        "Nat.cast_one",
+        "Mathlib.Tactic.Ring.Common.neg_add",
+        "Mathlib.Meta.NormNum.IsInt.to_raw_eq",
+        "NegZeroClass.toNeg",
+        "SubNegZeroMonoid.toNegZeroClass",
+        "SubtractionMonoid.toSubNegZeroMonoid",
+        "SubtractionCommMonoid.toSubtractionMonoid",
+        "AddCommGroup.toDivisionAddCommMonoid",
+        "Ring.toAddCommGroup",
+        "Mathlib.Meta.NormNum.isInt_neg",
+        "Int.ofNat",
+        "Eq.refl",
+        "Mathlib.Meta.NormNum.IsNat.to_isInt",
+        "Mathlib.Meta.NormNum.IsNat.of_raw",
+        "Int",
+        "Mathlib.Tactic.Ring.Common.neg_zero",
+        "Mathlib.Tactic.Ring.Common.add_congr",
+        "Mathlib.Tactic.Ring.Common.atom_pf",
+        "rfl",
+        "Eq.symm",
+        "Mathlib.Tactic.Ring.Common.add_mul",
+        "Mathlib.Tactic.Ring.Common.mul_add",
+        "Mathlib.Tactic.Ring.Common.mul_pf_left",
+        "Mathlib.Tactic.Ring.Common.mul_pf_right",
+        "Mathlib.Meta.NormNum.IsNat.to_raw_eq",
+        "Mathlib.Meta.NormNum.isNat_mul",
+        "Mathlib.Tactic.Ring.Common.mul_zero",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_zero",
+        "Mathlib.Tactic.Ring.Common.zero_mul",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_lt",
+        "Mathlib.Tactic.Ring.Common.add_pf_zero_add",
+        "Mathlib.Meta.NormNum.isInt_mul",
+        "Ring.toSemiring",
+        "Mathlib.Meta.NormNum.IsInt.of_raw",
+        "Mathlib.Tactic.Ring.Common.neg_mul",
+        "Not",
+        "if_neg",
+        "le_of_not_gt",
+        "Real.linearOrder",
+        "LT.lt",
+        "Preorder.toLT",
+        "PartialOrder.toPreorder",
+        "LinearOrder.toPartialOrder",
+        "Mathlib.Tactic.Linarith.lt_irrefl",
+        "Eq.mp",
+        "Real.partialOrder",
+        "AddSemigroup.toAdd",
+        "AddMonoid.toAddSemigroup",
+        "Real.instAddMonoid",
+        "HSub.hSub",
+        "instHSub",
+        "SubNegMonoid.toSub",
+        "AddGroup.toSubNegMonoid",
+        "AddGroupWithOne.toAddGroup",
+        "Real.semiring",
+        "Mathlib.Tactic.Ring.Common.sub_congr",
+        "Mathlib.Tactic.Ring.cast_zero",
+        "Nat.cast_zero",
+        "Mathlib.Tactic.Ring.Common.sub_pf",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_overlap_zero",
+        "Mathlib.Tactic.Ring.Common.add_overlap_pf_zero",
+        "Mathlib.Meta.NormNum.IsInt.to_isNat",
+        "Mathlib.Meta.NormNum.isInt_add",
+        "Mathlib.Tactic.Linarith.add_neg",
+        "Real.instIsStrictOrderedRing",
+        "Mathlib.Tactic.Linarith.sub_neg_of_lt",
+        "Real.instIsOrderedRing",
+        "lt_of_not_ge",
+        "AddGroup.toSubtractionMonoid",
+        "abs_of_nonpos",
+        "Mathlib.Meta.NormNum.instAddMonoidWithOne"
+      ],
+      "range": {
+        "start": {
+          "line": 232,
+          "column": 0
+        },
+        "end": {
+          "line": 242,
+          "column": 8
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.deg3StarOptSpin_achieves",
+      "module": "QUBOPreprocessing.WalshDegree3",
+      "kind": "theorem",
       "internal": false,
       "implemented_by": null,
       "extern": false,
@@ -18615,11 +19169,11 @@
       "unsafe": false,
       "selection": {
         "start": {
-          "line": 73,
+          "line": 76,
           "column": 18
         },
         "end": {
-          "line": 73,
+          "line": 76,
           "column": 26
         }
       },
@@ -18647,11 +19201,11 @@
       ],
       "range": {
         "start": {
-          "line": 72,
+          "line": 75,
           "column": 0
         },
         "end": {
-          "line": 75,
+          "line": 78,
           "column": 69
         }
       },
@@ -18898,11 +19452,11 @@
       "unsafe": false,
       "selection": {
         "start": {
-          "line": 191,
+          "line": 194,
           "column": 8
         },
         "end": {
-          "line": 191,
+          "line": 194,
           "column": 51
         }
       },
@@ -18923,11 +19477,11 @@
       ],
       "range": {
         "start": {
-          "line": 189,
+          "line": 192,
           "column": 0
         },
         "end": {
-          "line": 195,
+          "line": 198,
           "column": 59
         }
       },
@@ -19055,11 +19609,11 @@
       "unsafe": false,
       "selection": {
         "start": {
-          "line": 111,
+          "line": 114,
           "column": 8
         },
         "end": {
-          "line": 111,
+          "line": 114,
           "column": 38
         }
       },
@@ -19193,11 +19747,11 @@
       ],
       "range": {
         "start": {
-          "line": 109,
+          "line": 112,
           "column": 0
         },
         "end": {
-          "line": 117,
+          "line": 120,
           "column": 10
         }
       },
@@ -19417,6 +19971,49 @@
       "unsafe": false,
       "selection": {
         "start": {
+          "line": 205,
+          "column": 4
+        },
+        "end": {
+          "line": 205,
+          "column": 11
+        }
+      },
+      "references": [
+        "Set",
+        "Real",
+        "Set.ofPred",
+        "Real",
+        "QUBOPreprocessing.isSpin"
+      ],
+      "range": {
+        "start": {
+          "line": 204,
+          "column": 0
+        },
+        "end": {
+          "line": 206,
+          "column": 18
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.spinSet",
+      "module": "QUBOPreprocessing.WalshDegree3",
+      "kind": "definition",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
           "line": 133,
           "column": 8
         },
@@ -19605,11 +20202,11 @@
       "unsafe": false,
       "selection": {
         "start": {
-          "line": 183,
+          "line": 186,
           "column": 8
         },
         "end": {
-          "line": 183,
+          "line": 186,
           "column": 50
         }
       },
@@ -19635,11 +20232,11 @@
       ],
       "range": {
         "start": {
-          "line": 181,
+          "line": 184,
           "column": 0
         },
         "end": {
-          "line": 187,
+          "line": 190,
           "column": 86
         }
       },
@@ -19824,11 +20421,11 @@
       "unsafe": false,
       "selection": {
         "start": {
-          "line": 482,
+          "line": 571,
           "column": 8
         },
         "end": {
-          "line": 482,
+          "line": 571,
           "column": 45
         }
       },
@@ -20048,11 +20645,11 @@
       ],
       "range": {
         "start": {
-          "line": 479,
+          "line": 568,
           "column": 0
         },
         "end": {
-          "line": 497,
+          "line": 586,
           "column": 6
         }
       },
@@ -20533,6 +21130,83 @@
       "unsafe": false,
       "selection": {
         "start": {
+          "line": 275,
+          "column": 8
+        },
+        "end": {
+          "line": 275,
+          "column": 49
+        }
+      },
+      "references": [
+        "Real",
+        "Prod",
+        "Eq",
+        "QUBOPreprocessing.walshCubic",
+        "QUBOPreprocessing.deg3StarMin",
+        "OfNat.ofNat",
+        "Zero.toOfNat0",
+        "Real.instZero",
+        "QUBOPreprocessing.IsGlobalMin",
+        "QUBOPreprocessing.spinTripleSet",
+        "QUBOPreprocessing.deg3StarQuadReducedEnergy",
+        "And",
+        "SProd.sprod",
+        "Set",
+        "Set.instSProd",
+        "QUBOPreprocessing.spinSet",
+        "QUBOPreprocessing.deg3StarEnergy",
+        "QUBOPreprocessing.reconstruct",
+        "QUBOPreprocessing.deg3StarOptSpin",
+        "Real",
+        "Prod",
+        "Eq",
+        "QUBOPreprocessing.walshCubic",
+        "QUBOPreprocessing.deg3StarMin",
+        "OfNat.ofNat",
+        "Zero.toOfNat0",
+        "Real.instZero",
+        "QUBOPreprocessing.IsGlobalMin",
+        "QUBOPreprocessing.spinTripleSet",
+        "QUBOPreprocessing.deg3StarQuadReducedEnergy",
+        "QUBOPreprocessing.ReductionStep.preserves_global_min",
+        "SProd.sprod",
+        "Set",
+        "Set.instSProd",
+        "QUBOPreprocessing.spinSet",
+        "QUBOPreprocessing.deg3StarEnergy",
+        "QUBOPreprocessing.reconstruct",
+        "QUBOPreprocessing.deg3StarOptSpin",
+        "QUBOPreprocessing.deg3Star_elimination_is_reduction"
+      ],
+      "range": {
+        "start": {
+          "line": 272,
+          "column": 0
+        },
+        "end": {
+          "line": 284,
+          "column": 87
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.deg3Star_elimination_preserves_global_min",
+      "module": "QUBOPreprocessing.WalshDegree3",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
           "line": 93,
           "column": 8
         },
@@ -20712,6 +21386,54 @@
       "extern": false,
       "axioms": [
         "propext"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 201,
+          "column": 4
+        },
+        "end": {
+          "line": 201,
+          "column": 17
+        }
+      },
+      "references": [
+        "Set",
+        "Prod",
+        "Real",
+        "Set.ofPred",
+        "Prod",
+        "Real",
+        "And",
+        "QUBOPreprocessing.isSpin",
+        "Prod.fst",
+        "Prod.snd"
+      ],
+      "range": {
+        "start": {
+          "line": 200,
+          "column": 0
+        },
+        "end": {
+          "line": 202,
+          "column": 48
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.spinTripleSet",
+      "module": "QUBOPreprocessing.WalshDegree3",
+      "kind": "definition",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
       ]
     },
     {
@@ -20987,11 +21709,11 @@
       "unsafe": false,
       "selection": {
         "start": {
-          "line": 132,
+          "line": 135,
           "column": 8
         },
         "end": {
-          "line": 132,
+          "line": 135,
           "column": 39
         }
       },
@@ -21019,11 +21741,11 @@
       ],
       "range": {
         "start": {
-          "line": 129,
+          "line": 132,
           "column": 0
         },
         "end": {
-          "line": 138,
+          "line": 141,
           "column": 70
         }
       },
@@ -21277,11 +21999,11 @@
       "unsafe": false,
       "selection": {
         "start": {
-          "line": 451,
+          "line": 540,
           "column": 8
         },
         "end": {
-          "line": 451,
+          "line": 540,
           "column": 51
         }
       },
@@ -21487,11 +22209,11 @@
       ],
       "range": {
         "start": {
-          "line": 449,
+          "line": 538,
           "column": 0
         },
         "end": {
-          "line": 457,
+          "line": 546,
           "column": 38
         }
       },
@@ -21513,11 +22235,60 @@
       "unsafe": false,
       "selection": {
         "start": {
-          "line": 213,
+          "line": 216,
+          "column": 18
+        },
+        "end": {
+          "line": 216,
+          "column": 43
+        }
+      },
+      "references": [
+        "Real",
+        "Prod",
+        "Real",
+        "Prod",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "QUBOPreprocessing.walshQuadPoly",
+        "QUBOPreprocessing.deg3StarMin",
+        "Prod.fst",
+        "Prod.snd"
+      ],
+      "range": {
+        "start": {
+          "line": 214,
+          "column": 0
+        },
+        "end": {
+          "line": 218,
+          "column": 68
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.deg3StarQuadReducedEnergy",
+      "module": "QUBOPreprocessing.WalshDegree3",
+      "kind": "definition",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 302,
           "column": 8
         },
         "end": {
-          "line": 213,
+          "line": 302,
           "column": 53
         }
       },
@@ -21552,11 +22323,11 @@
       ],
       "range": {
         "start": {
-          "line": 210,
+          "line": 299,
           "column": 0
         },
         "end": {
-          "line": 219,
+          "line": 308,
           "column": 59
         }
       },
@@ -22437,6 +23208,85 @@
       "unsafe": false,
       "selection": {
         "start": {
+          "line": 225,
+          "column": 8
+        },
+        "end": {
+          "line": 225,
+          "column": 30
+        }
+      },
+      "references": [
+        "Real",
+        "Prod",
+        "QUBOPreprocessing.isSpin",
+        "QUBOPreprocessing.deg3StarOptSpin",
+        "Real",
+        "Prod",
+        "id",
+        "QUBOPreprocessing.isSpin",
+        "QUBOPreprocessing.deg3StarOptSpin",
+        "ite",
+        "LE.le",
+        "Real.instLE",
+        "OfNat.ofNat",
+        "Zero.toOfNat0",
+        "Real.instZero",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "HMul.hMul",
+        "instHMul",
+        "Real.instMul",
+        "Prod.fst",
+        "Prod.snd",
+        "Real.decidableLE",
+        "Neg.neg",
+        "Real.instNeg",
+        "One.toOfNat1",
+        "Real.instOne",
+        "dite",
+        "Or",
+        "Eq",
+        "Eq.mpr",
+        "congr",
+        "congrArg",
+        "congrFun'",
+        "if_pos",
+        "Or.inl",
+        "rfl",
+        "Not",
+        "if_neg",
+        "Or.inr"
+      ],
+      "range": {
+        "start": {
+          "line": 224,
+          "column": 0
+        },
+        "end": {
+          "line": 230,
+          "column": 20
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.deg3StarOptSpin_isSpin",
+      "module": "QUBOPreprocessing.WalshDegree3",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
           "line": 112,
           "column": 8
         },
@@ -22847,11 +23697,11 @@
       "unsafe": false,
       "selection": {
         "start": {
-          "line": 169,
+          "line": 172,
           "column": 8
         },
         "end": {
-          "line": 169,
+          "line": 172,
           "column": 28
         }
       },
@@ -22984,11 +23834,11 @@
       ],
       "range": {
         "start": {
-          "line": 167,
+          "line": 170,
           "column": 0
         },
         "end": {
-          "line": 179,
+          "line": 182,
           "column": 8
         }
       },
@@ -23159,11 +24009,11 @@
       "unsafe": false,
       "selection": {
         "start": {
-          "line": 83,
+          "line": 86,
           "column": 18
         },
         "end": {
-          "line": 83,
+          "line": 86,
           "column": 26
         }
       },
@@ -23191,11 +24041,11 @@
       ],
       "range": {
         "start": {
-          "line": 82,
+          "line": 85,
           "column": 0
         },
         "end": {
-          "line": 85,
+          "line": 88,
           "column": 69
         }
       },
@@ -23484,11 +24334,11 @@
       "unsafe": false,
       "selection": {
         "start": {
-          "line": 121,
+          "line": 124,
           "column": 8
         },
         "end": {
-          "line": 121,
+          "line": 124,
           "column": 43
         }
       },
@@ -23633,11 +24483,11 @@
       ],
       "range": {
         "start": {
-          "line": 119,
+          "line": 122,
           "column": 0
         },
         "end": {
-          "line": 127,
+          "line": 130,
           "column": 10
         }
       },
@@ -23799,11 +24649,11 @@
       "unsafe": false,
       "selection": {
         "start": {
-          "line": 58,
+          "line": 61,
           "column": 18
         },
         "end": {
-          "line": 58,
+          "line": 61,
           "column": 25
         }
       },
@@ -23831,11 +24681,11 @@
       ],
       "range": {
         "start": {
-          "line": 57,
+          "line": 60,
           "column": 0
         },
         "end": {
-          "line": 60,
+          "line": 63,
           "column": 69
         }
       },
@@ -23914,11 +24764,11 @@
       "unsafe": false,
       "selection": {
         "start": {
-          "line": 263,
+          "line": 352,
           "column": 8
         },
         "end": {
-          "line": 263,
+          "line": 352,
           "column": 57
         }
       },
@@ -24121,11 +24971,11 @@
       ],
       "range": {
         "start": {
-          "line": 260,
+          "line": 349,
           "column": 0
         },
         "end": {
-          "line": 299,
+          "line": 388,
           "column": 38
         }
       },
@@ -24147,11 +24997,11 @@
       "unsafe": false,
       "selection": {
         "start": {
-          "line": 103,
+          "line": 106,
           "column": 8
         },
         "end": {
-          "line": 103,
+          "line": 106,
           "column": 34
         }
       },
@@ -24327,11 +25177,11 @@
       ],
       "range": {
         "start": {
-          "line": 99,
+          "line": 102,
           "column": 0
         },
         "end": {
-          "line": 107,
+          "line": 110,
           "column": 96
         }
       },
@@ -25240,11 +26090,11 @@
       "unsafe": false,
       "selection": {
         "start": {
-          "line": 147,
+          "line": 150,
           "column": 18
         },
         "end": {
-          "line": 147,
+          "line": 150,
           "column": 29
         }
       },
@@ -25265,11 +26115,11 @@
       ],
       "range": {
         "start": {
-          "line": 144,
+          "line": 147,
           "column": 0
         },
         "end": {
-          "line": 148,
+          "line": 151,
           "column": 37
         }
       },
@@ -25334,11 +26184,11 @@
       "unsafe": false,
       "selection": {
         "start": {
-          "line": 462,
+          "line": 551,
           "column": 8
         },
         "end": {
-          "line": 462,
+          "line": 551,
           "column": 45
         }
       },
@@ -25550,11 +26400,11 @@
       ],
       "range": {
         "start": {
-          "line": 459,
+          "line": 548,
           "column": 0
         },
         "end": {
-          "line": 477,
+          "line": 566,
           "column": 6
         }
       },
@@ -25641,11 +26491,11 @@
       "unsafe": false,
       "selection": {
         "start": {
-          "line": 151,
+          "line": 154,
           "column": 8
         },
         "end": {
-          "line": 151,
+          "line": 154,
           "column": 35
         }
       },
@@ -25688,11 +26538,11 @@
       ],
       "range": {
         "start": {
-          "line": 150,
+          "line": 153,
           "column": 0
         },
         "end": {
-          "line": 154,
+          "line": 157,
           "column": 15
         }
       },
@@ -26549,6 +27399,10 @@
     "QUBOPreprocessing.deg3StarMin_not_quad_representable_of_plateau_pos",
     "QUBOPreprocessing.deg3StarMin_quad_couplings_zero_of_field_dominant",
     "QUBOPreprocessing.deg3StarMin_zero_eq_starMin",
+    "QUBOPreprocessing.deg3StarOptSpin_achieves",
+    "QUBOPreprocessing.deg3StarOptSpin_isSpin",
+    "QUBOPreprocessing.deg3Star_elimination_is_reduction",
+    "QUBOPreprocessing.deg3Star_elimination_preserves_global_min",
     "QUBOPreprocessing.diagonal_compression_subsumed_by_dominance",
     "QUBOPreprocessing.endpoint_tie_counterexample",
     "QUBOPreprocessing.gammaTriangle_frustrated",

@@ -21,9 +21,12 @@ This module formalizes Theorem 5 of `QUBOPreprocessing.jl` (`docs/src/dominance.
    $$\mathrm{deg3StarMin}(h_0, J_1, J_2, J_3, s_1, s_2, s_3)
      = \min_{s_0 \in \{-1, +1\}} s_0 (h_0 + J_1 s_1 + J_2 s_2 + J_3 s_3)
      = -|h_0 + J_1 s_1 + J_2 s_2 + J_3 s_3|,$$
-   its lower-bound and achievability properties (`deg3StarMin_le`, `deg3StarMin_achieved`), and
+   its lower-bound and achievability properties (`deg3StarMin_le`, `deg3StarMin_achieved`),
    exact quadratic representability when $\alpha_{123} = 0$
-   (`deg3StarMin_eq_walshQuadPoly_of_cubic_zero`, `deg3StarMin_eq_walshQuadPoly_iff_cubic_zero`).
+   (`deg3StarMin_eq_walshQuadPoly_of_cubic_zero`, `deg3StarMin_eq_walshQuadPoly_iff_cubic_zero`),
+   and its instantiation as a certified `ReductionStep` (`deg3Star_elimination_is_reduction`,
+   `deg3Star_elimination_preserves_global_min`) bridging Theorem 5 with the compositional framework
+   of Theorem 2 (`QUBOPreprocessing.CompositionRepair`).
 4. Full-dimensional vanishing cones ($\alpha_{123} = 0$) from the degree-3 trichotomy in
    `docs/src/dominance.md`:
    - Zero-field hyperplane $h_0 = 0$ (`deg3StarMin_cubic_zero_of_h0_zero`), where `walshQuadPoly`
@@ -193,6 +196,92 @@ theorem deg3StarMin_eq_walshQuadPoly_iff_cubic_zero (h₀ J₁ J₂ J₃ : ℝ) 
       walshQuadPoly (deg3StarMin h₀ J₁ J₂ J₃) s₁ s₂ s₃ = deg3StarMin h₀ J₁ J₂ J₃ s₁ s₂ s₃) ↔
       walshCubic (deg3StarMin h₀ J₁ J₂ J₃) = 0 :=
   walshQuadPoly_eq_iff_cubic_zero (deg3StarMin h₀ J₁ J₂ J₃)
+
+/-- The 3-spin neighbor domain $\{-1, +1\}^3 \subseteq \mathbb{R}^3$. -/
+def spinTripleSet : Set (ℝ × ℝ × ℝ) :=
+  {y | isSpin y.1 ∧ isSpin y.2.1 ∧ isSpin y.2.2}
+
+/-- The single-spin domain $\{-1, +1\} \subseteq \mathbb{R}$. -/
+def spinSet : Set ℝ :=
+  {s₀ | isSpin s₀}
+
+/-- Full 4-variable objective $F_{\mathrm{rest}}(s_1, s_2, s_3) + s_0 (h_0 + J_1 s_1 + J_2 s_2 + J_3 s_3)$
+separating the residual objective on $(s_1, s_2, s_3)$ from the degree-3 star interaction at $s_0$. -/
+def deg3StarEnergy (h₀ J₁ J₂ J₃ : ℝ) (F_rest : (ℝ × ℝ × ℝ) → ℝ)
+    (x : (ℝ × ℝ × ℝ) × ℝ) : ℝ :=
+  F_rest x.1 + x.2 * (h₀ + J₁ * x.1.1 + J₂ * x.1.2.1 + J₃ * x.1.2.2)
+
+/-- Reduced 3-variable quadratic objective obtained by replacing the eliminated spin $s_0$ with the
+quadratic Walsh polynomial `walshQuadPoly (deg3StarMin h₀ J₁ J₂ J₃)`. -/
+noncomputable def deg3StarQuadReducedEnergy (h₀ J₁ J₂ J₃ : ℝ) (F_rest : (ℝ × ℝ × ℝ) → ℝ)
+    (y : ℝ × ℝ × ℝ) : ℝ :=
+  F_rest y + walshQuadPoly (deg3StarMin h₀ J₁ J₂ J₃) y.1 y.2.1 y.2.2
+
+/-- Conditional argmin assignment $s_0^*(s_1, s_2, s_3) \in \{-1, +1\}$ for the degree-3 star center. -/
+noncomputable def deg3StarOptSpin (h₀ J₁ J₂ J₃ : ℝ) (y : ℝ × ℝ × ℝ) : ℝ :=
+  if 0 ≤ h₀ + J₁ * y.1 + J₂ * y.2.1 + J₃ * y.2.2 then -1 else 1
+
+/-- `deg3StarOptSpin` always produces a valid Ising spin in $\{-1, +1\}$. -/
+theorem deg3StarOptSpin_isSpin (h₀ J₁ J₂ J₃ : ℝ) (y : ℝ × ℝ × ℝ) :
+    isSpin (deg3StarOptSpin h₀ J₁ J₂ J₃ y) := by
+  unfold deg3StarOptSpin isSpin
+  split_ifs
+  · exact Or.inl rfl
+  · exact Or.inr rfl
+
+/-- `deg3StarOptSpin` achieves the minimum star energy `deg3StarMin` for every neighbor triple `y`. -/
+theorem deg3StarOptSpin_achieves (h₀ J₁ J₂ J₃ : ℝ) (y : ℝ × ℝ × ℝ) :
+    deg3StarOptSpin h₀ J₁ J₂ J₃ y * (h₀ + J₁ * y.1 + J₂ * y.2.1 + J₃ * y.2.2) =
+      deg3StarMin h₀ J₁ J₂ J₃ y.1 y.2.1 y.2.2 := by
+  unfold deg3StarOptSpin deg3StarMin
+  split_ifs with h
+  · rw [abs_of_nonneg h]
+    ring
+  · have h' : h₀ + J₁ * y.1 + J₂ * y.2.1 + J₃ * y.2.2 ≤ 0 := by linarith
+    rw [abs_of_nonpos h']
+    ring
+
+/-- **Theorem 5 (Part C: Compositional `ReductionStep` Bridge for Degree-3 Elimination)**:
+Whenever $\alpha_{123}(\mathrm{deg3StarMin}(h_0, J_1, J_2, J_3)) = 0$, eliminating $s_0$ via
+`reconstruct (deg3StarOptSpin h₀ J₁ J₂ J₃)` and substituting `walshQuadPoly (deg3StarMin h₀ J₁ J₂ J₃)`
+forms a valid `ReductionStep` (in the sense of Theorem 2, `QUBOPreprocessing.CompositionRepair`)
+from `(spinTripleSet ×ˢ spinSet, deg3StarEnergy h₀ J₁ J₂ J₃ F_rest)` to
+`(spinTripleSet, deg3StarQuadReducedEnergy h₀ J₁ J₂ J₃ F_rest)`. -/
+theorem deg3Star_elimination_is_reduction (h₀ J₁ J₂ J₃ : ℝ)
+    (F_rest : (ℝ × ℝ × ℝ) → ℝ)
+    (hcubic : walshCubic (deg3StarMin h₀ J₁ J₂ J₃) = 0) :
+    ReductionStep (spinTripleSet ×ˢ spinSet) (deg3StarEnergy h₀ J₁ J₂ J₃ F_rest)
+      spinTripleSet (deg3StarQuadReducedEnergy h₀ J₁ J₂ J₃ F_rest)
+      (reconstruct (deg3StarOptSpin h₀ J₁ J₂ J₃)) where
+  maps_into _ hy := ⟨hy, deg3StarOptSpin_isSpin h₀ J₁ J₂ J₃ _⟩
+  energy_eq y hy := by
+    rcases hy with ⟨hs₁, hs₂, hs₃⟩
+    unfold deg3StarEnergy deg3StarQuadReducedEnergy reconstruct
+    dsimp only
+    rw [deg3StarOptSpin_achieves h₀ J₁ J₂ J₃ y,
+        deg3StarMin_eq_walshQuadPoly_of_cubic_zero h₀ J₁ J₂ J₃ y.1 y.2.1 y.2.2 hcubic hs₁ hs₂ hs₃]
+  weak_dom
+  | (y, s₀), ⟨⟨hs₁, hs₂, hs₃⟩, hs₀⟩ => by
+    refine ⟨y, ⟨hs₁, hs₂, hs₃⟩, ?_⟩
+    unfold deg3StarQuadReducedEnergy deg3StarEnergy
+    dsimp only
+    rw [deg3StarMin_eq_walshQuadPoly_of_cubic_zero h₀ J₁ J₂ J₃ y.1 y.2.1 y.2.2 hcubic hs₁ hs₂ hs₃]
+    have hle := deg3StarMin_le h₀ J₁ J₂ J₃ y.1 y.2.1 y.2.2 s₀ hs₀
+    linarith
+
+/-- Any global minimizer of the quadratic Walsh-reduced objective `deg3StarQuadReducedEnergy`
+reconstructs via `deg3StarOptSpin` to a global minimizer of the 4-variable objective
+`deg3StarEnergy` with identical energy whenever $\alpha_{123} = 0$. -/
+theorem deg3Star_elimination_preserves_global_min (h₀ J₁ J₂ J₃ : ℝ)
+    (F_rest : (ℝ × ℝ × ℝ) → ℝ)
+    (hcubic : walshCubic (deg3StarMin h₀ J₁ J₂ J₃) = 0)
+    {y : ℝ × ℝ × ℝ}
+    (hy : IsGlobalMin spinTripleSet (deg3StarQuadReducedEnergy h₀ J₁ J₂ J₃ F_rest) y) :
+    IsGlobalMin (spinTripleSet ×ˢ spinSet) (deg3StarEnergy h₀ J₁ J₂ J₃ F_rest)
+      (reconstruct (deg3StarOptSpin h₀ J₁ J₂ J₃) y) ∧
+    deg3StarEnergy h₀ J₁ J₂ J₃ F_rest (reconstruct (deg3StarOptSpin h₀ J₁ J₂ J₃) y) =
+      deg3StarQuadReducedEnergy h₀ J₁ J₂ J₃ F_rest y :=
+  (deg3Star_elimination_is_reduction h₀ J₁ J₂ J₃ F_rest hcubic).preserves_global_min hy
 
 /-!
 ### Part 3: Vanishing Cones ($\alpha_{123} = 0$) and Non-Zero-Field Elimination Regimes
