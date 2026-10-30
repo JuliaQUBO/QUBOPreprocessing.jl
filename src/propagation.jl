@@ -773,7 +773,7 @@ function probe_variables!(
     order in (:index, :coercive, :extremal) ||
         throw(ArgumentError("order must be :index, :coercive, or :extremal"))
     map === nothing || _validate_domain_map(ws, map)
-    w_vec = witness === nothing ? _coercive_field_witness_orig(ws; map) : _extract_witness_state(ws, witness, map)
+    w_vec::Union{Nothing,Vector{Int}} = witness === nothing ? _coercive_field_witness_orig(ws; map) : _extract_witness_state(ws, witness, map)
     s, st = ws._snapshot, ws._state
     cand_indices = if candidates === nothing
         Int[i for i in 1:length(s.labels) if st.fixed[i] == 2]
@@ -814,27 +814,29 @@ function probe_variables!(
         deg_i <= max_work - visits ||
             return _probing_report!(ws, :work_limit, probed, visits, deduced, fallbacks, exact; pending=remaining)
         probed += 1
-        p_step, p_reason, _, p_visits, p_fb, p_exact = _probing_witness(
-            ws, i, w_vec;
-            map=nothing, max_rounds, max_trial_fixes,
-            max_work=max_work - visits - deg_i, max_exact_work=max_exact_work - exact,
-            deadline_ns, predecessors=st.proof_count, scope_length=length(st.callers),
-            _prevalidated_witness=w_vec,
-            _w_energy_ref=w_energy_ref,
-        )
-        visits += p_visits
-        fallbacks += p_fb
-        exact += p_exact
-        if p_reason in (:deadline, :work_limit, :verification_limit)
-            return _probing_report!(ws, p_reason, probed, visits, deduced, fallbacks, exact; pending=remaining)
-        end
-        if p_step !== nothing
-            rep = _fix!(ws, i, p_step.value; proof=p_step, max_work=max_work - visits, deadline_ns)
-            visits += rep.edge_visits
-            rep.stop_reason === :applied ||
-                return _probing_report!(ws, rep.stop_reason, probed, visits, deduced, fallbacks, exact; pending=remaining)
-            deduced += 1
-            continue
+        if w_vec !== nothing
+            p_step, p_reason, _, p_visits, p_fb, p_exact = _probing_witness(
+                ws, i, w_vec;
+                map=nothing, max_rounds, max_trial_fixes,
+                max_work=max_work - visits - deg_i, max_exact_work=max_exact_work - exact,
+                deadline_ns, predecessors=st.proof_count, scope_length=length(st.callers),
+                _prevalidated_witness=w_vec,
+                _w_energy_ref=w_energy_ref,
+            )
+            visits += p_visits
+            fallbacks += p_fb
+            exact += p_exact
+            if p_reason in (:deadline, :work_limit, :verification_limit)
+                return _probing_report!(ws, p_reason, probed, visits, deduced, fallbacks, exact; pending=remaining)
+            end
+            if p_step !== nothing
+                rep = _fix!(ws, i, p_step.value; proof=p_step, max_work=max_work - visits, deadline_ns)
+                visits += rep.edge_visits
+                rep.stop_reason === :applied ||
+                    return _probing_report!(ws, rep.stop_reason, probed, visits, deduced, fallbacks, exact; pending=remaining)
+                deduced += 1
+                continue
+            end
         end
         if (double_probe || contract_relations) && st.fixed[i] == 2
             ok_low, r_low, _, steps_low, v_low, fb_low, ex_low = _run_trial_dominance_branch!(
@@ -911,6 +913,9 @@ function probe_variables!(
                     deduced += 1
                     branch_dirty = true
                     w_energy_ref[] = nothing
+                    if w_vec !== nothing && !_witness_satisfies_trail(ws, w_vec)
+                        w_vec = witness === nothing ? _coercive_field_witness_orig(ws; map) : nothing
+                    end
                 elseif bs_low.value != bs_high.value && contract_relations
                     _contraction_fill(st, u, i) <= mf || continue
                     orig_σ = (bs_low.value == low_orig && bs_high.value == 1) ? 1 : -1
@@ -952,6 +957,9 @@ function probe_variables!(
                     deduced += 1
                     branch_dirty = true
                     w_energy_ref[] = nothing
+                    if w_vec !== nothing && !_witness_satisfies_trail(ws, w_vec)
+                        w_vec = witness === nothing ? _coercive_field_witness_orig(ws; map) : nothing
+                    end
                 end
             end
         end
@@ -1038,8 +1046,8 @@ function apply_roof_duality!(
     max_fill isa Integer && !(max_fill isa Bool) && 0 <= max_fill <= typemax(Int) ||
         throw(ArgumentError("max_fill must be a nonnegative machine-sized integer"))
     map === nothing || _validate_domain_map(ws, map)
+    w_init = witness === nothing ? nothing : _extract_witness_state(ws, witness, map)
     s = ws._snapshot
-    st = ws._state
     V = s.label_type
     S = s.state_type
     cand_indices = _resolve_roof_candidates(ws, candidates)
@@ -1055,165 +1063,24 @@ function apply_roof_duality!(
             0, Tuple{V,V,Int}[],
         )
     end
-    scope_len = length(st.callers)
-    base_preds = st.proof_count
-    batch_tuple = Tuple(batch_pairs)
-    cp = checkpoint(ws)
-    saved_star_hint = st.star_hint
-    saved_rel_hint = st.rel_hint
-    mat_visits = 0
-    for (r, (u, orig_val)) in enumerate(batch_pairs)
-        if _expired(deadline_ns)
-            rollback!(ws, cp)
-            st.star_hint = saved_star_hint
-            st.rel_hint = saved_rel_hint
-            return RoofDualityReport{V,S}(
-                :deadline, L_roof, obj_bound, total_flow, 0, Pair{V,S}[],
-                graph_work, flow_work, ver_work, mat_visits, total_visits + mat_visits, exact_work,
-                0, Tuple{V,V,Int}[],
-            )
-        end
-        c_before = deepcopy(st.constant)
-        step_r = RoofDualityStep(
-            u, orig_val,
-            deepcopy(L_roof), deepcopy(total_flow),
-            flow_edges, batch_tuple, r,
-            c_before, base_preds + r - 1,
-            :exact, scope_len, :strong,
+    ok_c, r_c, _, contractions_orig, mat_visits, extra_gw, extra_fw, extra_vw, extra_ex, fill_skipped = _commit_roof_duality_pass!(
+        ws, batch_pairs, flow_edges, L_roof, total_flow,
+        map, Int(max_work) - total_visits, deadline_ns;
+        contract_scc=contract_scc, cand_indices=cand_indices, net=net, R_S=R_S, R_T=R_T,
+        witness=witness, _prevalidated_witness=w_init, has_explicit_witness=(witness !== nothing),
+        max_fill=Int(max_fill), max_exact_work=Int(max_exact_work) - exact_work,
+    )
+    graph_work += extra_gw
+    flow_work += extra_fw
+    ver_work += extra_vw
+    exact_work += extra_ex
+    total_visits += extra_gw + extra_fw + extra_vw
+    if !ok_c
+        return RoofDualityReport{V,S}(
+            r_c, L_roof, obj_bound, total_flow, 0, Pair{V,S}[],
+            graph_work, flow_work, ver_work, mat_visits, total_visits + mat_visits, exact_work,
+            0, Tuple{V,V,Int}[],
         )
-        rep = _fix!(ws, u, orig_val; proof=step_r, max_work=Int(max_work) - total_visits - mat_visits, deadline_ns=deadline_ns)
-        mat_visits += rep.edge_visits
-        if rep.stop_reason !== :applied
-            rollback!(ws, cp)
-            st.star_hint = saved_star_hint
-            st.rel_hint = saved_rel_hint
-            return RoofDualityReport{V,S}(
-                rep.stop_reason, L_roof, obj_bound, total_flow, 0, Pair{V,S}[],
-                graph_work, flow_work, ver_work, mat_visits, total_visits + mat_visits, exact_work,
-                0, Tuple{V,V,Int}[],
-            )
-        end
-    end
-    contractions_orig = Tuple{Int,Int,Int}[]
-    fill_skipped = false
-    if contract_scc && net !== nothing
-        scc_net = net
-        scc_L = L_roof
-        scc_flow = total_flow
-        scc_edges = flow_edges
-        scc_RS = R_S
-        scc_RT = R_T
-        if !isempty(batch_pairs)
-            ok2, r2, net2, C_base2, gw2, ex2 = _build_implication_network(
-                ws;
-                max_work=Int(max_work) - total_visits - mat_visits,
-                max_exact_work=Int(max_exact_work) - exact_work,
-                deadline_ns=deadline_ns,
-            )
-            graph_work += gw2
-            total_visits += gw2
-            exact_work += ex2
-            if !ok2
-                rollback!(ws, cp)
-                st.star_hint = saved_star_hint
-                st.rel_hint = saved_rel_hint
-                return RoofDualityReport{V,S}(
-                    r2, L_roof, obj_bound, total_flow, 0, Pair{V,S}[],
-                    graph_work, flow_work, ver_work, mat_visits, total_visits + mat_visits, exact_work,
-                    0, Tuple{V,V,Int}[],
-                )
-            end
-            okf2, rf2, tf2, fw2, fex2 = _dinic_max_flow!(
-                net2;
-                max_work=Int(max_work) - total_visits - mat_visits,
-                max_exact_work=Int(max_exact_work) - exact_work,
-                deadline_ns=deadline_ns,
-            )
-            flow_work += fw2
-            total_visits += fw2
-            exact_work += fex2
-            if !okf2
-                rollback!(ws, cp)
-                st.star_hint = saved_star_hint
-                st.rel_hint = saved_rel_hint
-                return RoofDualityReport{V,S}(
-                    rf2, L_roof, obj_bound, total_flow, 0, Pair{V,S}[],
-                    graph_work, flow_work, ver_work, mat_visits, total_visits + mat_visits, exact_work,
-                    0, Tuple{V,V,Int}[],
-                )
-            end
-            RS2, RT2, vw2 = _residual_reachability(net2)
-            if _expired(deadline_ns)
-                rollback!(ws, cp)
-                st.star_hint = saved_star_hint
-                st.rel_hint = saved_rel_hint
-                return RoofDualityReport{V,S}(
-                    :deadline, L_roof, obj_bound, total_flow, 0, Pair{V,S}[],
-                    graph_work, flow_work, ver_work + vw2, mat_visits, total_visits + vw2 + mat_visits, exact_work,
-                    0, Tuple{V,V,Int}[],
-                )
-            end
-            if total_visits + mat_visits + vw2 > Int(max_work)
-                rem_vw = max(0, Int(max_work) - total_visits - mat_visits)
-                rollback!(ws, cp)
-                st.star_hint = saved_star_hint
-                st.rel_hint = saved_rel_hint
-                return RoofDualityReport{V,S}(
-                    :work_limit, L_roof, obj_bound, total_flow, 0, Pair{V,S}[],
-                    graph_work, flow_work, ver_work + rem_vw, mat_visits, Int(max_work), exact_work,
-                    0, Tuple{V,V,Int}[],
-                )
-            end
-            ver_work += vw2
-            total_visits += vw2
-            scc_net = net2
-            scc_L = C_base2 + tf2
-            scc_flow = tf2
-            scc_edges = _extract_flow_edges(net2)
-            scc_RS = RS2
-            scc_RT = RT2
-        end
-        ok_ext, r_ext, specs, vw_ext, ex_ext = _extract_roof_scc_specs(
-            ws, cand_indices, scc_net, scc_L, scc_RS, scc_RT;
-            witness=witness, map=map,
-            max_work=Int(max_work) - total_visits - mat_visits,
-            max_exact_work=Int(max_exact_work) - exact_work,
-            deadline_ns=deadline_ns,
-        )
-        ver_work += vw_ext
-        total_visits += vw_ext
-        exact_work += ex_ext
-        if !ok_ext
-            rollback!(ws, cp)
-            st.star_hint = saved_star_hint
-            st.rel_hint = saved_rel_hint
-            return RoofDualityReport{V,S}(
-                r_ext, L_roof, obj_bound, total_flow, 0, Pair{V,S}[],
-                graph_work, flow_work, ver_work, mat_visits, total_visits + mat_visits, exact_work,
-                0, Tuple{V,V,Int}[],
-            )
-        end
-        if !isempty(specs)
-            ok_com, r_com, _, contr_list, mv_scc, f_skip = _commit_roof_scc_specs!(
-                ws, specs, scc_L, scc_flow, scc_edges;
-                max_fill=Int(max_fill),
-                max_work=Int(max_work) - total_visits - mat_visits,
-                deadline_ns=deadline_ns,
-            )
-            mat_visits += mv_scc
-            fill_skipped = f_skip
-            if !ok_com
-                rollback!(ws, cp)
-                st.star_hint = saved_star_hint
-                st.rel_hint = saved_rel_hint
-                return RoofDualityReport{V,S}(
-                    r_com, L_roof, obj_bound, total_flow, 0, Pair{V,S}[],
-                    graph_work, flow_work, ver_work, mat_visits, total_visits + mat_visits, exact_work,
-                    0, Tuple{V,V,Int}[],
-                )
-            end
-            contractions_orig = contr_list
-        end
     end
     fixings = Pair{V,S}[
         deepcopy(s.labels[u]) => S(map === nothing ? orig_val : _map_index_value(map, u, orig_val))
@@ -2183,6 +2050,7 @@ function contract_relation!(ws::Workspace, eliminated, representative;
     _limits(max_rounds, nothing)
     _limits(max_trial_fixes, nothing)
     map === nothing || _validate_domain_map(ws, map)
+    w_unmapped = witness === nothing ? nothing : _extract_witness_state(ws, witness, map)
     u = _variable(ws, eliminated)
     v = _variable(ws, representative)
     st = ws._state
@@ -2208,10 +2076,9 @@ function contract_relation!(ws::Workspace, eliminated, representative;
         end
     end
     if raw_step === nothing && enable_roof_scc && !(reason in (:already_fixed, :zero_scale, :deadline, :work_limit, :verification_limit))
-        w_unmapped = witness === nothing ? nothing : _extract_witness_state(ws, witness, map)
         r_step, r_reason, _, r_visits, _, r_exact = _roof_scc_relation_witness(
             ws, u, v;
-            sign=orig_req_sign, map=nothing, witness=w_unmapped,
+            sign=orig_req_sign, map=nothing, witness=witness, _prevalidated_witness=w_unmapped,
             max_work=Int(max_work) - visits, max_exact_work=Int(max_exact_work) - exact_work,
             deadline_ns=deadline_ns, predecessors=st.proof_count, scope_length=length(st.callers),
         )
@@ -2806,6 +2673,7 @@ function contract_relations!(
     max_fill isa Integer && !(max_fill isa Bool) && 0 <= max_fill <= typemax(Int) ||
         throw(ArgumentError("max_fill must be a nonnegative machine-sized integer"))
     map === nothing || _validate_domain_map(ws, map)
+    w_init = witness === nothing ? nothing : _extract_witness_state(ws, witness, map)
     st = ws._state
     s = ws._snapshot
     if cascade_dominance
@@ -2885,7 +2753,7 @@ function contract_relations!(
             all_active = Int[i for i in 1:length(s.labels) if st.fixed[i] == 2]
             ok_ext, r_ext, specs, vw_ext, ex_ext = _extract_roof_scc_specs(
                 ws, all_active, net, L_roof, R_S, R_T;
-                witness=witness, map=map,
+                witness=witness, _prevalidated_witness=w_init, has_explicit_witness=(witness !== nothing), map=map,
                 max_work=Int(max_work - candidates - edges),
                 max_exact_work=Int(max_exact_work - exact),
                 deadline_ns=deadline_ns,
@@ -2895,20 +2763,21 @@ function contract_relations!(
             ok_ext || return finish(r_ext)
             if !isempty(specs)
                 rem_ded = Int(max_deductions) - deductions
-                trunc_specs = length(specs) > rem_ded ? specs[1:rem_ded] : specs
-                ok_com, r_com, _, contr_list, mv_scc, _ = _commit_roof_scc_specs!(
-                    ws, trunc_specs, L_roof, tf, flow_edges;
+                ok_com, r_com, _, contr_list, mv_scc, cw_scc, _, ded_trunc = _commit_roof_scc_specs!(
+                    ws, specs, L_roof, tf, flow_edges;
                     max_fill=mf,
+                    max_deductions=rem_ded,
+                    charge_candidate_work=true,
                     max_work=Int(max_work - candidates - edges),
                     deadline_ns=deadline_ns,
                 )
                 edges += mv_scc
+                candidates += cw_scc
                 ok_com || return finish(r_com)
                 if !isempty(contr_list)
-                    candidates += length(contr_list)
                     deductions += length(contr_list)
                     extra_applied = true
-                    length(specs) > rem_ded && return finish(:deduction_limit)
+                    ded_trunc && return finish(:deduction_limit)
                 end
             end
         end

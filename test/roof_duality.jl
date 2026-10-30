@@ -477,5 +477,52 @@
         @test relation_map(ws_sc_scc, 2) == (1 => 1)
         assume!(ws_sc_scc, 6, 1)
         @test relation_map(ws_sc_scc, 2) == (2 => 1)
+
+        # 5. Mixed unary roof fixings + residual SCC contractions, max_fill filtering,
+        # and upfront witness validation / mid-pass witness disagreement handling:
+        # Disjoint component {7} with strong field h_7 = 5.0 (fixed to -1 by unary roof)
+        # alongside zero-field K_{3,3} on {1..6} (5 closed residual SCC contractions):
+        L_mixed_roof = merge(L_k33, Dict(7 => 5.0))
+        m_mixed_roof = QT.Model{Int,Float64,Int}(L_mixed_roof, Q_k33; domain=:spin, sense=:min)
+        ws_mr = Workspace(m_mixed_roof; rules=:mixed)
+        att_mr = prove_roof_duality(ws_mr; contract_scc=true)
+        @test att_mr.stop_reason === :proved
+        @test att_mr.fixings == [7 => -1]
+        @test att_mr.contracted_count == 5
+        @test verify_certificate(ws_mr, att_mr.certificate).valid
+
+        rep_mr = apply_roof_duality!(ws_mr; contract_scc=true)
+        @test rep_mr.stop_reason === :applied
+        @test rep_mr.fixed_count == 1
+        @test rep_mr.contracted_count == 5
+        @test verify_certificate(ws_mr, export_certificate(ws_mr)).valid
+
+        # max_fill=0 with candidates=[4, 5, 6] skips all 3 cross-bipartition contractions into rep=1 (fill 2 > 0)
+        # and reports :fill_limit when no unary fixings exist:
+        ws_k33_fill = Workspace(m_k33; rules=:relations)
+        @test prove_roof_duality(ws_k33_fill; candidates=[4, 5, 6], contract_scc=true, max_fill=0).stop_reason === :fill_limit
+        @test apply_roof_duality!(ws_k33_fill; candidates=[4, 5, 6], contract_scc=true, max_fill=0).stop_reason === :fill_limit
+
+        # Valid initial witness where unary roof fixes 10 => -1 (disagreeing with witness[10] == +1)
+        # while {1..6} is an open residual SCC:
+        # Must NOT throw mid-pass or leave ws dirty; unary fixing 10 => -1 is committed and open-SCC Mode B is skipped:
+        L_wd = merge(L_open, Dict(10 => 5.0))
+        m_wit_disagree = QT.Model{Int,Float64,Int}(L_wd, Q_open; domain=:spin, sense=:min)
+        ws_wd = Workspace(m_wit_disagree; rules=:mixed)
+        w_wd = [1, 1, 1, 1, 1, 1, 1, 1, -1, 1]
+        att_wd = prove_roof_duality(ws_wd; contract_scc=true, witness=w_wd)
+        @test att_wd.stop_reason === :proved
+        @test att_wd.fixings == [10 => -1]
+        @test att_wd.contracted_count == 0
+        @test verify_certificate(ws_wd, att_wd.certificate).valid
+        rep_wd = apply_roof_duality!(ws_wd; contract_scc=true, witness=w_wd)
+        @test rep_wd.stop_reason === :applied
+        @test rep_wd.fixed_count == 1
+        @test rep_wd.contracted_count == 0
+        @test verify_certificate(ws_wd, export_certificate(ws_wd)).valid
+
+        # Malformed witness is rejected upfront even when has_open_cand == false:
+        @test_throws ArgumentError prove_roof_duality(Workspace(m_k33; rules=:relations); contract_scc=true, witness=[1, 1])
+        @test_throws ArgumentError apply_roof_duality!(Workspace(m_k33; rules=:relations); contract_scc=true, witness=[1, 1])
     end
 end

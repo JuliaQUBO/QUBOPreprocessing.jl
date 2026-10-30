@@ -708,5 +708,63 @@
             ws_dp,
             DominanceCertificate(generation(ws_dp), checkpoint(ws_dp), (), (bad_dp_bound,), ws_dp._snapshot),
         ).stop_reason === :invalid_bound
+
+        # 2. Witness refresh / invalidation after witness-free :double_probe or :probing_pair in probe_variables!:
+        # Probing candidate 1 (with max_rounds=3) forces:
+        #   - s_2 = -1, s_3 = -1, and s_4 = +1 on both branches via :double_probe;
+        #   - s_5 = -s_1 and s_6 = +s_1 via :probing_pair.
+        # Plus a frustrated K_4 (7, 8, 9, 10) so single-branch lower-bound refutation on 1 is :not_strict.
+        L_mix = Dict(
+            1 => 0.0, 2 => 6.5, 3 => 6.5, 4 => 3.5,
+            5 => 3.5, 6 => 0.0,
+            7 => 0.0, 8 => 0.0, 9 => 0.0, 10 => 0.0,
+        )
+        Q_mix = Dict(
+            (1, 2) => -6.5, (1, 3) => 6.5, (2, 3) => -4.0,
+            (1, 4) => 0.1,  (2, 4) => 2.0, (3, 4) => 2.0,
+            (1, 5) => 5.0,  (1, 6) => -5.0,
+            (7, 8) => 10.0, (7, 9) => 10.0, (7, 10) => 10.0,
+            (8, 9) => 10.0, (8, 10) => 10.0, (9, 10) => 10.0,
+        )
+        m_mix = QT.Model{Int,Float64,Int}(L_mix, Q_mix; domain=:spin, sense=:min)
+
+        # Case A: :double_probe on candidate 1 with default witness fixes s_2 = -1, s_3 = -1, s_4 = +1:
+        ws_mix_a = Workspace(m_mix; rules=:dominance)
+        rep_mix_a = probe_variables!(ws_mix_a; double_probe=true, contract_relations=false, max_rounds=3)
+        @test rep_mix_a.stop_reason === :quiescent
+        @test rep_mix_a.deductions >= 3
+        @test ws_mix_a._state.fixed[4] == 1
+        @test verify_certificate(ws_mix_a, export_certificate(ws_mix_a)).valid
+
+        # Case A2: explicit witness with w[4] = -1 invalidated by :double_probe on candidate 1
+        # sets w_vec = nothing and skips subsequent single-branch witness refutations cleanly:
+        ws_mix_a_exp = Workspace(m_mix; rules=:dominance)
+        w_exp_a = [1, -1, -1, -1, -1, 1, -1, 1, -1, 1]
+        rep_mix_a_exp = probe_variables!(ws_mix_a_exp, w_exp_a; double_probe=true, contract_relations=false, max_rounds=3)
+        @test rep_mix_a_exp.stop_reason === :quiescent
+        @test rep_mix_a_exp.deductions >= 3
+        @test ws_mix_a_exp._state.fixed[4] == 1
+        @test verify_certificate(ws_mix_a_exp, export_certificate(ws_mix_a_exp)).valid
+
+        # Case B: :probing_pair on candidate 1 contracts 5 => -s_1 and 6 => +s_1:
+        ws_mix_b = Workspace(m_mix; rules=:mixed)
+        rep_mix_b = probe_variables!(ws_mix_b; double_probe=false, contract_relations=true, max_rounds=3)
+        @test rep_mix_b.stop_reason === :quiescent
+        @test rep_mix_b.deductions >= 2
+        @test verify_certificate(ws_mix_b, export_certificate(ws_mix_b)).valid
+
+        # Case B2: explicit witness with w[1] = 1, w[5] = 1 (violating 5 => -s_1) invalidated by :probing_pair:
+        ws_mix_b_exp = Workspace(m_mix; rules=:mixed)
+        w_exp_b = [1, -1, -1, 1, 1, 1, -1, 1, -1, 1]
+        rep_mix_b_exp = probe_variables!(ws_mix_b_exp, w_exp_b; double_probe=false, contract_relations=true, max_rounds=3)
+        @test rep_mix_b_exp.stop_reason === :quiescent
+        @test rep_mix_b_exp.deductions >= 2
+        @test verify_certificate(ws_mix_b_exp, export_certificate(ws_mix_b_exp)).valid
+
+        # 3. Multiple deductions (both :probing_pair and :double_probe) from a single probed candidate:
+        ws_multi = Workspace(m_mix; rules=:mixed)
+        rep_multi = probe_variables!(ws_multi; double_probe=true, contract_relations=true, max_rounds=3, max_candidates=1)
+        @test rep_multi.deductions == 5
+        @test verify_certificate(ws_multi, export_certificate(ws_multi)).valid
     end
 end

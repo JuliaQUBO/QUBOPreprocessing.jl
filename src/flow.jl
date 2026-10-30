@@ -315,13 +315,6 @@ function _symmetrized_residual_cap(net::_FlowNetwork, a::Int, idx::Int, e::_Flow
         e_bar_a = adj_bar_a[idx]
         dual_e = net.adj[bar_b][e_bar_a.rev]
         r_dual = dual_e.cap - dual_e.flow
-    else
-        for de in net.adj[bar_b]
-            if de.to == bar_a
-                r_dual = de.cap - de.flow
-                break
-            end
-        end
     end
     return r_ab + r_dual
 end
@@ -449,16 +442,6 @@ function _is_closed_residual_scc(
                 rc_in = _symmetrized_residual_cap(net, bar_a, idx, adj_bar_a[idx])
                 if rc_in > 0 && scc_id[b] != cid
                     return false
-                end
-            else
-                for (b_idx, be) in enumerate(net.adj[b])
-                    if be.to == a
-                        rc_in = _symmetrized_residual_cap(net, b, b_idx, be)
-                        if rc_in > 0 && scc_id[b] != cid
-                            return false
-                        end
-                        break
-                    end
                 end
             end
         end

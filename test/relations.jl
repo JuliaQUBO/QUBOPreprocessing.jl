@@ -864,6 +864,55 @@
         @test length(unique(first.(relation_map(ws_cr_scc)))) == 1
         @test verify_certificate(ws_cr_scc, export_certificate(ws_cr_scc)).valid
         check_materialized_optima(ws_cr_scc, m_k33_rel, :spin, :min)
+
+        # 3. Budget atomicity, max_fill + max_deductions interaction, and upfront witness validation
+        # in contract_relations!(ws; enable_roof_scc=true):
+        ws_budget_102 = Workspace(m_k33_rel; rules=:relations)
+        rep_b102 = contract_relations!(ws_budget_102; enable_roof_scc=true, max_work=102)
+        @test rep_b102.stop_reason === :work_limit
+        @test rep_b102.deductions == 0
+        @test length(unique(first.(relation_map(ws_budget_102)))) == 6
+        @test isempty(reductions(ws_budget_102))
+
+        ws_budget_108 = Workspace(m_k33_rel; rules=:relations)
+        rep_b108 = contract_relations!(ws_budget_108; enable_roof_scc=true, max_work=108)
+        @test rep_b108.candidates + rep_b108.edge_visits <= 108
+        @test isempty(reductions(ws_budget_108)) || verify_certificate(ws_budget_108, export_certificate(ws_budget_108)).valid
+
+        # On K_{3,3} with labels [:b1, :a1, :a2, :a3, :b2, :b3], :b1 (index 1) is the SCC representative;
+        # specs (:a1 -> :b1), (:a2 -> :b1), (:a3 -> :b1) have fill = 2 > 0, whereas (:b2 -> :b1) and (:b3 -> :b1)
+        # have fill = 0! With max_fill=0 and max_deductions=2, the 3 fill-rejected specs do NOT consume max_deductions,
+        # so (:b2 -> :b1) and (:b3 -> :b1) are both contracted (deductions == 2 rather than 0):
+        Q_k33_ord = zeros(6, 6)
+        for u in (2, 3, 4), v in (1, 5, 6)
+            Q_k33_ord[min(u, v), max(u, v)] = -2.0
+        end
+        m_k33_ord = rel_fixture([:b1, :a1, :a2, :a3, :b2, :b3], zeros(6), Q_k33_ord; domain=:spin, sense=:min)
+        ws_fill_ded = Workspace(m_k33_ord; rules=:relations)
+        rep_fd0 = contract_relations!(ws_fill_ded; enable_roof_scc=true, max_fill=0, max_deductions=2)
+        @test rep_fd0.stop_reason === :deduction_limit
+        @test rep_fd0.deductions == 2
+        @test verify_certificate(ws_fill_ded, export_certificate(ws_fill_ded)).valid
+        rep_fd2 = contract_relations!(ws_fill_ded; enable_roof_scc=true, max_fill=9, max_deductions=2)
+        @test rep_fd2.stop_reason === :deduction_limit
+        @test rep_fd2.deductions == 2
+        @test verify_certificate(ws_fill_ded, export_certificate(ws_fill_ded)).valid
+
+        # Malformed witness rejected upfront at entry of prove_relation, contract_relation!, and contract_relations!:
+        @test_throws ArgumentError prove_relation(ws_cr_scc, :a1, :a2; enable_roof_scc=true, witness=[1, 1])
+        @test_throws ArgumentError contract_relation!(ws_cr_scc, :a1, :a2; enable_roof_scc=true, witness=[1, 1])
+        @test_throws ArgumentError contract_relations!(Workspace(m_k33_rel; rules=:relations); enable_roof_scc=true, witness=[1, 1])
+
+        # Anti-aligned (:probing_pair with sign = -1):
+        Q_pp_neg = copy(Q_pp)
+        Q_pp_neg[1, 2] = 0.5
+        Q_pp_neg[1, 3] = 3.0
+        m_pp_neg = rel_fixture([:u, :v, :m, :z1, :z2, :z3], zeros(6), Q_pp_neg; domain=:spin, sense=:min)
+        ws_pp_neg = Workspace(m_pp_neg; rules=:relations)
+        att_pp_neg = prove_relation(ws_pp_neg, :u, :v; sign=-1, enable_probing=true, max_rounds=2)
+        @test att_pp_neg.stop_reason === :proved
+        @test only(att_pp_neg.certificate.steps).sign == -1
+        @test verify_certificate(ws_pp_neg, att_pp_neg.certificate).valid
     end
 end
 
