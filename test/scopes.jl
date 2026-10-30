@@ -172,12 +172,47 @@ end
     @test all(s -> s[1] == 0 && s[2] == 1, lifted_states(ws))
     @test verify_certificate(ws, export_certificate(ws)).valid
 
-    # A request made after a checkpoint is discarded by rolling back to it.
+    # A request made after a checkpoint is discarded by rolling back to it, and
+    # checkpoints from that discarded pin branch are rejected.
     ws = Workspace(model; rules=:mixed)
     schedule_reductions!(ws)
     cp = checkpoint(ws)
     assume!(ws, 1, 0)
+    cp_pinned = checkpoint(ws)
     rollback!(ws, cp)
+    @test_throws ArgumentError rollback!(ws, cp_pinned)
+    @test_throws ArgumentError changes(ws, cp_pinned)
     @test assume!(ws, 2, 1).stop_reason === :applied
     @test assumptions(ws) == [2 => 1]
+
+    # Interleaved pins and free-variable caller assumptions replay in
+    # chronological application order on a later structural rollback.
+    L_ord = Dict(1 => 2.0, 2 => 0.0, 3 => 0.0, 4 => 0.0, 5 => 0.0, 6 => 0.0)
+    Q_ord = Dict((2, 3) => -1.0, (3, 4) => 1.0, (3, 5) => 1.0, (3, 6) => 1.0,
+                 (4, 5) => 1.0, (4, 6) => 1.0, (5, 6) => 1.0)
+    ws_ord = Workspace(QT.Model{Int,Float64,Int}(L_ord, Q_ord; domain=:bool, sense=:min); rules=:mixed)
+    apply_dominance!(ws_ord, 1)
+    eliminate_variable!(ws_ord, 2)
+    @test assume!(ws_ord, 1, 0).stop_reason === :unchanged
+    @test assume!(ws_ord, 3, 1).stop_reason === :applied
+    @test assume!(ws_ord, 2, 1).stop_reason === :applied
+    @test assumptions(ws_ord) == [1 => 0, 3 => 1, 2 => 1]
+
+    # LIFO unfix! keeps a pin requested before the removed caller and drops one
+    # whose deduction it undoes.
+    small = fixture([:x,:y,:z,:w], [1.0,0.0,2.0,0.0],
+                    [0.0 -2.0 0.0 0.0;0.0 0.0 0.0 0.0;0.0 0.0 0.0 -3.0;0.0 0.0 0.0 0.0])
+    ws = Workspace(small; rules=:dominance)
+    assume!(ws, :y, 0)
+    propagate!(ws)
+    @test deductions(ws) == [:x => 0]
+    @test assume!(ws, :x, 0).stop_reason === :unchanged
+    @test length(ws._state.pins) == 1
+    assume!(ws, :z, 1)
+    @test unfix!(ws, :z).stop_reason === :applied
+    @test length(ws._state.pins) == 1
+    @test assumptions(ws) == [:y => 0]
+    @test unfix!(ws, :y).stop_reason === :applied
+    @test isempty(ws._state.pins)
+    @test isempty(assumptions(ws))
 end

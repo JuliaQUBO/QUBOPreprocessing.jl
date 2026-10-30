@@ -236,11 +236,13 @@ function _checkpoint_at(ws::Workspace,depth::Int)
 end
 
 function _validate_checkpoint(ws::Workspace, cp::Checkpoint)
-    t = ws._state.trail
-    cp._generation == generation(ws) && cp._epoch == ws._state.epoch &&
+    st = ws._state
+    t = st.trail
+    cp._generation == generation(ws) && cp._epoch == st.epoch &&
         0 <= cp._depth <= length(t) &&
         (cp._depth == 0 ? cp._serial == 0 && cp._fix_depth == 0 :
-            t[cp._depth].serial == cp._serial && t[cp._depth].fix_depth == cp._fix_depth) ||
+            t[cp._depth].serial == cp._serial && t[cp._depth].fix_depth == cp._fix_depth) &&
+        (cp._pin == 0 || any(p -> p[4] == cp._pin, st.pins)) ||
         throw(ArgumentError("checkpoint belongs to another workspace, generation or discarded branch"))
     return nothing
 end
@@ -328,14 +330,25 @@ function assume!(ws::Workspace, label, value; map::Union{Nothing,DomainGaugeMap}
         n_pins = length(st.pins)
         replay_count = length(st.callers) - c_idx + n_pins + 1
         replay_list = Vector{Pair{Int,Int}}(undef, replay_count)
-        for (offset, k) in enumerate(replay_start:length(st.callers))
-            e = st.trail[st.callers[k]]::_UndoFix
-            replay_list[offset] = e.index => e.value
-        end
         # Every pin matched a deduction at or after `pos`, so the rollback below
-        # undoes it; replay the caller's request instead of losing it.
-        for (offset, (pin_i, pin_v, _, _)) in enumerate(st.pins)
-            replay_list[replay_count - n_pins - 1 + offset] = pin_i => pin_v
+        # undoes it; merge retained callers after `pos` and pins by trail depth
+        # so replayed assumptions stay in chronological application order.
+        out_idx = 0
+        p_idx = 1
+        for k in replay_start:length(st.callers)
+            c_pos = st.callers[k]
+            while p_idx <= n_pins && st.pins[p_idx][3] < c_pos
+                pin_i, pin_v, _, _ = st.pins[p_idx]
+                replay_list[out_idx += 1] = pin_i => pin_v
+                p_idx += 1
+            end
+            e = st.trail[c_pos]::_UndoFix
+            replay_list[out_idx += 1] = e.index => e.value
+        end
+        while p_idx <= n_pins
+            pin_i, pin_v, _, _ = st.pins[p_idx]
+            replay_list[out_idx += 1] = pin_i => pin_v
+            p_idx += 1
         end
         replay_list[replay_count] = i => v
         planned_visits = 0
