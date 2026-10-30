@@ -1,4 +1,11 @@
 {
+  "QUBOPreprocessing.CoflipCancellation": [
+    "Init",
+    "Init",
+    "Mathlib",
+    "QUBOPreprocessing.GaugeCoercive",
+    "QUBOPreprocessing.CompositionRepair"
+  ],
   "QUBOPreprocessing.CompositionRepair": [
     "Init",
     "Init",
@@ -36,6 +43,7 @@
     "QUBOPreprocessing.CompositionRepair",
     "QUBOPreprocessing.MaxCutTriangle",
     "QUBOPreprocessing.CompressionAudit",
-    "QUBOPreprocessing.WalshDegree3"
+    "QUBOPreprocessing.WalshDegree3",
+    "QUBOPreprocessing.CoflipCancellation"
   ]
 }

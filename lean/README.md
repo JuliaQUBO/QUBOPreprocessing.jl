@@ -1,7 +1,7 @@
 # Kernel-checked Lean 4 formalization for `QUBOPreprocessing.jl`
 
-This directory contains a standalone Lean `v4.33.1` / Mathlib `v4.33.1` formalization of the five
-core mathematical results underlying `QUBOPreprocessing.jl` (Issues `#54` and `#68` and `docs/src/dominance.md`):
+This directory contains a standalone Lean `v4.33.1` / Mathlib `v4.33.1` formalization of the six
+core mathematical results underlying `QUBOPreprocessing.jl` (Issues `#54`, `#68`, and `#72` and `docs/src/dominance.md`):
 
 1. **Proposition 1 (`QUBOPreprocessing.GaugeCoercive`)**: Exact affine bijection $s_i = 2 x_i - 1$
    ($x_i = (s_i + 1) / 2$) between Boolean variables $x_i \in \{0, 1\}$ and Ising spins
@@ -61,6 +61,22 @@ core mathematical results underlying `QUBOPreprocessing.jl` (Issues `#54` and `#
    trichotomy (`deg3StarMin_cubic_of_additive_cone`, `deg3StarMin_cubic_zero_iff_of_additive_cone`,
    `deg3StarMin_cubic_of_plateau_cone_pos`, `deg3StarMin_cubic_of_plateau_cone_neg`,
    `deg3StarMin_not_quad_representable_of_plateau_pos`) certifying `:nonquadratic_elimination`.
+6. **Theorem 6 (`QUBOPreprocessing.CoflipCancellation`)**: Two-spin co-flip shared-neighbor
+   cancellation and twin contraction (`prove_relation` `:coflip_pair`, `prove_twin`,
+   `contract_twins!`, and `_verify_relation_step` in `src/certificates.jl:1081-1255, 4993-5018`):
+   exact co-flip average identity on states violating $s_u = \sigma s_v$ (`coflip_average_eq`,
+   `repair_u_satisfies_relation`, `repair_v_satisfies_relation`); co-flip center, fluctuation
+   radius, and two-sided enclosure (`coflipCenter`, `coflipRadius`, `coflipLower`, `coflipUpper`,
+   `coflip_average_enclosure`, `min_deltaFlip_le_neg_two_mul_coflipLower`); strong and weak
+   `:coflip_pair` persistency (`coflip_pair_strong_persistency`, `coflip_pair_weak_persistency`)
+   and structural twin contraction (`coflipRadius_eq_zero_of_twin`,
+   `nonadjacent_twin_weak_contraction`, `coupled_twin_strong_contraction`); one-sided $N(v)$
+   decomposition, monotone pruning increments, and shared-neighbor cancellation bounds
+   (`one_sided_diff_sum_eq`, `coflipDelta_nonneg`, `abs_coflip_diff_le_add_abs`,
+   `abs_coflip_diff_lt_add_abs_of_aligned`, `coflipRadius_le_glk_sum_radius`); and compositional
+   `ReductionStep` and `StrongReductionStep` bridges for pair contraction $s_u = \sigma s_v$
+   (`pairContractedEnergy_eq_merged`, `coflip_reductionStep`, `coflip_strongReductionStep`,
+   `coflip_preserves_global_min`, `coflip_strong_image_global_min_eq`).
 
 ## Reproducing Verification
 
@@ -88,8 +104,8 @@ If `lake` is installed in a non-default location, pass `QUBO_LAKE=/path/to/lake 
 4. Writes machine-readable audit artifacts to `lean/verification/` (`result.json`,
    `environment.json`, `axioms.log`, `imports.json`, `sources.before.json`, `sources.after.json`).
 
-The current verified audit (`lean/verification/result.json`) checks **83 public source theorems**
-and **154 total project constants** across **6 modules**, with zero compiler warnings and only
+The current verified audit (`lean/verification/result.json`) checks **110 public source theorems**
+and **195 total project constants** across **7 modules**, with zero compiler warnings and only
 Lean's three standard foundational axioms (`Classical.choice`, `Quot.sound`, `propext`).
 
 ## Module and Theorem Summary
@@ -101,3 +117,4 @@ Lean's three standard foundational axioms (`Classical.choice`, `Quot.sound`, `pr
 | `QUBOPreprocessing.MaxCutTriangle` | `triEnergy_flip_a`, `triEnergy_flip_ac`, `gammaTriangle_supportive`, `gammaTriangle_frustrated`, `gammaTriangle_zero_residual`, `maxcut_triangle_dominance_sound`, `maxcut_triangle_strict_improvement`, `uncorrected_multicut_triangle_counterexample` | Proposition 3 (`docs/src/dominance.md`, `src/maxcut.jl`, `test/maxcut.jl`) |
 | `QUBOPreprocessing.CompressionAudit` | `endpoint_tie_counterexample`, `quadratic_endpoint_tie_counterexample`, `negative_quadratic_lost_optimum_counterexample`, `diagonal_compression_subsumed_by_dominance`, `pair_excluded_lower_eq_full_of_pos`, `positive_quadratic_sparsification_subsumed_by_dominance`, `in_place_compression_nonconstant_shift` | Theorem 4 (`docs/src/dominance.md`, `src/compression.jl`, `test/compression.jl`) |
 | `QUBOPreprocessing.WalshDegree3` | `walshQuadPoly_add_cubic_eq`, `walshQuadPoly_eq_of_cubic_zero`, `walshCubic_zero_of_walshQuadPoly_eq`, `walshQuadPoly_eq_iff_cubic_zero`, `deg3StarMin_le`, `deg3StarMin_achieved`, `deg3StarMin_eq_walshQuadPoly_of_cubic_zero`, `deg3StarMin_eq_walshQuadPoly_iff_cubic_zero`, `deg3StarOptSpin_isSpin`, `deg3StarOptSpin_achieves`, `deg3Star_elimination_is_reduction`, `deg3Star_elimination_preserves_global_min`, `deg3StarMin_cubic_zero_of_h0_zero`, `walshQuadPoly_deg3StarMin_zero_eq_starTriPoly`, `deg3StarMin_cubic_zero_of_field_dominant`, `deg3StarMin_quad_couplings_zero_of_field_dominant`, `deg3StarMin_cubic_zero_of_heavy_edge1`, `deg3StarMin_cubic_zero_of_heavy_edge2`, `deg3StarMin_cubic_zero_of_heavy_edge3`, `deg3StarMin_cubic_of_additive_cone`, `deg3StarMin_cubic_zero_iff_of_additive_cone`, `deg3StarMin_cubic_of_plateau_cone_pos`, `deg3StarMin_cubic_of_plateau_cone_neg`, `deg3StarMin_not_quad_representable_of_plateau_pos` | Theorem 5 (`docs/src/dominance.md`, `src/certificates.jl`, `test/elimination.jl`) |
+| `QUBOPreprocessing.CoflipCancellation` | `deltaFlipU_eq`, `deltaFlipV_eq`, `spin_rel_or_viol`, `repair_u_satisfies_relation`, `repair_v_satisfies_relation`, `coflip_average_eq`, `coflipRadius_nonneg`, `coflipLower_le_coflipUpper`, `abs_coflip_fluctuation_le_two_mul_coflipRadius`, `coflip_average_enclosure`, `min_deltaFlip_le_neg_two_mul_coflipLower`, `coflip_pair_strong_persistency`, `coflip_pair_weak_persistency`, `coflipRadius_eq_zero_of_twin`, `coflipLower_eq_center_of_twin`, `nonadjacent_twin_weak_contraction`, `coupled_twin_strong_contraction`, `one_sided_diff_sum_eq`, `coflipDelta_nonneg`, `abs_coflip_diff_le_add_abs`, `abs_coflip_diff_lt_add_abs_of_aligned`, `coflipRadius_le_glk_sum_radius`, `pairContractedEnergy_eq_merged`, `coflip_reductionStep`, `coflip_strongReductionStep`, `coflip_preserves_global_min`, `coflip_strong_image_global_min_eq` | Theorem 6 (`docs/src/dominance.md`, `src/certificates.jl`, `test/relations.jl`) |
