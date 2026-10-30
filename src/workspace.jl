@@ -60,14 +60,26 @@ function _incremental(s::_Snapshot;rules=:identity)
     fields = fill(_Exact(0), n)
     f = QT.Form{Float64}(n, _thaw(s.linear), _thaw(s.quadratic), s.scale, s.offset;
                          sense=s.sense, domain=s.domain)
+    all_int53 = isfinite(s.offset) && s.offset == trunc(s.offset) && abs(s.offset) <= 9007199254740992.0
+    f_int = all_int53 ? zeros(Int128, n) : Int128[]
     for (i, v) in QT.linear_terms(f)
         fields[i] = _to_exact(v)
+        if all_int53
+            if v == trunc(v) && abs(v) <= 9007199254740992.0
+                f_int[i] = Int128(Int64(v))
+            else
+                all_int53 = false
+            end
+        end
     end
     deg_init = zeros(Int, n)
     for ((i, j), v) in QT.quadratic_terms(f)
         iszero(v) && continue
         deg_init[i] += 1
         deg_init[j] += 1
+        if all_int53 && !(v == trunc(v) && abs(v) <= 9007199254740992.0)
+            all_int53 = false
+        end
     end
     for i in 1:n
         d_i = deg_init[i]
@@ -76,6 +88,11 @@ function _incremental(s::_Snapshot;rules=:identity)
             sizehint!(adj_pos[i], d_i)
         end
     end
+    need_bounds = rules in (:dominance, :elimination, :relations, :mixed)
+    csum_int = all_int53 ? zeros(Int128, n) : Int128[]
+    neg_int = (all_int53 && need_bounds) ? zeros(Int128, n) : Int128[]
+    pos_int = (all_int53 && need_bounds) ? zeros(Int128, n) : Int128[]
+    quad_sum_int = Int128(0)
     for ((i,j), v) in QT.quadratic_terms(f)
         iszero(v) && continue
         q = _to_exact(v)
@@ -83,31 +100,75 @@ function _incremental(s::_Snapshot;rules=:identity)
         adj_pos[i][j] = length(adjacency[i])
         push!(adjacency[j], i=>q)
         adj_pos[j][i] = length(adjacency[j])
+        if all_int53
+            iv = Int128(Int64(v))
+            csum_int[i] += iv
+            csum_int[j] += iv
+            quad_sum_int += iv
+            if need_bounds
+                if iv < 0
+                    neg_int[i] += iv
+                    neg_int[j] += iv
+                else
+                    pos_int[i] += iv
+                    pos_int[j] += iv
+                end
+            end
+        end
     end
     degrees = deg_init
     initial_degrees = copy(degrees)
     dual_fields = Vector{_Exact}(undef, n)
-    quad_sum = _Exact(0)
-    for i in 1:n
-        csum = _Exact(0)
-        for (j, q) in adjacency[i]
-            csum += q
-            i < j && (quad_sum += q)
-        end
-        dual_fields[i] = s.domain === QT.BoolDomain ? (fields[i] // 2 + csum // 4) :
-                                                      (2 * fields[i] - 2 * csum)
-    end
-    field_sum = sum(fields; init=_Exact(0))
+    is_bool = s.domain === QT.BoolDomain
     offset_ex = _to_exact(s.offset)
-    dual_constant = s.domain === QT.BoolDomain ?
-        (offset_ex + field_sum // 2 + quad_sum // 4) :
-        (offset_ex - field_sum + quad_sum)
-    lower,upper = nothing,nothing
-    if rules in (:dominance, :elimination, :relations, :mixed)
-        lower,upper = copy(fields),copy(fields)
-        for i in 1:n, (_,q) in adjacency[i]
-            lower[i] += s.domain === QT.BoolDomain ? min(0,q) : -abs(q)
-            upper[i] += s.domain === QT.BoolDomain ? max(0,q) : abs(q)
+    if all_int53
+        for i in 1:n
+            dual_fields[i] = is_bool ? (_Exact(BigInt(2 * f_int[i] + csum_int[i]), BigInt(4))) :
+                                       _to_exact(2 * f_int[i] - 2 * csum_int[i])
+        end
+        field_sum_int = sum(f_int; init=Int128(0))
+        dual_constant = is_bool ?
+            (offset_ex + _Exact(BigInt(2 * field_sum_int + quad_sum_int), BigInt(4))) :
+            (offset_ex + _to_exact(quad_sum_int - field_sum_int))
+        lower, upper = nothing, nothing
+        if need_bounds
+            lower = Vector{_Exact}(undef, n)
+            upper = Vector{_Exact}(undef, n)
+            if is_bool
+                for i in 1:n
+                    lower[i] = _to_exact(f_int[i] + neg_int[i])
+                    upper[i] = _to_exact(f_int[i] + pos_int[i])
+                end
+            else
+                for i in 1:n
+                    abs_i = pos_int[i] - neg_int[i]
+                    lower[i] = _to_exact(f_int[i] - abs_i)
+                    upper[i] = _to_exact(f_int[i] + abs_i)
+                end
+            end
+        end
+    else
+        quad_sum = _Exact(0)
+        for i in 1:n
+            csum = _Exact(0)
+            for (j, q) in adjacency[i]
+                csum += q
+                i < j && (quad_sum += q)
+            end
+            dual_fields[i] = is_bool ? (fields[i] // 2 + csum // 4) :
+                                       (2 * fields[i] - 2 * csum)
+        end
+        field_sum = sum(fields; init=_Exact(0))
+        dual_constant = is_bool ?
+            (offset_ex + field_sum // 2 + quad_sum // 4) :
+            (offset_ex - field_sum + quad_sum)
+        lower,upper = nothing,nothing
+        if need_bounds
+            lower,upper = copy(fields),copy(fields)
+            for i in 1:n, (_,q) in adjacency[i]
+                lower[i] += is_bool ? min(0,q) : -abs(q)
+                upper[i] += is_bool ? max(0,q) : abs(q)
+            end
         end
     end
     queue = rules in (:dominance, :elimination, :relations, :mixed) ? collect(1:n) : Int[]

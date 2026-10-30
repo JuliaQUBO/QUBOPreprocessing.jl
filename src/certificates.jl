@@ -2580,15 +2580,27 @@ function _init_poly_state(s::_Snapshot; map::Union{Nothing,DomainGaugeMap}=nothi
     adj_pos = [Dict{Int,Int}() for _ in 1:n]
     f = QT.Form{Float64}(n, _thaw(s.linear), _thaw(s.quadratic), s.scale, s.offset;
                          sense=s.sense, domain=s.domain)
+    all_int53 = isfinite(s.offset) && s.offset == trunc(s.offset) && abs(s.offset) <= 9007199254740992.0
+    f_int = all_int53 ? zeros(Int128, n) : Int128[]
     for (i, v) in QT.linear_terms(f)
         _expired(deadline) && return nothing
         fields[i] = _to_exact(v)
+        if all_int53
+            if v == trunc(v) && abs(v) <= 9007199254740992.0
+                f_int[i] = Int128(Int64(v))
+            else
+                all_int53 = false
+            end
+        end
     end
     deg_init = zeros(Int, n)
     for ((i, j), v) in QT.quadratic_terms(f)
         iszero(v) && continue
         deg_init[i] += 1
         deg_init[j] += 1
+        if all_int53 && !(v == trunc(v) && abs(v) <= 9007199254740992.0)
+            all_int53 = false
+        end
     end
     for i in 1:n
         d_i = deg_init[i]
@@ -2597,6 +2609,8 @@ function _init_poly_state(s::_Snapshot; map::Union{Nothing,DomainGaugeMap}=nothi
             sizehint!(adj_pos[i], d_i)
         end
     end
+    csum_int = all_int53 ? zeros(Int128, n) : Int128[]
+    quad_sum_int = Int128(0)
     quad_sum = _Exact(0)
     for ((i, j), v) in QT.quadratic_terms(f)
         _expired(deadline) && return nothing
@@ -2606,17 +2620,32 @@ function _init_poly_state(s::_Snapshot; map::Union{Nothing,DomainGaugeMap}=nothi
         adj_pos[i][j] = length(adj[i])
         push!(adj[j], i => q)
         adj_pos[j][i] = length(adj[j])
-        quad_sum += q
+        if all_int53
+            iv = Int128(Int64(v))
+            csum_int[i] += iv
+            csum_int[j] += iv
+            quad_sum_int += iv
+        else
+            quad_sum += q
+        end
     end
     constant = _to_exact(s.offset)
     is_bool = s.domain === QT.BoolDomain
     h_spin = Vector{_Exact}(undef, n)
     if is_bool
-        for i in 1:n
-            csum = sum((q for (_, q) in adj[i]); init=_Exact(0))
-            h_spin[i] = fields[i] // 2 + csum // 4
+        if all_int53
+            for i in 1:n
+                h_spin[i] = _Exact(BigInt(2 * f_int[i] + csum_int[i]), BigInt(4))
+            end
+            field_sum_int = sum(f_int; init=Int128(0))
+            c_spin = constant + _Exact(BigInt(2 * field_sum_int + quad_sum_int), BigInt(4))
+        else
+            for i in 1:n
+                csum = sum((q for (_, q) in adj[i]); init=_Exact(0))
+                h_spin[i] = fields[i] // 2 + csum // 4
+            end
+            c_spin = constant + sum(fields; init=_Exact(0)) // 2 + quad_sum // 4
         end
-        c_spin = constant + sum(fields; init=_Exact(0)) // 2 + quad_sum // 4
     else
         copyto!(h_spin, fields)
         c_spin = constant
