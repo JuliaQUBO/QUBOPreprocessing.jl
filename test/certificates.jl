@@ -229,6 +229,28 @@ end
     @test lo_o < hi_o
     @test Rational{BigInt}(lo_o) <= q_over <= Rational{BigInt}(hi_o)
 
+    # 53-bit dyadic and non-dyadic rationals (q.den > 1) use hardware fma fast path
+    for (num, den) in (
+        (1, 2), (-1, 2), (35995, 2), (-35995, 2),
+        (1, 4), (-3, 4), (71991, 4), (-71991, 4),
+        (1, 3), (-1, 3), (7, 6), (-7, 6),
+        (9007199254740991, 2), (-9007199254740991, 4),
+        (9007199254740991, 3), (-9007199254740991, 3),
+        (3, 9007199254740991), (-3, 9007199254740991),
+    )
+        q_r = Rational{BigInt}(BigInt(num), BigInt(den))
+        lo_r, hi_r = QUBOPreprocessing._enclose(q_r)
+        @test Rational{BigInt}(lo_r) <= q_r <= Rational{BigInt}(hi_r)
+        if lo_r < hi_r
+            @test nextfloat(lo_r) == hi_r
+            @test Rational{BigInt}(lo_r) < q_r < Rational{BigInt}(hi_r)
+        else
+            @test lo_r == hi_r
+            @test Rational{BigInt}(lo_r) == q_r
+        end
+        @test (@allocated QUBOPreprocessing._enclose(q_r)) == 0
+    end
+
     # 2. _can_possibly_contract outward-rounded Float64 shared-neighbor budget early exit
     #    Dense 8-vertex graph where shared neighbors cannot cancel enough weight vs where they can
     n_d = 8

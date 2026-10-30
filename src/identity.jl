@@ -8,39 +8,24 @@
 struct _Storage
     kind::Symbol
     shape::Tuple
-    values::Tuple
-    indices::Tuple
-    pointers::Tuple
+    values::Vector{Float64}
+    indices::Vector{Int}
+    pair_indices::Vector{Tuple{Int,Int}}
+    pointers::Vector{Int}
 end
 
-_freeze(x::Vector{Float64}) = _Storage(:dense_linear, size(x), Tuple(x), (), ())
+_freeze(x::Vector{Float64}) = _Storage(:dense_linear, size(x), copy(x), Int[], Tuple{Int,Int}[], Int[])
 _freeze(x::UpperTriangular{Float64,Matrix{Float64}}) =
-    _Storage(:dense_quadratic, size(x), Tuple(parent(x)), (), ())
+    _Storage(:dense_quadratic, size(x), copy(vec(parent(x))), Int[], Tuple{Int,Int}[], Int[])
 _freeze(x::SparseVector{Float64,Int}) =
-    _Storage(:sparse_linear, size(x), Tuple(x.nzval), Tuple(x.nzind), ())
+    _Storage(:sparse_linear, size(x), copy(x.nzval), copy(x.nzind), Tuple{Int,Int}[], Int[])
 _freeze(x::SparseMatrixCSC{Float64,Int}) =
-    _Storage(:sparse_quadratic, size(x), Tuple(x.nzval), Tuple(x.rowval), Tuple(x.colptr))
+    _Storage(:sparse_quadratic, size(x), copy(x.nzval), copy(x.rowval), Tuple{Int,Int}[], copy(x.colptr))
 _freeze(x::Dict{Int,Float64}) =
-    _Storage(:dict_linear, (), Tuple(values(x)), Tuple(keys(x)), ())
+    _Storage(:dict_linear, (), collect(Float64, values(x)), collect(Int, keys(x)), Tuple{Int,Int}[], Int[])
 _freeze(x::Dict{Tuple{Int,Int},Float64}) =
-    _Storage(:dict_quadratic, (), Tuple(values(x)), Tuple(keys(x)), ())
+    _Storage(:dict_quadratic, (), collect(Float64, values(x)), Int[], collect(Tuple{Int,Int}, keys(x)), Int[])
 _freeze(x) = throw(ArgumentError("unsupported objective storage $(typeof(x))"))
-
-function _floats(@nospecialize(t::Tuple))
-    out = Vector{Float64}(undef, length(t))
-    for i in eachindex(out)
-        out[i] = t[i]::Float64
-    end
-    return out
-end
-
-function _ints(@nospecialize(t::Tuple))
-    out = Vector{Int}(undef, length(t))
-    for i in eachindex(out)
-        out[i] = Int(t[i])
-    end
-    return out
-end
 
 function _deepcopy_tuple(@nospecialize(t::Tuple), dict::IdDict)
     n = length(t)
@@ -54,49 +39,95 @@ end
 
 Base.deepcopy_internal(s::_Storage, ::IdDict) = s
 
-function _all_isfinite(@nospecialize(t::Tuple))
-    for i in 1:length(t)
-        isfinite(t[i]::Float64) || return false
+function _all_isfinite(vals::Vector{Float64})
+    @inbounds for i in eachindex(vals)
+        isfinite(vals[i]) || return false
     end
     return true
 end
 
-function _thaw_dict_linear(@nospecialize(indices::Tuple), @nospecialize(values::Tuple))
+@inline function _foreach_linear_term(fn::F, st::_Storage) where {F}
+    vals = st.values
+    if st.kind === :dense_linear
+        @inbounds for i in eachindex(vals)
+            v = vals[i]
+            !iszero(v) && fn(i, v)
+        end
+    else
+        inds = st.indices
+        @inbounds for k in eachindex(vals)
+            fn(inds[k], vals[k])
+        end
+    end
+    return nothing
+end
+
+@inline function _foreach_quadratic_term(fn::F, st::_Storage) where {F}
+    vals = st.values
+    if st.kind === :dense_quadratic
+        n = st.shape[1]::Int
+        @inbounds for i in 1:n
+            for j in (i + 1):n
+                v = vals[(j - 1) * n + i]
+                !iszero(v) && fn(i, j, v)
+            end
+        end
+    elseif st.kind === :sparse_quadratic
+        rows = st.indices
+        ptrs = st.pointers
+        @inbounds for j in 1:(length(ptrs) - 1)
+            for k in ptrs[j]:(ptrs[j + 1] - 1)
+                fn(rows[k], j, vals[k])
+            end
+        end
+    else
+        pairs = st.pair_indices
+        @inbounds for k in eachindex(vals)
+            i, j = pairs[k]
+            fn(i, j, vals[k])
+        end
+    end
+    return nothing
+end
+
+function _thaw_dict_linear(indices::Vector{Int}, values::Vector{Float64})
     n = length(indices)
     d = Dict{Int,Float64}()
     sizehint!(d, n)
-    for k in 1:n
-        d[indices[k]::Int] = values[k]::Float64
+    @inbounds for k in 1:n
+        d[indices[k]] = values[k]
     end
     return QT.DictLinearForm{Float64}(d)
 end
 
-function _thaw_dict_quadratic(@nospecialize(indices::Tuple), @nospecialize(values::Tuple))
+function _thaw_dict_quadratic(indices::Vector{Tuple{Int,Int}}, values::Vector{Float64})
     n = length(indices)
     d = Dict{Tuple{Int,Int},Float64}()
     sizehint!(d, n)
-    for k in 1:n
-        d[indices[k]::Tuple{Int,Int}] = values[k]::Float64
+    @inbounds for k in 1:n
+        d[indices[k]] = values[k]
     end
     return QT.DictQuadraticForm{Float64}(d)
 end
 
+_ints(t) = Int[x for x in t]
+
 function _thaw(s::_Storage)
     if s.kind === :dense_linear
-        return QT.DenseLinearForm{Float64}(_floats(s.values))
+        return QT.DenseLinearForm{Float64}(copy(s.values))
     elseif s.kind === :dense_quadratic
-        data = reshape(_floats(s.values), s.shape)
+        data = reshape(copy(s.values), s.shape)
         return QT.DenseQuadraticForm{Float64}(UpperTriangular(data))
     elseif s.kind === :sparse_linear
-        data = SparseVector(s.shape[1], _ints(s.indices), _floats(s.values))
+        data = SparseVector(s.shape[1]::Int, copy(s.indices), copy(s.values))
         return QT.SparseLinearForm{Float64}(data)
     elseif s.kind === :sparse_quadratic
-        data = SparseMatrixCSC(s.shape..., _ints(s.pointers), _ints(s.indices), _floats(s.values))
+        data = SparseMatrixCSC(s.shape[1]::Int, s.shape[2]::Int, copy(s.pointers), copy(s.indices), copy(s.values))
         return QT.SparseQuadraticForm{Float64}(data)
     elseif s.kind === :dict_linear
         return _thaw_dict_linear(s.indices, s.values)
     else
-        return _thaw_dict_quadratic(s.indices, s.values)
+        return _thaw_dict_quadratic(s.pair_indices, s.values)
     end
 end
 
@@ -168,10 +199,10 @@ function _snapshot(model::QT.Model{V,Float64,U}) where {V,U}
     _all_isfinite(l.values) && _all_isfinite(q.values) &&
         isfinite(QT.scale(model)) && isfinite(QT.offset(model)) ||
         throw(ArgumentError("coefficients, scale and offset must be finite Float64 values"))
-    for (i, _) in QT.linear_terms(model)
+    _foreach_linear_term(l) do i, _
         1 <= i <= n || throw(ArgumentError("linear index outside model"))
     end
-    for ((i, j), v) in QT.quadratic_terms(model)
+    _foreach_quadratic_term(q) do i, j, v
         1 <= i <= n && 1 <= j <= n && (i < j || iszero(v)) ||
             throw(ArgumentError("quadratic objective must be in strict upper triangular normal form"))
     end
@@ -196,18 +227,18 @@ end
 function _is_integer_snapshot(s::_Snapshot)::Bool
     (isfinite(s.offset) && isinteger(s.offset)) || return false
     for i in 1:length(s.linear.values)
-        v = s.linear.values[i]::Float64
+        v = s.linear.values[i]
         (isfinite(v) && isinteger(v)) || return false
     end
     if s.quadratic.kind === :dense_quadratic
         n = s.quadratic.shape[1]::Int
         for col in 1:n, row in 1:(col - 1)
-            v = s.quadratic.values[(col - 1) * n + row]::Float64
+            v = s.quadratic.values[(col - 1) * n + row]
             (isfinite(v) && isinteger(v)) || return false
         end
     else
         for i in 1:length(s.quadratic.values)
-            v = s.quadratic.values[i]::Float64
+            v = s.quadratic.values[i]
             (isfinite(v) && isinteger(v)) || return false
         end
     end
@@ -222,17 +253,17 @@ function _scale_storage(st::_Storage, m::Float64)::_Storage
         scaled = zeros(Float64, len)
         for col in 1:n, row in 1:(col - 1)
             idx = (col - 1) * n + row
-            v = st.values[idx]::Float64
+            v = st.values[idx]
             scaled[idx] = iszero(v) ? 0.0 : Float64(round(v * m))
         end
-        return _Storage(st.kind, st.shape, Tuple(scaled), st.indices, st.pointers)
+        return _Storage(st.kind, st.shape, scaled, st.indices, st.pair_indices, st.pointers)
     else
         scaled = Vector{Float64}(undef, len)
         for i in 1:len
-            v = st.values[i]::Float64
+            v = st.values[i]
             scaled[i] = iszero(v) ? 0.0 : Float64(round(v * m))
         end
-        return _Storage(st.kind, st.shape, Tuple(scaled), st.indices, st.pointers)
+        return _Storage(st.kind, st.shape, scaled, st.indices, st.pair_indices, st.pointers)
     end
 end
 
