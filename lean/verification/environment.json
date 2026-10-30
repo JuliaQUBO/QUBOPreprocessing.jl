@@ -10508,9 +10508,59 @@
     "QUBOPreprocessing.WalshDegree3",
     "QUBOPreprocessing.CoflipCancellation",
     "QUBOPreprocessing.ProbingMargin",
+    "QUBOPreprocessing.BlockElimination",
     "QUBOPreprocessing"
   ],
   "declarations": [
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 342,
+          "column": 18
+        },
+        "end": {
+          "line": 342,
+          "column": 26
+        }
+      },
+      "references": [
+        "Real",
+        "Real",
+        "HDiv.hDiv",
+        "instHDiv",
+        "DivInvMonoid.toDiv",
+        "Real.instDivInvMonoid",
+        "QUBOPreprocessing.spin2Alpha12",
+        "OfNat.ofNat",
+        "instOfNatAtLeastTwo",
+        "Real.instNatCast",
+        "QUBOPreprocessing.spin2Const._proof_1"
+      ],
+      "range": {
+        "start": {
+          "line": 340,
+          "column": 0
+        },
+        "end": {
+          "line": 343,
+          "column": 20
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.spin2J12",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "definition",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
     {
       "unsafe": false,
       "selection": {
@@ -11217,6 +11267,36 @@
     },
     {
       "unsafe": false,
+      "selection": null,
+      "references": [
+        "Nat.AtLeastTwo",
+        "HAdd.hAdd",
+        "Nat",
+        "instHAdd",
+        "instAddNat",
+        "OfNat.ofNat",
+        "instOfNatNat",
+        "Nat.instAtLeastTwoHAddOfNat",
+        "OfNat.ofNat",
+        "Nat",
+        "instOfNatNat",
+        "Nat.instNeZeroSucc"
+      ],
+      "range": null,
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.spin2Const._proof_1",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "theorem",
+      "internal": true,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext"
+      ]
+    },
+    {
+      "unsafe": false,
       "selection": {
         "start": {
           "line": 272,
@@ -11610,6 +11690,255 @@
       "unsafe": false,
       "selection": {
         "start": {
+          "line": 484,
+          "column": 4
+        },
+        "end": {
+          "line": 484,
+          "column": 15
+        }
+      },
+      "references": [
+        "Set",
+        "Prod",
+        "Real",
+        "Set",
+        "Set.ofPred",
+        "Prod",
+        "Real",
+        "And",
+        "QUBOPreprocessing.isSpin",
+        "Prod.fst",
+        "Membership.mem",
+        "Set.instMembership",
+        "Prod.snd"
+      ],
+      "range": {
+        "start": {
+          "line": 483,
+          "column": 0
+        },
+        "end": {
+          "line": 485,
+          "column": 30
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.sep1SpinSet",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "definition",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 258,
+          "column": 8
+        },
+        "end": {
+          "line": 258,
+          "column": 27
+        }
+      },
+      "references": [
+        "Real",
+        "Eq",
+        "QUBOPreprocessing.spin1Const",
+        "HDiv.hDiv",
+        "instHDiv",
+        "DivInvMonoid.toDiv",
+        "Real.instDivInvMonoid",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "Neg.neg",
+        "Real.instNeg",
+        "OfNat.ofNat",
+        "One.toOfNat1",
+        "Real.instOne",
+        "instOfNatAtLeastTwo",
+        "Real.instNatCast",
+        "Nat.instAtLeastTwoHAddOfNat",
+        "Nat",
+        "instOfNatNat",
+        "Nat.instNeZeroSucc",
+        "Real",
+        "id",
+        "Eq",
+        "QUBOPreprocessing.spin1Const",
+        "HDiv.hDiv",
+        "instHDiv",
+        "DivInvMonoid.toDiv",
+        "Real.instDivInvMonoid",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "Neg.neg",
+        "Real.instNeg",
+        "OfNat.ofNat",
+        "One.toOfNat1",
+        "Real.instOne",
+        "instOfNatAtLeastTwo",
+        "Real.instNatCast",
+        "Nat.instAtLeastTwoHAddOfNat",
+        "Nat",
+        "instOfNatNat",
+        "Nat.instNeZeroSucc",
+        "QUBOPreprocessing.spin1Alpha0",
+        "QUBOPreprocessing.spin1Alpha1",
+        "QUBOPreprocessing.spin1Const._proof_1",
+        "Mathlib.Tactic.Ring.of_eq",
+        "HSub.hSub",
+        "instHSub",
+        "Real.instSub",
+        "Distrib.toAdd",
+        "instDistribOfSemiring",
+        "CommSemiring.toSemiring",
+        "Real.instCommSemiring",
+        "HMul.hMul",
+        "instHMul",
+        "Distrib.toMul",
+        "HPow.hPow",
+        "instHPow",
+        "NPow.toPow",
+        "Monoid.toNPow",
+        "Semiring.toMonoid",
+        "Nat.rawCast",
+        "AddCommMonoidWithOne.toAddMonoidWithOne",
+        "NonAssocSemiring.toAddCommMonoidWithOne",
+        "Semiring.toNonAssocSemiring",
+        "Nat.instCommSemiring",
+        "NNRat.rawCast",
+        "DivisionRing.toDivisionSemiring",
+        "Real.instDivisionRing",
+        "Semifield.toDivisionSemiring",
+        "Field.toSemifield",
+        "Real.instField",
+        "Zero.toOfNat0",
+        "MulZeroClass.toZero",
+        "instMulZeroClassOfSemiring",
+        "Mathlib.Tactic.Ring.Common.add_congr",
+        "Rat.rawCast",
+        "Int.negOfNat",
+        "Mathlib.Tactic.Ring.Common.atom_pf",
+        "rfl",
+        "Eq.mpr",
+        "congrArg",
+        "Eq.symm",
+        "Eq.refl",
+        "Mathlib.Tactic.Ring.Common.div_congr",
+        "Int.rawCast",
+        "inferInstance",
+        "Ring",
+        "CommRing.toRing",
+        "Real.commRing",
+        "Mathlib.Tactic.Ring.Common.sub_congr",
+        "Mathlib.Tactic.Ring.Common.sub_pf",
+        "Mathlib.Tactic.Ring.Common.neg_add",
+        "Mathlib.Tactic.Ring.Common.neg_mul",
+        "Mathlib.Meta.NormNum.IsInt.to_raw_eq",
+        "NegZeroClass.toNeg",
+        "SubNegZeroMonoid.toNegZeroClass",
+        "SubtractionMonoid.toSubNegZeroMonoid",
+        "SubtractionCommMonoid.toSubtractionMonoid",
+        "AddCommGroup.toDivisionAddCommMonoid",
+        "Ring.toAddCommGroup",
+        "Mathlib.Meta.NormNum.isInt_neg",
+        "Int.ofNat",
+        "Mathlib.Meta.NormNum.IsNat.to_isInt",
+        "Mathlib.Meta.NormNum.IsNat.of_raw",
+        "Int",
+        "Mathlib.Tactic.Ring.Common.neg_zero",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_gt",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_zero",
+        "Mathlib.Tactic.Ring.cast_pos",
+        "Mathlib.Meta.NormNum.isNat_ofNat",
+        "AddGroupWithOne.toAddMonoidWithOne",
+        "Ring.toAddGroupWithOne",
+        "Real.instRing",
+        "AddMonoidWithOne.toNatCast",
+        "Mathlib.Meta.NormNum.instAtLeastTwo",
+        "Mathlib.Tactic.Ring.Common.div_pf",
+        "Mathlib.Tactic.Ring.Common.inv_single",
+        "Mathlib.Meta.NormNum.IsNNRat.to_raw_eq",
+        "Inv.inv",
+        "InvOneClass.toInv",
+        "DivInvOneMonoid.toInvOneClass",
+        "DivisionMonoid.toDivInvOneMonoid",
+        "GroupWithZero.toDivisionMonoid",
+        "DivisionSemiring.toGroupWithZero",
+        "Mathlib.Meta.NormNum.isNNRat_inv_pos",
+        "FloorSemiring.instCharZero",
+        "Real.semiring",
+        "Real.partialOrder",
+        "FloorRing.toFloorSemiring",
+        "Real.linearOrder",
+        "Real.instFloorRing",
+        "Mathlib.Meta.NormNum.IsNat.to_isNNRat",
+        "DivisionSemiring.toSemiring",
+        "Mathlib.Tactic.Ring.Common.add_mul",
+        "Mathlib.Tactic.Ring.Common.mul_add",
+        "Mathlib.Tactic.Ring.Common.mul_pf_left",
+        "Mathlib.Meta.NormNum.IsRat.to_raw_eq",
+        "Mathlib.Meta.NormNum.isRat_mul",
+        "DivisionRing.toRing",
+        "Mathlib.Meta.NormNum.IsInt.to_isRat",
+        "Mathlib.Meta.NormNum.IsInt.of_raw",
+        "Mathlib.Meta.NormNum.IsNNRat.to_isRat",
+        "Mathlib.Meta.NormNum.IsNNRat.of_raw",
+        "Mathlib.Meta.NormNum.IsNNRat.den_nz",
+        "Int.mul",
+        "Mathlib.Tactic.Ring.Common.mul_zero",
+        "Mathlib.Meta.NormNum.isNNRat_mul",
+        "Nat.mul",
+        "Mathlib.Tactic.Ring.Common.zero_mul",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_lt",
+        "Mathlib.Tactic.Ring.Common.add_pf_zero_add",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_overlap",
+        "Mathlib.Tactic.Ring.Common.add_overlap_pf",
+        "Mathlib.Meta.NormNum.IsRat.to_isNNRat",
+        "Mathlib.Meta.NormNum.isRat_add",
+        "Ring.toSemiring",
+        "Mathlib.Meta.NormNum.IsRat.of_raw",
+        "Mathlib.Meta.NormNum.IsRat.den_nz"
+      ],
+      "range": {
+        "start": {
+          "line": 257,
+          "column": 0
+        },
+        "end": {
+          "line": 261,
+          "column": 6
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.spin1Const_eq_walsh",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
           "line": 34,
           "column": 8
         },
@@ -11807,6 +12136,89 @@
       "name": "QUBOPreprocessing.singleSpinFlipDelta",
       "module": "QUBOPreprocessing.ProbingMargin",
       "kind": "definition",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 646,
+          "column": 8
+        },
+        "end": {
+          "line": 646,
+          "column": 51
+        }
+      },
+      "references": [
+        "Set",
+        "Prod",
+        "Real",
+        "QUBOPreprocessing.isSpin",
+        "Membership.mem",
+        "Set.instMembership",
+        "Eq",
+        "LE.le",
+        "Real.instLE",
+        "QUBOPreprocessing.walshCubic",
+        "OfNat.ofNat",
+        "Zero.toOfNat0",
+        "Real.instZero",
+        "QUBOPreprocessing.ReductionStep",
+        "SProd.sprod",
+        "Set.instSProd",
+        "QUBOPreprocessing.sep3SpinSet",
+        "QUBOPreprocessing.blockFullEnergy",
+        "Prod.fst",
+        "Prod.snd",
+        "QUBOPreprocessing.blockReducedEnergy",
+        "QUBOPreprocessing.walshQuadPoly",
+        "QUBOPreprocessing.reconstruct",
+        "Set",
+        "Prod",
+        "Real",
+        "QUBOPreprocessing.isSpin",
+        "Membership.mem",
+        "Set.instMembership",
+        "Eq",
+        "LE.le",
+        "Real.instLE",
+        "QUBOPreprocessing.walshCubic",
+        "OfNat.ofNat",
+        "Zero.toOfNat0",
+        "Real.instZero",
+        "QUBOPreprocessing.block_elimination_reductionStep",
+        "QUBOPreprocessing.sep3SpinSet",
+        "Prod.fst",
+        "Prod.snd",
+        "QUBOPreprocessing.walshQuadPoly",
+        "And.left",
+        "And",
+        "And.right",
+        "QUBOPreprocessing.walshQuadPoly_eq_of_cubic_zero"
+      ],
+      "range": {
+        "start": {
+          "line": 641,
+          "column": 0
+        },
+        "end": {
+          "line": 669,
+          "column": 34
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.sep3_spin_block_reductionStep_of_cubic_zero",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "theorem",
       "internal": false,
       "implemented_by": null,
       "extern": false,
@@ -12201,6 +12613,198 @@
       "unsafe": false,
       "selection": {
         "start": {
+          "line": 373,
+          "column": 8
+        },
+        "end": {
+          "line": 373,
+          "column": 25
+        }
+      },
+      "references": [
+        "Real",
+        "Eq",
+        "QUBOPreprocessing.spin2J12",
+        "HDiv.hDiv",
+        "instHDiv",
+        "DivInvMonoid.toDiv",
+        "Real.instDivInvMonoid",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "HSub.hSub",
+        "instHSub",
+        "Real.instSub",
+        "Neg.neg",
+        "Real.instNeg",
+        "OfNat.ofNat",
+        "One.toOfNat1",
+        "Real.instOne",
+        "instOfNatAtLeastTwo",
+        "Real.instNatCast",
+        "Nat.instAtLeastTwoHAddOfNat",
+        "Nat",
+        "instOfNatNat",
+        "Nat.instNeZeroSucc",
+        "Real",
+        "id",
+        "Eq",
+        "QUBOPreprocessing.spin2J12",
+        "HDiv.hDiv",
+        "instHDiv",
+        "DivInvMonoid.toDiv",
+        "Real.instDivInvMonoid",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "HSub.hSub",
+        "instHSub",
+        "Real.instSub",
+        "Neg.neg",
+        "Real.instNeg",
+        "OfNat.ofNat",
+        "One.toOfNat1",
+        "Real.instOne",
+        "instOfNatAtLeastTwo",
+        "Real.instNatCast",
+        "Nat.instAtLeastTwoHAddOfNat",
+        "Nat",
+        "instOfNatNat",
+        "Nat.instNeZeroSucc",
+        "QUBOPreprocessing.spin2Alpha12",
+        "QUBOPreprocessing.spin2Const._proof_1",
+        "Mathlib.Tactic.Ring.of_eq",
+        "Distrib.toAdd",
+        "instDistribOfSemiring",
+        "CommSemiring.toSemiring",
+        "Real.instCommSemiring",
+        "HMul.hMul",
+        "instHMul",
+        "Distrib.toMul",
+        "HPow.hPow",
+        "instHPow",
+        "NPow.toPow",
+        "Monoid.toNPow",
+        "Semiring.toMonoid",
+        "Nat.rawCast",
+        "AddCommMonoidWithOne.toAddMonoidWithOne",
+        "NonAssocSemiring.toAddCommMonoidWithOne",
+        "Semiring.toNonAssocSemiring",
+        "Nat.instCommSemiring",
+        "NNRat.rawCast",
+        "Semifield.toDivisionSemiring",
+        "Field.toSemifield",
+        "Real.instField",
+        "Rat.rawCast",
+        "Real.instDivisionRing",
+        "Int.negOfNat",
+        "Zero.toOfNat0",
+        "MulZeroClass.toZero",
+        "instMulZeroClassOfSemiring",
+        "Mathlib.Tactic.Ring.Common.div_congr",
+        "Int.rawCast",
+        "inferInstance",
+        "Ring",
+        "CommRing.toRing",
+        "Real.commRing",
+        "Mathlib.Tactic.Ring.Common.add_congr",
+        "Mathlib.Tactic.Ring.Common.sub_congr",
+        "Mathlib.Tactic.Ring.Common.atom_pf",
+        "rfl",
+        "Eq.mpr",
+        "congrArg",
+        "Eq.symm",
+        "Eq.refl",
+        "Mathlib.Tactic.Ring.Common.sub_pf",
+        "Mathlib.Tactic.Ring.Common.neg_add",
+        "Mathlib.Tactic.Ring.Common.neg_mul",
+        "Mathlib.Meta.NormNum.IsInt.to_raw_eq",
+        "NegZeroClass.toNeg",
+        "SubNegZeroMonoid.toNegZeroClass",
+        "SubtractionMonoid.toSubNegZeroMonoid",
+        "SubtractionCommMonoid.toSubtractionMonoid",
+        "AddCommGroup.toDivisionAddCommMonoid",
+        "Ring.toAddCommGroup",
+        "Mathlib.Meta.NormNum.isInt_neg",
+        "Int.ofNat",
+        "Mathlib.Meta.NormNum.IsNat.to_isInt",
+        "Mathlib.Meta.NormNum.IsNat.of_raw",
+        "Int",
+        "Mathlib.Tactic.Ring.Common.neg_zero",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_lt",
+        "Mathlib.Tactic.Ring.Common.add_pf_zero_add",
+        "Mathlib.Tactic.Ring.cast_pos",
+        "Mathlib.Meta.NormNum.isNat_ofNat",
+        "AddGroupWithOne.toAddMonoidWithOne",
+        "Ring.toAddGroupWithOne",
+        "Real.instRing",
+        "AddMonoidWithOne.toNatCast",
+        "Mathlib.Meta.NormNum.instAtLeastTwo",
+        "Mathlib.Tactic.Ring.Common.div_pf",
+        "Mathlib.Tactic.Ring.Common.inv_single",
+        "Mathlib.Meta.NormNum.IsNNRat.to_raw_eq",
+        "Inv.inv",
+        "InvOneClass.toInv",
+        "DivInvOneMonoid.toInvOneClass",
+        "DivisionMonoid.toDivInvOneMonoid",
+        "GroupWithZero.toDivisionMonoid",
+        "DivisionSemiring.toGroupWithZero",
+        "Mathlib.Meta.NormNum.isNNRat_inv_pos",
+        "FloorSemiring.instCharZero",
+        "Real.semiring",
+        "Real.partialOrder",
+        "FloorRing.toFloorSemiring",
+        "Real.linearOrder",
+        "Real.instFloorRing",
+        "Mathlib.Meta.NormNum.IsNat.to_isNNRat",
+        "DivisionSemiring.toSemiring",
+        "Mathlib.Tactic.Ring.Common.add_mul",
+        "Mathlib.Tactic.Ring.Common.mul_add",
+        "Mathlib.Tactic.Ring.Common.mul_pf_left",
+        "Mathlib.Meta.NormNum.isNNRat_mul",
+        "Mathlib.Meta.NormNum.IsNNRat.of_raw",
+        "Mathlib.Meta.NormNum.IsNNRat.den_nz",
+        "Nat.mul",
+        "Mathlib.Tactic.Ring.Common.mul_zero",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_zero",
+        "Mathlib.Meta.NormNum.IsRat.to_raw_eq",
+        "Mathlib.Meta.NormNum.isRat_mul",
+        "DivisionRing.toRing",
+        "Mathlib.Meta.NormNum.IsInt.to_isRat",
+        "Mathlib.Meta.NormNum.IsInt.of_raw",
+        "Mathlib.Meta.NormNum.IsNNRat.to_isRat",
+        "Int.mul",
+        "Mathlib.Tactic.Ring.Common.zero_mul",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_gt"
+      ],
+      "range": {
+        "start": {
+          "line": 371,
+          "column": 0
+        },
+        "end": {
+          "line": 376,
+          "column": 6
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.spin2J12_eq_walsh",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
           "line": 516,
           "column": 18
         },
@@ -12344,6 +12948,256 @@
       "name": "QUBOPreprocessing.allCascadePreds",
       "module": "QUBOPreprocessing.ProbingMargin",
       "kind": "definition",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 224,
+          "column": 4
+        },
+        "end": {
+          "line": 224,
+          "column": 15
+        }
+      },
+      "references": [
+        "Real",
+        "Real",
+        "HSub.hSub",
+        "instHSub",
+        "Real.instSub",
+        "OfNat.ofNat",
+        "One.toOfNat1",
+        "Real.instOne",
+        "Zero.toOfNat0",
+        "Real.instZero"
+      ],
+      "range": {
+        "start": {
+          "line": 223,
+          "column": 0
+        },
+        "end": {
+          "line": 224,
+          "column": 44
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.bool1Alpha1",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "definition",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 359,
+          "column": 8
+        },
+        "end": {
+          "line": 359,
+          "column": 24
+        }
+      },
+      "references": [
+        "Real",
+        "Eq",
+        "QUBOPreprocessing.spin2H1",
+        "HDiv.hDiv",
+        "instHDiv",
+        "DivInvMonoid.toDiv",
+        "Real.instDivInvMonoid",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "HSub.hSub",
+        "instHSub",
+        "Real.instSub",
+        "Neg.neg",
+        "Real.instNeg",
+        "OfNat.ofNat",
+        "One.toOfNat1",
+        "Real.instOne",
+        "instOfNatAtLeastTwo",
+        "Real.instNatCast",
+        "Nat.instAtLeastTwoHAddOfNat",
+        "Nat",
+        "instOfNatNat",
+        "Nat.instNeZeroSucc",
+        "Real",
+        "id",
+        "Eq",
+        "QUBOPreprocessing.spin2H1",
+        "HDiv.hDiv",
+        "instHDiv",
+        "DivInvMonoid.toDiv",
+        "Real.instDivInvMonoid",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "HSub.hSub",
+        "instHSub",
+        "Real.instSub",
+        "Neg.neg",
+        "Real.instNeg",
+        "OfNat.ofNat",
+        "One.toOfNat1",
+        "Real.instOne",
+        "instOfNatAtLeastTwo",
+        "Real.instNatCast",
+        "Nat.instAtLeastTwoHAddOfNat",
+        "Nat",
+        "instOfNatNat",
+        "Nat.instNeZeroSucc",
+        "QUBOPreprocessing.spin2Alpha1",
+        "QUBOPreprocessing.spin1Const._proof_1",
+        "QUBOPreprocessing.spin2Alpha12",
+        "QUBOPreprocessing.spin2Const._proof_1",
+        "Mathlib.Tactic.Ring.of_eq",
+        "Distrib.toAdd",
+        "instDistribOfSemiring",
+        "CommSemiring.toSemiring",
+        "Real.instCommSemiring",
+        "HMul.hMul",
+        "instHMul",
+        "Distrib.toMul",
+        "HPow.hPow",
+        "instHPow",
+        "NPow.toPow",
+        "Monoid.toNPow",
+        "Semiring.toMonoid",
+        "Nat.rawCast",
+        "AddCommMonoidWithOne.toAddMonoidWithOne",
+        "NonAssocSemiring.toAddCommMonoidWithOne",
+        "Semiring.toNonAssocSemiring",
+        "Nat.instCommSemiring",
+        "NNRat.rawCast",
+        "DivisionRing.toDivisionSemiring",
+        "Real.instDivisionRing",
+        "Rat.rawCast",
+        "Int.negOfNat",
+        "Semifield.toDivisionSemiring",
+        "Field.toSemifield",
+        "Real.instField",
+        "Zero.toOfNat0",
+        "MulZeroClass.toZero",
+        "instMulZeroClassOfSemiring",
+        "Mathlib.Tactic.Ring.Common.add_congr",
+        "Mathlib.Tactic.Ring.Common.div_congr",
+        "Int.rawCast",
+        "inferInstance",
+        "Ring",
+        "CommRing.toRing",
+        "Real.commRing",
+        "Mathlib.Tactic.Ring.Common.sub_congr",
+        "Mathlib.Tactic.Ring.Common.atom_pf",
+        "rfl",
+        "Eq.mpr",
+        "congrArg",
+        "Eq.symm",
+        "Eq.refl",
+        "Mathlib.Tactic.Ring.Common.sub_pf",
+        "Mathlib.Tactic.Ring.Common.neg_add",
+        "Mathlib.Tactic.Ring.Common.neg_mul",
+        "Mathlib.Meta.NormNum.IsInt.to_raw_eq",
+        "NegZeroClass.toNeg",
+        "SubNegZeroMonoid.toNegZeroClass",
+        "SubtractionMonoid.toSubNegZeroMonoid",
+        "SubtractionCommMonoid.toSubtractionMonoid",
+        "AddCommGroup.toDivisionAddCommMonoid",
+        "Ring.toAddCommGroup",
+        "Mathlib.Meta.NormNum.isInt_neg",
+        "Int.ofNat",
+        "Mathlib.Meta.NormNum.IsNat.to_isInt",
+        "Mathlib.Meta.NormNum.IsNat.of_raw",
+        "Int",
+        "Mathlib.Tactic.Ring.Common.neg_zero",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_lt",
+        "Mathlib.Tactic.Ring.Common.add_pf_zero_add",
+        "Mathlib.Tactic.Ring.cast_pos",
+        "Mathlib.Meta.NormNum.isNat_ofNat",
+        "AddGroupWithOne.toAddMonoidWithOne",
+        "Ring.toAddGroupWithOne",
+        "Real.instRing",
+        "AddMonoidWithOne.toNatCast",
+        "Mathlib.Meta.NormNum.instAtLeastTwo",
+        "Mathlib.Tactic.Ring.Common.div_pf",
+        "Mathlib.Tactic.Ring.Common.inv_single",
+        "Mathlib.Meta.NormNum.IsNNRat.to_raw_eq",
+        "Inv.inv",
+        "InvOneClass.toInv",
+        "DivInvOneMonoid.toInvOneClass",
+        "DivisionMonoid.toDivInvOneMonoid",
+        "GroupWithZero.toDivisionMonoid",
+        "DivisionSemiring.toGroupWithZero",
+        "Mathlib.Meta.NormNum.isNNRat_inv_pos",
+        "FloorSemiring.instCharZero",
+        "Real.semiring",
+        "Real.partialOrder",
+        "FloorRing.toFloorSemiring",
+        "Real.linearOrder",
+        "Real.instFloorRing",
+        "Mathlib.Meta.NormNum.IsNat.to_isNNRat",
+        "DivisionSemiring.toSemiring",
+        "Mathlib.Tactic.Ring.Common.add_mul",
+        "Mathlib.Tactic.Ring.Common.mul_add",
+        "Mathlib.Tactic.Ring.Common.mul_pf_left",
+        "Mathlib.Meta.NormNum.isNNRat_mul",
+        "Mathlib.Meta.NormNum.IsNNRat.of_raw",
+        "Mathlib.Meta.NormNum.IsNNRat.den_nz",
+        "Nat.mul",
+        "Mathlib.Tactic.Ring.Common.mul_zero",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_zero",
+        "Mathlib.Meta.NormNum.IsRat.to_raw_eq",
+        "Mathlib.Meta.NormNum.isRat_mul",
+        "DivisionRing.toRing",
+        "Mathlib.Meta.NormNum.IsInt.to_isRat",
+        "Mathlib.Meta.NormNum.IsInt.of_raw",
+        "Mathlib.Meta.NormNum.IsNNRat.to_isRat",
+        "Int.mul",
+        "Mathlib.Tactic.Ring.Common.zero_mul",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_gt",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_overlap",
+        "Mathlib.Tactic.Ring.Common.add_overlap_pf",
+        "Mathlib.Meta.NormNum.IsRat.to_isNNRat",
+        "Mathlib.Meta.NormNum.isRat_add",
+        "Mathlib.Meta.NormNum.IsRat.of_raw",
+        "Mathlib.Meta.NormNum.IsRat.den_nz",
+        "Mathlib.Tactic.Ring.Common.neg_congr"
+      ],
+      "range": {
+        "start": {
+          "line": 357,
+          "column": 0
+        },
+        "end": {
+          "line": 362,
+          "column": 6
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.spin2H1_eq_walsh",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "theorem",
       "internal": false,
       "implemented_by": null,
       "extern": false,
@@ -12521,6 +13375,207 @@
       "partial": false,
       "name": "QUBOPreprocessing.okPat2_refutes_clause2",
       "module": "QUBOPreprocessing.ProbingMargin",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 381,
+          "column": 8
+        },
+        "end": {
+          "line": 381,
+          "column": 24
+        }
+      },
+      "references": [
+        "Real",
+        "QUBOPreprocessing.isSpin",
+        "Eq",
+        "QUBOPreprocessing.spin2QuadPoly",
+        "Real",
+        "QUBOPreprocessing.isSpin",
+        "id",
+        "Eq",
+        "QUBOPreprocessing.spin2QuadPoly",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "QUBOPreprocessing.spin2Const",
+        "HMul.hMul",
+        "instHMul",
+        "Real.instMul",
+        "QUBOPreprocessing.spin2H1",
+        "QUBOPreprocessing.spin2H2",
+        "QUBOPreprocessing.spin2J12",
+        "QUBOPreprocessing.spin2Alpha0",
+        "HDiv.hDiv",
+        "instHDiv",
+        "DivInvMonoid.toDiv",
+        "Real.instDivInvMonoid",
+        "QUBOPreprocessing.spin2Alpha1",
+        "QUBOPreprocessing.spin2Alpha2",
+        "OfNat.ofNat",
+        "instOfNatAtLeastTwo",
+        "Real.instNatCast",
+        "QUBOPreprocessing.spin1Const._proof_1",
+        "QUBOPreprocessing.spin2Alpha12",
+        "QUBOPreprocessing.spin2Const._proof_1",
+        "Neg.neg",
+        "Real.instNeg",
+        "One.toOfNat1",
+        "Real.instOne",
+        "HSub.hSub",
+        "instHSub",
+        "Real.instSub",
+        "Or.casesOn",
+        "Eq.ndrec",
+        "Mathlib.Tactic.Ring.of_eq",
+        "Distrib.toAdd",
+        "instDistribOfSemiring",
+        "CommSemiring.toSemiring",
+        "Real.instCommSemiring",
+        "Distrib.toMul",
+        "HPow.hPow",
+        "Nat",
+        "instHPow",
+        "NPow.toPow",
+        "Monoid.toNPow",
+        "Semiring.toMonoid",
+        "Nat.rawCast",
+        "AddCommMonoidWithOne.toAddMonoidWithOne",
+        "NonAssocSemiring.toAddCommMonoidWithOne",
+        "Semiring.toNonAssocSemiring",
+        "Nat.instCommSemiring",
+        "Mathlib.Meta.NormNum.instAddMonoidWithOne'",
+        "DivisionSemiring.toSemiring",
+        "Semifield.toDivisionSemiring",
+        "Field.toSemifield",
+        "Real.instField",
+        "Zero.toOfNat0",
+        "MulZeroClass.toZero",
+        "instMulZeroClassOfSemiring",
+        "Mathlib.Tactic.Ring.Common.add_congr",
+        "NNRat.rawCast",
+        "DivisionRing.toDivisionSemiring",
+        "Real.instDivisionRing",
+        "Rat.rawCast",
+        "Int.negOfNat",
+        "Int.rawCast",
+        "DivisionRing.toRing",
+        "Mathlib.Tactic.Ring.Common.atom_pf",
+        "rfl",
+        "Eq.mpr",
+        "congrArg",
+        "Eq.symm",
+        "Eq.refl",
+        "Mathlib.Tactic.Ring.Common.div_congr",
+        "inferInstance",
+        "Ring",
+        "CommRing.toRing",
+        "Real.commRing",
+        "Mathlib.Tactic.Ring.Common.sub_congr",
+        "Mathlib.Tactic.Ring.Common.sub_pf",
+        "Mathlib.Tactic.Ring.Common.neg_add",
+        "Mathlib.Tactic.Ring.Common.neg_mul",
+        "Mathlib.Meta.NormNum.IsInt.to_raw_eq",
+        "NegZeroClass.toNeg",
+        "SubNegZeroMonoid.toNegZeroClass",
+        "SubtractionMonoid.toSubNegZeroMonoid",
+        "SubtractionCommMonoid.toSubtractionMonoid",
+        "AddCommGroup.toDivisionAddCommMonoid",
+        "Ring.toAddCommGroup",
+        "Mathlib.Meta.NormNum.isInt_neg",
+        "Int.ofNat",
+        "Mathlib.Meta.NormNum.IsNat.to_isInt",
+        "Mathlib.Meta.NormNum.IsNat.of_raw",
+        "Int",
+        "Mathlib.Tactic.Ring.Common.neg_zero",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_gt",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_zero",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_overlap",
+        "Mathlib.Tactic.Ring.Common.add_overlap_pf",
+        "Mathlib.Meta.NormNum.isInt_add",
+        "Mathlib.Meta.NormNum.IsInt.of_raw",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_lt",
+        "Mathlib.Tactic.Ring.Common.add_pf_zero_add",
+        "Mathlib.Tactic.Ring.cast_pos",
+        "Mathlib.Meta.NormNum.isNat_ofNat",
+        "AddGroupWithOne.toAddMonoidWithOne",
+        "Ring.toAddGroupWithOne",
+        "Real.instRing",
+        "AddMonoidWithOne.toNatCast",
+        "Mathlib.Meta.NormNum.instAtLeastTwo",
+        "Mathlib.Tactic.Ring.Common.div_pf",
+        "Mathlib.Tactic.Ring.Common.inv_single",
+        "Mathlib.Meta.NormNum.IsNNRat.to_raw_eq",
+        "Inv.inv",
+        "InvOneClass.toInv",
+        "DivInvOneMonoid.toInvOneClass",
+        "DivisionMonoid.toDivInvOneMonoid",
+        "GroupWithZero.toDivisionMonoid",
+        "DivisionSemiring.toGroupWithZero",
+        "Mathlib.Meta.NormNum.isNNRat_inv_pos",
+        "FloorSemiring.instCharZero",
+        "Real.semiring",
+        "Real.partialOrder",
+        "FloorRing.toFloorSemiring",
+        "Real.linearOrder",
+        "Real.instFloorRing",
+        "Mathlib.Meta.NormNum.IsNat.to_isNNRat",
+        "Mathlib.Tactic.Ring.Common.add_mul",
+        "Mathlib.Tactic.Ring.Common.mul_add",
+        "Mathlib.Tactic.Ring.Common.mul_pf_left",
+        "Mathlib.Meta.NormNum.IsRat.to_isInt",
+        "Mathlib.Meta.NormNum.isRat_mul",
+        "Mathlib.Meta.NormNum.IsInt.to_isRat",
+        "Mathlib.Meta.NormNum.IsNNRat.to_isRat",
+        "Mathlib.Meta.NormNum.IsNNRat.of_raw",
+        "Mathlib.Meta.NormNum.IsNNRat.den_nz",
+        "Int.mul",
+        "Mathlib.Tactic.Ring.Common.mul_zero",
+        "Mathlib.Meta.NormNum.isNNRat_mul",
+        "Nat.mul",
+        "Mathlib.Tactic.Ring.Common.zero_mul",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_overlap_zero",
+        "Mathlib.Tactic.Ring.Common.add_overlap_pf_zero",
+        "Mathlib.Meta.NormNum.IsInt.to_isNat",
+        "Mathlib.Meta.NormNum.IsRat.to_raw_eq",
+        "Mathlib.Meta.NormNum.IsRat.to_isNNRat",
+        "Mathlib.Meta.NormNum.isRat_add",
+        "Mathlib.Meta.NormNum.IsRat.of_raw",
+        "Mathlib.Meta.NormNum.IsRat.den_nz",
+        "Mathlib.Tactic.Ring.Common.mul_congr",
+        "Mathlib.Tactic.Ring.Common.neg_congr",
+        "Nat.cast_one",
+        "Mathlib.Meta.NormNum.isNNRat_add",
+        "Mathlib.Meta.NormNum.IsNat.to_raw_eq",
+        "Mathlib.Meta.NormNum.IsNNRat.to_isNat",
+        "Ring.toSemiring"
+      ],
+      "range": {
+        "start": {
+          "line": 378,
+          "column": 0
+        },
+        "end": {
+          "line": 386,
+          "column": 66
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.spin2QuadPoly_eq",
+      "module": "QUBOPreprocessing.BlockElimination",
       "kind": "theorem",
       "internal": false,
       "implemented_by": null,
@@ -12859,6 +13914,78 @@
       "partial": false,
       "name": "QUBOPreprocessing.deg3StarMin_cubic_zero_of_heavy_edge3",
       "module": "QUBOPreprocessing.WalshDegree3",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 491,
+          "column": 8
+        },
+        "end": {
+          "line": 491,
+          "column": 37
+        }
+      },
+      "references": [
+        "Set",
+        "Prod",
+        "Real",
+        "QUBOPreprocessing.isSpin",
+        "Membership.mem",
+        "Set.instMembership",
+        "Eq",
+        "LE.le",
+        "Real.instLE",
+        "QUBOPreprocessing.ReductionStep",
+        "SProd.sprod",
+        "Set.instSProd",
+        "QUBOPreprocessing.sep1SpinSet",
+        "QUBOPreprocessing.blockFullEnergy",
+        "Prod.fst",
+        "QUBOPreprocessing.blockReducedEnergy",
+        "QUBOPreprocessing.spin1Poly",
+        "QUBOPreprocessing.reconstruct",
+        "Set",
+        "Prod",
+        "Real",
+        "QUBOPreprocessing.isSpin",
+        "Membership.mem",
+        "Set.instMembership",
+        "Eq",
+        "LE.le",
+        "Real.instLE",
+        "QUBOPreprocessing.block_elimination_reductionStep",
+        "QUBOPreprocessing.sep1SpinSet",
+        "Prod.fst",
+        "QUBOPreprocessing.spin1Poly",
+        "And.left",
+        "Prod.snd",
+        "QUBOPreprocessing.spin1Poly_eq"
+      ],
+      "range": {
+        "start": {
+          "line": 487,
+          "column": 0
+        },
+        "end": {
+          "line": 509,
+          "column": 41
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.sep1_spin_block_reductionStep",
+      "module": "QUBOPreprocessing.BlockElimination",
       "kind": "theorem",
       "internal": false,
       "implemented_by": null,
@@ -13577,6 +14704,96 @@
       "unsafe": false,
       "selection": {
         "start": {
+          "line": 417,
+          "column": 8
+        },
+        "end": {
+          "line": 417,
+          "column": 29
+        }
+      },
+      "references": [
+        "Nat",
+        "Real",
+        "Eq",
+        "Finset.sum",
+        "Fin",
+        "HAdd.hAdd",
+        "instHAdd",
+        "instAddNat",
+        "OfNat.ofNat",
+        "instOfNatNat",
+        "Real.instAddCommMonoid",
+        "Finset.univ",
+        "Fin.fintype",
+        "QUBOPreprocessing.batchStepDelta",
+        "Nat",
+        "Real",
+        "id",
+        "Eq",
+        "Finset.sum",
+        "Fin",
+        "HAdd.hAdd",
+        "instHAdd",
+        "instAddNat",
+        "OfNat.ofNat",
+        "instOfNatNat",
+        "Real.instAddCommMonoid",
+        "Finset.univ",
+        "Fin.fintype",
+        "QUBOPreprocessing.batchStepDelta",
+        "of_eq_true",
+        "ite",
+        "Fin.last",
+        "instDecidableEqFin",
+        "Zero.toOfNat0",
+        "Real.instZero",
+        "Eq.trans",
+        "True",
+        "congrFun'",
+        "congrArg",
+        "AddZero.toZero",
+        "AddZeroClass.toAddZero",
+        "AddMonoid.toAddZeroClass",
+        "AddCommMonoid.toAddMonoid",
+        "Membership.mem",
+        "Finset",
+        "SetLike.instMembership",
+        "Finset.instSetLike",
+        "Finset.decidableMem",
+        "Finset.sum_ite_eq'",
+        "ite_cond_eq_true",
+        "Finset.mem_univ._simp_1",
+        "eq_self"
+      ],
+      "range": {
+        "start": {
+          "line": 414,
+          "column": 0
+        },
+        "end": {
+          "line": 420,
+          "column": 6
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.sum_batchStepDelta_eq",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
           "line": 214,
           "column": 2
         },
@@ -14164,6 +15381,66 @@
       "unsafe": false,
       "selection": {
         "start": {
+          "line": 409,
+          "column": 8
+        },
+        "end": {
+          "line": 409,
+          "column": 27
+        }
+      },
+      "references": [
+        "Nat",
+        "Real",
+        "Eq",
+        "QUBOPreprocessing.batchStepDelta",
+        "Fin.last",
+        "Nat",
+        "Real",
+        "id",
+        "Eq",
+        "QUBOPreprocessing.batchStepDelta",
+        "Fin.last",
+        "if_pos",
+        "Fin",
+        "HAdd.hAdd",
+        "instHAdd",
+        "instAddNat",
+        "OfNat.ofNat",
+        "instOfNatNat",
+        "instDecidableEqFin",
+        "rfl",
+        "Zero.toOfNat0",
+        "Real.instZero"
+      ],
+      "range": {
+        "start": {
+          "line": 407,
+          "column": 0
+        },
+        "end": {
+          "line": 412,
+          "column": 18
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.batchStepDelta_last",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
           "line": 343,
           "column": 8
         },
@@ -14488,6 +15765,201 @@
     },
     {
       "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 271,
+          "column": 8
+        },
+        "end": {
+          "line": 271,
+          "column": 20
+        }
+      },
+      "references": [
+        "Real",
+        "QUBOPreprocessing.isSpin",
+        "Eq",
+        "QUBOPreprocessing.spin1Poly",
+        "Real",
+        "QUBOPreprocessing.isSpin",
+        "id",
+        "Eq",
+        "QUBOPreprocessing.spin1Poly",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "QUBOPreprocessing.spin1Const",
+        "HMul.hMul",
+        "instHMul",
+        "Real.instMul",
+        "QUBOPreprocessing.spin1Field",
+        "QUBOPreprocessing.spin1Alpha0",
+        "HDiv.hDiv",
+        "instHDiv",
+        "DivInvMonoid.toDiv",
+        "Real.instDivInvMonoid",
+        "QUBOPreprocessing.spin1Alpha1",
+        "OfNat.ofNat",
+        "instOfNatAtLeastTwo",
+        "Real.instNatCast",
+        "QUBOPreprocessing.spin1Const._proof_1",
+        "Neg.neg",
+        "Real.instNeg",
+        "One.toOfNat1",
+        "Real.instOne",
+        "Or.casesOn",
+        "HSub.hSub",
+        "instHSub",
+        "Real.instSub",
+        "Eq.ndrec",
+        "Mathlib.Tactic.Ring.of_eq",
+        "Distrib.toAdd",
+        "instDistribOfSemiring",
+        "CommSemiring.toSemiring",
+        "Real.instCommSemiring",
+        "Distrib.toMul",
+        "HPow.hPow",
+        "Nat",
+        "instHPow",
+        "NPow.toPow",
+        "Monoid.toNPow",
+        "Semiring.toMonoid",
+        "Nat.rawCast",
+        "AddCommMonoidWithOne.toAddMonoidWithOne",
+        "NonAssocSemiring.toAddCommMonoidWithOne",
+        "Semiring.toNonAssocSemiring",
+        "Nat.instCommSemiring",
+        "Mathlib.Meta.NormNum.instAddMonoidWithOne'",
+        "DivisionSemiring.toSemiring",
+        "DivisionRing.toDivisionSemiring",
+        "Real.instDivisionRing",
+        "Zero.toOfNat0",
+        "MulZeroClass.toZero",
+        "instMulZeroClassOfSemiring",
+        "Mathlib.Tactic.Ring.Common.add_congr",
+        "NNRat.rawCast",
+        "Semifield.toDivisionSemiring",
+        "Field.toSemifield",
+        "Real.instField",
+        "Rat.rawCast",
+        "Int.negOfNat",
+        "Mathlib.Tactic.Ring.Common.atom_pf",
+        "rfl",
+        "Eq.mpr",
+        "congrArg",
+        "Eq.symm",
+        "Eq.refl",
+        "Mathlib.Tactic.Ring.Common.div_congr",
+        "Int.rawCast",
+        "inferInstance",
+        "Ring",
+        "CommRing.toRing",
+        "Real.commRing",
+        "Mathlib.Tactic.Ring.Common.sub_congr",
+        "Mathlib.Tactic.Ring.Common.sub_pf",
+        "Mathlib.Tactic.Ring.Common.neg_add",
+        "Mathlib.Tactic.Ring.Common.neg_mul",
+        "Mathlib.Meta.NormNum.IsInt.to_raw_eq",
+        "NegZeroClass.toNeg",
+        "SubNegZeroMonoid.toNegZeroClass",
+        "SubtractionMonoid.toSubNegZeroMonoid",
+        "SubtractionCommMonoid.toSubtractionMonoid",
+        "AddCommGroup.toDivisionAddCommMonoid",
+        "Ring.toAddCommGroup",
+        "Mathlib.Meta.NormNum.isInt_neg",
+        "Int.ofNat",
+        "Mathlib.Meta.NormNum.IsNat.to_isInt",
+        "Mathlib.Meta.NormNum.IsNat.of_raw",
+        "Int",
+        "Mathlib.Tactic.Ring.Common.neg_zero",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_gt",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_zero",
+        "Mathlib.Tactic.Ring.cast_pos",
+        "Mathlib.Meta.NormNum.isNat_ofNat",
+        "AddGroupWithOne.toAddMonoidWithOne",
+        "Ring.toAddGroupWithOne",
+        "Real.instRing",
+        "AddMonoidWithOne.toNatCast",
+        "Mathlib.Meta.NormNum.instAtLeastTwo",
+        "Mathlib.Tactic.Ring.Common.div_pf",
+        "Mathlib.Tactic.Ring.Common.inv_single",
+        "Mathlib.Meta.NormNum.IsNNRat.to_raw_eq",
+        "Inv.inv",
+        "InvOneClass.toInv",
+        "DivInvOneMonoid.toInvOneClass",
+        "DivisionMonoid.toDivInvOneMonoid",
+        "GroupWithZero.toDivisionMonoid",
+        "DivisionSemiring.toGroupWithZero",
+        "Mathlib.Meta.NormNum.isNNRat_inv_pos",
+        "FloorSemiring.instCharZero",
+        "Real.semiring",
+        "Real.partialOrder",
+        "FloorRing.toFloorSemiring",
+        "Real.linearOrder",
+        "Real.instFloorRing",
+        "Mathlib.Meta.NormNum.IsNat.to_isNNRat",
+        "Mathlib.Tactic.Ring.Common.add_mul",
+        "Mathlib.Tactic.Ring.Common.mul_add",
+        "Mathlib.Tactic.Ring.Common.mul_pf_left",
+        "Mathlib.Meta.NormNum.IsRat.to_raw_eq",
+        "Mathlib.Meta.NormNum.isRat_mul",
+        "DivisionRing.toRing",
+        "Mathlib.Meta.NormNum.IsInt.to_isRat",
+        "Mathlib.Meta.NormNum.IsInt.of_raw",
+        "Mathlib.Meta.NormNum.IsNNRat.to_isRat",
+        "Mathlib.Meta.NormNum.IsNNRat.of_raw",
+        "Mathlib.Meta.NormNum.IsNNRat.den_nz",
+        "Int.mul",
+        "Mathlib.Tactic.Ring.Common.mul_zero",
+        "Mathlib.Meta.NormNum.isNNRat_mul",
+        "Nat.mul",
+        "Mathlib.Tactic.Ring.Common.zero_mul",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_lt",
+        "Mathlib.Tactic.Ring.Common.add_pf_zero_add",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_overlap",
+        "Mathlib.Tactic.Ring.Common.add_overlap_pf",
+        "Mathlib.Meta.NormNum.IsRat.to_isNNRat",
+        "Mathlib.Meta.NormNum.isRat_add",
+        "Ring.toSemiring",
+        "Mathlib.Meta.NormNum.IsRat.of_raw",
+        "Mathlib.Meta.NormNum.IsRat.den_nz",
+        "Mathlib.Tactic.Ring.Common.mul_congr",
+        "Mathlib.Tactic.Ring.Common.neg_congr",
+        "Nat.cast_one",
+        "Mathlib.Meta.NormNum.IsNat.to_raw_eq",
+        "Mathlib.Meta.NormNum.IsNNRat.to_isNat",
+        "Mathlib.Meta.NormNum.isNNRat_add",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_overlap_zero",
+        "Mathlib.Tactic.Ring.Common.add_overlap_pf_zero",
+        "Mathlib.Meta.NormNum.IsInt.to_isNat",
+        "Mathlib.Meta.NormNum.IsRat.to_isInt"
+      ],
+      "range": {
+        "start": {
+          "line": 269,
+          "column": 0
+        },
+        "end": {
+          "line": 274,
+          "column": 36
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.spin1Poly_eq",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
       "selection": null,
       "references": [
         "List",
@@ -14635,6 +16107,134 @@
       "partial": false,
       "name": "QUBOPreprocessing.double_probe_strong_image_global_min_eq",
       "module": "QUBOPreprocessing.ProbingMargin",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 332,
+          "column": 18
+        },
+        "end": {
+          "line": 332,
+          "column": 25
+        }
+      },
+      "references": [
+        "Real",
+        "Real",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "HDiv.hDiv",
+        "instHDiv",
+        "DivInvMonoid.toDiv",
+        "Real.instDivInvMonoid",
+        "QUBOPreprocessing.spin2Alpha1",
+        "OfNat.ofNat",
+        "instOfNatAtLeastTwo",
+        "Real.instNatCast",
+        "QUBOPreprocessing.spin1Const._proof_1",
+        "QUBOPreprocessing.spin2Alpha12",
+        "QUBOPreprocessing.spin2Const._proof_1"
+      ],
+      "range": {
+        "start": {
+          "line": 330,
+          "column": 0
+        },
+        "end": {
+          "line": 333,
+          "column": 40
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.spin2H1",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "definition",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 401,
+          "column": 8
+        },
+        "end": {
+          "line": 401,
+          "column": 30
+        }
+      },
+      "references": [
+        "Nat",
+        "Real",
+        "Fin",
+        "HAdd.hAdd",
+        "instHAdd",
+        "instAddNat",
+        "OfNat.ofNat",
+        "instOfNatNat",
+        "LT.lt",
+        "instLTFin",
+        "Fin.last",
+        "Eq",
+        "QUBOPreprocessing.batchStepDelta",
+        "Zero.toOfNat0",
+        "Real.instZero",
+        "Nat",
+        "Real",
+        "Fin",
+        "HAdd.hAdd",
+        "instHAdd",
+        "instAddNat",
+        "OfNat.ofNat",
+        "instOfNatNat",
+        "LT.lt",
+        "instLTFin",
+        "Fin.last",
+        "id",
+        "Eq",
+        "QUBOPreprocessing.batchStepDelta",
+        "Zero.toOfNat0",
+        "Real.instZero",
+        "if_neg",
+        "instDecidableEqFin",
+        "ne_of_lt",
+        "PartialOrder.toPreorder",
+        "Fin.instPartialOrder"
+      ],
+      "range": {
+        "start": {
+          "line": 399,
+          "column": 0
+        },
+        "end": {
+          "line": 405,
+          "column": 28
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.batchStepDelta_lt_last",
+      "module": "QUBOPreprocessing.BlockElimination",
       "kind": "theorem",
       "internal": false,
       "implemented_by": null,
@@ -15053,6 +16653,57 @@
       "module": "QUBOPreprocessing.ProbingMargin",
       "kind": "definition",
       "internal": true,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 638,
+          "column": 4
+        },
+        "end": {
+          "line": 638,
+          "column": 15
+        }
+      },
+      "references": [
+        "Set",
+        "Prod",
+        "Real",
+        "Set",
+        "Set.ofPred",
+        "Prod",
+        "Real",
+        "And",
+        "QUBOPreprocessing.isSpin",
+        "Prod.fst",
+        "Prod.snd",
+        "Membership.mem",
+        "Set.instMembership"
+      ],
+      "range": {
+        "start": {
+          "line": 636,
+          "column": 0
+        },
+        "end": {
+          "line": 639,
+          "column": 66
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.sep3SpinSet",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "definition",
+      "internal": false,
       "implemented_by": null,
       "extern": false,
       "axioms": [
@@ -18708,6 +20359,85 @@
       "unsafe": false,
       "selection": {
         "start": {
+          "line": 595,
+          "column": 8
+        },
+        "end": {
+          "line": 595,
+          "column": 44
+        }
+      },
+      "references": [
+        "Set",
+        "Prod",
+        "Real",
+        "QUBOPreprocessing.isSpin",
+        "Membership.mem",
+        "Set.instMembership",
+        "Eq",
+        "LE.le",
+        "Real.instLE",
+        "QUBOPreprocessing.IsGlobalMin",
+        "QUBOPreprocessing.sep2SpinSet",
+        "QUBOPreprocessing.blockReducedEnergy",
+        "QUBOPreprocessing.spin2QuadPoly",
+        "Prod.fst",
+        "Prod.snd",
+        "And",
+        "SProd.sprod",
+        "Set.instSProd",
+        "QUBOPreprocessing.blockFullEnergy",
+        "QUBOPreprocessing.reconstruct",
+        "Set",
+        "Prod",
+        "Real",
+        "QUBOPreprocessing.isSpin",
+        "Membership.mem",
+        "Set.instMembership",
+        "Eq",
+        "LE.le",
+        "Real.instLE",
+        "QUBOPreprocessing.IsGlobalMin",
+        "QUBOPreprocessing.sep2SpinSet",
+        "QUBOPreprocessing.blockReducedEnergy",
+        "QUBOPreprocessing.spin2QuadPoly",
+        "Prod.fst",
+        "Prod.snd",
+        "QUBOPreprocessing.ReductionStep.preserves_global_min",
+        "SProd.sprod",
+        "Set.instSProd",
+        "QUBOPreprocessing.blockFullEnergy",
+        "QUBOPreprocessing.reconstruct",
+        "QUBOPreprocessing.sep2_spin_block_reductionStep"
+      ],
+      "range": {
+        "start": {
+          "line": 592,
+          "column": 0
+        },
+        "end": {
+          "line": 612,
+          "column": 50
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.sep2_spin_block_preserves_global_min",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
           "line": 74,
           "column": 8
         },
@@ -18904,6 +20634,56 @@
       "name": "QUBOPreprocessing.min_max_nonneg_frustrated",
       "module": "QUBOPreprocessing.MaxCutTriangle",
       "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 295,
+          "column": 4
+        },
+        "end": {
+          "line": 295,
+          "column": 17
+        }
+      },
+      "references": [
+        "Real",
+        "Real",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "QUBOPreprocessing.bool2Alpha0",
+        "HMul.hMul",
+        "instHMul",
+        "Real.instMul",
+        "QUBOPreprocessing.bool2Alpha1",
+        "QUBOPreprocessing.bool2Alpha2",
+        "QUBOPreprocessing.bool2Alpha12"
+      ],
+      "range": {
+        "start": {
+          "line": 293,
+          "column": 0
+        },
+        "end": {
+          "line": 296,
+          "column": 84
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.bool2QuadPoly",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "definition",
       "internal": false,
       "implemented_by": null,
       "extern": false,
@@ -19809,6 +21589,280 @@
       "unsafe": false,
       "selection": {
         "start": {
+          "line": 352,
+          "column": 8
+        },
+        "end": {
+          "line": 352,
+          "column": 27
+        }
+      },
+      "references": [
+        "Real",
+        "Eq",
+        "QUBOPreprocessing.spin2Const",
+        "HDiv.hDiv",
+        "instHDiv",
+        "DivInvMonoid.toDiv",
+        "Real.instDivInvMonoid",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "Neg.neg",
+        "Real.instNeg",
+        "OfNat.ofNat",
+        "One.toOfNat1",
+        "Real.instOne",
+        "instOfNatAtLeastTwo",
+        "Real.instNatCast",
+        "Nat.instAtLeastTwoHAddOfNat",
+        "Nat",
+        "instOfNatNat",
+        "Nat.instNeZeroSucc",
+        "Real",
+        "id",
+        "Eq",
+        "QUBOPreprocessing.spin2Const",
+        "HDiv.hDiv",
+        "instHDiv",
+        "DivInvMonoid.toDiv",
+        "Real.instDivInvMonoid",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "Neg.neg",
+        "Real.instNeg",
+        "OfNat.ofNat",
+        "One.toOfNat1",
+        "Real.instOne",
+        "instOfNatAtLeastTwo",
+        "Real.instNatCast",
+        "Nat.instAtLeastTwoHAddOfNat",
+        "Nat",
+        "instOfNatNat",
+        "Nat.instNeZeroSucc",
+        "QUBOPreprocessing.spin2Alpha0",
+        "QUBOPreprocessing.spin2Alpha1",
+        "QUBOPreprocessing.spin2Alpha2",
+        "QUBOPreprocessing.spin1Const._proof_1",
+        "QUBOPreprocessing.spin2Alpha12",
+        "QUBOPreprocessing.spin2Const._proof_1",
+        "HSub.hSub",
+        "instHSub",
+        "Real.instSub",
+        "Mathlib.Tactic.Ring.of_eq",
+        "Distrib.toAdd",
+        "instDistribOfSemiring",
+        "CommSemiring.toSemiring",
+        "Real.instCommSemiring",
+        "HMul.hMul",
+        "instHMul",
+        "Distrib.toMul",
+        "HPow.hPow",
+        "instHPow",
+        "NPow.toPow",
+        "Monoid.toNPow",
+        "Semiring.toMonoid",
+        "Nat.rawCast",
+        "AddCommMonoidWithOne.toAddMonoidWithOne",
+        "NonAssocSemiring.toAddCommMonoidWithOne",
+        "Semiring.toNonAssocSemiring",
+        "Nat.instCommSemiring",
+        "NNRat.rawCast",
+        "Semifield.toDivisionSemiring",
+        "Field.toSemifield",
+        "Real.instField",
+        "DivisionRing.toDivisionSemiring",
+        "Real.instDivisionRing",
+        "Zero.toOfNat0",
+        "MulZeroClass.toZero",
+        "instMulZeroClassOfSemiring",
+        "Mathlib.Tactic.Ring.Common.add_congr",
+        "Rat.rawCast",
+        "Int.negOfNat",
+        "Int.rawCast",
+        "DivisionRing.toRing",
+        "Mathlib.Tactic.Ring.Common.atom_pf",
+        "rfl",
+        "Eq.mpr",
+        "congrArg",
+        "Eq.symm",
+        "Eq.refl",
+        "Mathlib.Tactic.Ring.Common.div_congr",
+        "inferInstance",
+        "Ring",
+        "CommRing.toRing",
+        "Real.commRing",
+        "Mathlib.Tactic.Ring.Common.sub_congr",
+        "Mathlib.Tactic.Ring.Common.sub_pf",
+        "Mathlib.Tactic.Ring.Common.neg_add",
+        "Mathlib.Tactic.Ring.Common.neg_mul",
+        "Mathlib.Meta.NormNum.IsInt.to_raw_eq",
+        "NegZeroClass.toNeg",
+        "SubNegZeroMonoid.toNegZeroClass",
+        "SubtractionMonoid.toSubNegZeroMonoid",
+        "SubtractionCommMonoid.toSubtractionMonoid",
+        "AddCommGroup.toDivisionAddCommMonoid",
+        "Ring.toAddCommGroup",
+        "Mathlib.Meta.NormNum.isInt_neg",
+        "Int.ofNat",
+        "Mathlib.Meta.NormNum.IsNat.to_isInt",
+        "Mathlib.Meta.NormNum.IsNat.of_raw",
+        "Int",
+        "Mathlib.Tactic.Ring.Common.neg_zero",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_gt",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_zero",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_overlap",
+        "Mathlib.Tactic.Ring.Common.add_overlap_pf",
+        "Mathlib.Meta.NormNum.isInt_add",
+        "Mathlib.Meta.NormNum.IsInt.of_raw",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_lt",
+        "Mathlib.Tactic.Ring.Common.add_pf_zero_add",
+        "Mathlib.Tactic.Ring.cast_pos",
+        "Mathlib.Meta.NormNum.isNat_ofNat",
+        "AddGroupWithOne.toAddMonoidWithOne",
+        "Ring.toAddGroupWithOne",
+        "Real.instRing",
+        "AddMonoidWithOne.toNatCast",
+        "Mathlib.Meta.NormNum.instAtLeastTwo",
+        "Mathlib.Tactic.Ring.Common.div_pf",
+        "Mathlib.Tactic.Ring.Common.inv_single",
+        "Mathlib.Meta.NormNum.IsNNRat.to_raw_eq",
+        "Inv.inv",
+        "InvOneClass.toInv",
+        "DivInvOneMonoid.toInvOneClass",
+        "DivisionMonoid.toDivInvOneMonoid",
+        "GroupWithZero.toDivisionMonoid",
+        "DivisionSemiring.toGroupWithZero",
+        "Mathlib.Meta.NormNum.isNNRat_inv_pos",
+        "FloorSemiring.instCharZero",
+        "Real.semiring",
+        "Real.partialOrder",
+        "FloorRing.toFloorSemiring",
+        "Real.linearOrder",
+        "Real.instFloorRing",
+        "Mathlib.Meta.NormNum.IsNat.to_isNNRat",
+        "DivisionSemiring.toSemiring",
+        "Mathlib.Tactic.Ring.Common.add_mul",
+        "Mathlib.Tactic.Ring.Common.mul_add",
+        "Mathlib.Tactic.Ring.Common.mul_pf_left",
+        "Mathlib.Meta.NormNum.IsRat.to_isInt",
+        "Mathlib.Meta.NormNum.isRat_mul",
+        "Mathlib.Meta.NormNum.IsInt.to_isRat",
+        "Mathlib.Meta.NormNum.IsNNRat.to_isRat",
+        "Mathlib.Meta.NormNum.IsNNRat.of_raw",
+        "Mathlib.Meta.NormNum.IsNNRat.den_nz",
+        "Int.mul",
+        "Mathlib.Tactic.Ring.Common.mul_zero",
+        "Mathlib.Meta.NormNum.isNNRat_mul",
+        "Nat.mul",
+        "Mathlib.Tactic.Ring.Common.zero_mul",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_overlap_zero",
+        "Mathlib.Tactic.Ring.Common.add_overlap_pf_zero",
+        "Mathlib.Meta.NormNum.IsInt.to_isNat",
+        "Mathlib.Meta.NormNum.IsRat.to_raw_eq",
+        "Mathlib.Meta.NormNum.IsRat.to_isNNRat",
+        "Mathlib.Meta.NormNum.isRat_add",
+        "Mathlib.Meta.NormNum.IsRat.of_raw",
+        "Mathlib.Meta.NormNum.IsRat.den_nz"
+      ],
+      "range": {
+        "start": {
+          "line": 350,
+          "column": 0
+        },
+        "end": {
+          "line": 355,
+          "column": 6
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.spin2Const_eq_walsh",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 468,
+          "column": 8
+        },
+        "end": {
+          "line": 468,
+          "column": 38
+        }
+      },
+      "references": [
+        "Set",
+        "Real",
+        "Membership.mem",
+        "Set.instMembership",
+        "Eq",
+        "LE.le",
+        "Real.instLE",
+        "Ne",
+        "LT.lt",
+        "Real.instLT",
+        "QUBOPreprocessing.StrongReductionStep",
+        "Prod",
+        "SProd.sprod",
+        "Set.instSProd",
+        "QUBOPreprocessing.blockFullEnergy",
+        "QUBOPreprocessing.blockReducedEnergy",
+        "QUBOPreprocessing.interp0Poly",
+        "QUBOPreprocessing.reconstruct",
+        "Set",
+        "Real",
+        "Membership.mem",
+        "Set.instMembership",
+        "Eq",
+        "LE.le",
+        "Real.instLE",
+        "Ne",
+        "LT.lt",
+        "Real.instLT",
+        "QUBOPreprocessing.block_elimination_strongReductionStep",
+        "QUBOPreprocessing.interp0Poly",
+        "rfl"
+      ],
+      "range": {
+        "start": {
+          "line": 467,
+          "column": 0
+        },
+        "end": {
+          "line": 481,
+          "column": 43
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.sep0_block_strongReductionStep",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
           "line": 748,
           "column": 8
         },
@@ -20032,6 +22086,99 @@
       "unsafe": false,
       "selection": {
         "start": {
+          "line": 430,
+          "column": 8
+        },
+        "end": {
+          "line": 430,
+          "column": 29
+        }
+      },
+      "references": [
+        "Nat",
+        "Fin",
+        "Eq",
+        "QUBOPreprocessing.coordBlockTable",
+        "Nat",
+        "Fin",
+        "rfl",
+        "QUBOPreprocessing.coordBlockTable"
+      ],
+      "range": {
+        "start": {
+          "line": 428,
+          "column": 0
+        },
+        "end": {
+          "line": 432,
+          "column": 50
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.coordBlockTable_apply",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": []
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 537,
+          "column": 4
+        },
+        "end": {
+          "line": 537,
+          "column": 15
+        }
+      },
+      "references": [
+        "Set",
+        "Prod",
+        "Real",
+        "Set",
+        "Set.ofPred",
+        "Prod",
+        "Real",
+        "And",
+        "QUBOPreprocessing.isSpin",
+        "Prod.fst",
+        "Prod.snd",
+        "Membership.mem",
+        "Set.instMembership"
+      ],
+      "range": {
+        "start": {
+          "line": 535,
+          "column": 0
+        },
+        "end": {
+          "line": 538,
+          "column": 47
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.sep2SpinSet",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "definition",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
           "line": 28,
           "column": 4
         },
@@ -20185,6 +22332,50 @@
       "partial": false,
       "name": "QUBOPreprocessing.probing_pair_strong_image_global_min_eq",
       "module": "QUBOPreprocessing.ProbingMargin",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 218,
+          "column": 8
+        },
+        "end": {
+          "line": 218,
+          "column": 22
+        }
+      },
+      "references": [
+        "Real",
+        "Eq",
+        "QUBOPreprocessing.interp0Poly",
+        "Real",
+        "rfl",
+        "QUBOPreprocessing.interp0Poly"
+      ],
+      "range": {
+        "start": {
+          "line": 217,
+          "column": 0
+        },
+        "end": {
+          "line": 218,
+          "column": 60
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.interp0Poly_eq",
+      "module": "QUBOPreprocessing.BlockElimination",
       "kind": "theorem",
       "internal": false,
       "implemented_by": null,
@@ -20411,6 +22602,243 @@
       "partial": false,
       "name": "QUBOPreprocessing.coercive_pos_strictly_favors_neg_one",
       "module": "QUBOPreprocessing.GaugeCoercive",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 321,
+          "column": 4
+        },
+        "end": {
+          "line": 321,
+          "column": 16
+        }
+      },
+      "references": [
+        "Real",
+        "Real",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "HSub.hSub",
+        "instHSub",
+        "Real.instSub",
+        "OfNat.ofNat",
+        "One.toOfNat1",
+        "Real.instOne",
+        "Neg.neg",
+        "Real.instNeg"
+      ],
+      "range": {
+        "start": {
+          "line": 318,
+          "column": 0
+        },
+        "end": {
+          "line": 322,
+          "column": 43
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.spin2Alpha12",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "definition",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 264,
+          "column": 8
+        },
+        "end": {
+          "line": 264,
+          "column": 27
+        }
+      },
+      "references": [
+        "Real",
+        "Eq",
+        "QUBOPreprocessing.spin1Field",
+        "HDiv.hDiv",
+        "instHDiv",
+        "DivInvMonoid.toDiv",
+        "Real.instDivInvMonoid",
+        "HSub.hSub",
+        "instHSub",
+        "Real.instSub",
+        "OfNat.ofNat",
+        "One.toOfNat1",
+        "Real.instOne",
+        "Neg.neg",
+        "Real.instNeg",
+        "instOfNatAtLeastTwo",
+        "Real.instNatCast",
+        "Nat.instAtLeastTwoHAddOfNat",
+        "Nat",
+        "instOfNatNat",
+        "Nat.instNeZeroSucc",
+        "Real",
+        "id",
+        "Eq",
+        "QUBOPreprocessing.spin1Field",
+        "HDiv.hDiv",
+        "instHDiv",
+        "DivInvMonoid.toDiv",
+        "Real.instDivInvMonoid",
+        "HSub.hSub",
+        "instHSub",
+        "Real.instSub",
+        "OfNat.ofNat",
+        "One.toOfNat1",
+        "Real.instOne",
+        "Neg.neg",
+        "Real.instNeg",
+        "instOfNatAtLeastTwo",
+        "Real.instNatCast",
+        "Nat.instAtLeastTwoHAddOfNat",
+        "Nat",
+        "instOfNatNat",
+        "Nat.instNeZeroSucc",
+        "QUBOPreprocessing.spin1Alpha1",
+        "QUBOPreprocessing.spin1Const._proof_1",
+        "Mathlib.Tactic.Ring.of_eq",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Distrib.toAdd",
+        "instDistribOfSemiring",
+        "CommSemiring.toSemiring",
+        "Real.instCommSemiring",
+        "HMul.hMul",
+        "instHMul",
+        "Distrib.toMul",
+        "HPow.hPow",
+        "instHPow",
+        "NPow.toPow",
+        "Monoid.toNPow",
+        "Semiring.toMonoid",
+        "Nat.rawCast",
+        "AddCommMonoidWithOne.toAddMonoidWithOne",
+        "NonAssocSemiring.toAddCommMonoidWithOne",
+        "Semiring.toNonAssocSemiring",
+        "Nat.instCommSemiring",
+        "NNRat.rawCast",
+        "Semifield.toDivisionSemiring",
+        "Field.toSemifield",
+        "Real.instField",
+        "Rat.rawCast",
+        "Real.instDivisionRing",
+        "Int.negOfNat",
+        "Zero.toOfNat0",
+        "MulZeroClass.toZero",
+        "instMulZeroClassOfSemiring",
+        "Mathlib.Tactic.Ring.Common.div_congr",
+        "Int.rawCast",
+        "inferInstance",
+        "Ring",
+        "CommRing.toRing",
+        "Real.commRing",
+        "Mathlib.Tactic.Ring.Common.sub_congr",
+        "Mathlib.Tactic.Ring.Common.atom_pf",
+        "rfl",
+        "Eq.mpr",
+        "congrArg",
+        "Eq.symm",
+        "Eq.refl",
+        "Mathlib.Tactic.Ring.Common.sub_pf",
+        "Mathlib.Tactic.Ring.Common.neg_add",
+        "Mathlib.Tactic.Ring.Common.neg_mul",
+        "Mathlib.Meta.NormNum.IsInt.to_raw_eq",
+        "NegZeroClass.toNeg",
+        "SubNegZeroMonoid.toNegZeroClass",
+        "SubtractionMonoid.toSubNegZeroMonoid",
+        "SubtractionCommMonoid.toSubtractionMonoid",
+        "AddCommGroup.toDivisionAddCommMonoid",
+        "Ring.toAddCommGroup",
+        "Mathlib.Meta.NormNum.isInt_neg",
+        "Int.ofNat",
+        "Mathlib.Meta.NormNum.IsNat.to_isInt",
+        "Mathlib.Meta.NormNum.IsNat.of_raw",
+        "Int",
+        "Mathlib.Tactic.Ring.Common.neg_zero",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_lt",
+        "Mathlib.Tactic.Ring.Common.add_pf_zero_add",
+        "Mathlib.Tactic.Ring.cast_pos",
+        "Mathlib.Meta.NormNum.isNat_ofNat",
+        "AddGroupWithOne.toAddMonoidWithOne",
+        "Ring.toAddGroupWithOne",
+        "Real.instRing",
+        "AddMonoidWithOne.toNatCast",
+        "Mathlib.Meta.NormNum.instAtLeastTwo",
+        "Mathlib.Tactic.Ring.Common.div_pf",
+        "Mathlib.Tactic.Ring.Common.inv_single",
+        "Mathlib.Meta.NormNum.IsNNRat.to_raw_eq",
+        "Inv.inv",
+        "InvOneClass.toInv",
+        "DivInvOneMonoid.toInvOneClass",
+        "DivisionMonoid.toDivInvOneMonoid",
+        "GroupWithZero.toDivisionMonoid",
+        "DivisionSemiring.toGroupWithZero",
+        "Mathlib.Meta.NormNum.isNNRat_inv_pos",
+        "FloorSemiring.instCharZero",
+        "Real.semiring",
+        "Real.partialOrder",
+        "FloorRing.toFloorSemiring",
+        "Real.linearOrder",
+        "Real.instFloorRing",
+        "Mathlib.Meta.NormNum.IsNat.to_isNNRat",
+        "DivisionSemiring.toSemiring",
+        "Mathlib.Tactic.Ring.Common.add_mul",
+        "Mathlib.Tactic.Ring.Common.mul_add",
+        "Mathlib.Tactic.Ring.Common.mul_pf_left",
+        "Mathlib.Meta.NormNum.isNNRat_mul",
+        "Mathlib.Meta.NormNum.IsNNRat.of_raw",
+        "Mathlib.Meta.NormNum.IsNNRat.den_nz",
+        "Nat.mul",
+        "Mathlib.Tactic.Ring.Common.mul_zero",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_zero",
+        "Mathlib.Meta.NormNum.IsRat.to_raw_eq",
+        "Mathlib.Meta.NormNum.isRat_mul",
+        "DivisionRing.toRing",
+        "Mathlib.Meta.NormNum.IsInt.to_isRat",
+        "Mathlib.Meta.NormNum.IsInt.of_raw",
+        "Mathlib.Meta.NormNum.IsNNRat.to_isRat",
+        "Int.mul",
+        "Mathlib.Tactic.Ring.Common.zero_mul"
+      ],
+      "range": {
+        "start": {
+          "line": 263,
+          "column": 0
+        },
+        "end": {
+          "line": 267,
+          "column": 6
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.spin1Field_eq_walsh",
+      "module": "QUBOPreprocessing.BlockElimination",
       "kind": "theorem",
       "internal": false,
       "implemented_by": null,
@@ -20838,6 +23266,182 @@
       "partial": false,
       "name": "QUBOPreprocessing.branchSpinMargin_pos_iff",
       "module": "QUBOPreprocessing.ProbingMargin",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 86,
+          "column": 8
+        },
+        "end": {
+          "line": 86,
+          "column": 39
+        }
+      },
+      "references": [
+        "Set",
+        "Real",
+        "Membership.mem",
+        "Set.instMembership",
+        "Eq",
+        "LE.le",
+        "Real.instLE",
+        "QUBOPreprocessing.ReductionStep",
+        "Prod",
+        "SProd.sprod",
+        "Set.instSProd",
+        "QUBOPreprocessing.blockFullEnergy",
+        "QUBOPreprocessing.blockReducedEnergy",
+        "QUBOPreprocessing.reconstruct",
+        "Set",
+        "Real",
+        "Membership.mem",
+        "Set.instMembership",
+        "Eq",
+        "LE.le",
+        "Real.instLE",
+        "QUBOPreprocessing.ReductionStep.mk",
+        "Prod",
+        "SProd.sprod",
+        "Set.instSProd",
+        "QUBOPreprocessing.blockFullEnergy",
+        "QUBOPreprocessing.blockReducedEnergy",
+        "QUBOPreprocessing.reconstruct",
+        "And.intro",
+        "Prod.fst",
+        "Prod.snd",
+        "id",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "Prod.mk",
+        "Eq.mpr",
+        "congrArg",
+        "Eq.refl",
+        "Prod.casesOn",
+        "Exists",
+        "And",
+        "And.casesOn",
+        "Exists.intro",
+        "le_of_not_gt",
+        "Real.linearOrder",
+        "LT.lt",
+        "Preorder.toLT",
+        "PartialOrder.toPreorder",
+        "LinearOrder.toPartialOrder",
+        "Mathlib.Tactic.Linarith.lt_irrefl",
+        "Real.instPreorder",
+        "OfNat.ofNat",
+        "Zero.toOfNat0",
+        "Real.instZero",
+        "Eq.mp",
+        "Real.partialOrder",
+        "AddSemigroup.toAdd",
+        "AddMonoid.toAddSemigroup",
+        "Real.instAddMonoid",
+        "HSub.hSub",
+        "instHSub",
+        "SubNegMonoid.toSub",
+        "AddGroup.toSubNegMonoid",
+        "AddGroupWithOne.toAddGroup",
+        "Ring.toAddGroupWithOne",
+        "Real.instRing",
+        "Real.instAddGroup",
+        "MulZeroClass.toZero",
+        "instMulZeroClassOfSemiring",
+        "Real.semiring",
+        "Mathlib.Tactic.Ring.of_eq",
+        "CommSemiring.toSemiring",
+        "Real.instCommSemiring",
+        "Mathlib.Tactic.Ring.Common.add_congr",
+        "Distrib.toAdd",
+        "instDistribOfSemiring",
+        "HMul.hMul",
+        "instHMul",
+        "Distrib.toMul",
+        "HPow.hPow",
+        "Nat",
+        "instHPow",
+        "NPow.toPow",
+        "Monoid.toNPow",
+        "Semiring.toMonoid",
+        "Nat.rawCast",
+        "AddCommMonoidWithOne.toAddMonoidWithOne",
+        "NonAssocSemiring.toAddCommMonoidWithOne",
+        "Semiring.toNonAssocSemiring",
+        "Nat.instCommSemiring",
+        "Int.rawCast",
+        "inferInstance",
+        "Ring",
+        "CommRing.toRing",
+        "Real.commRing",
+        "Int.negOfNat",
+        "Mathlib.Tactic.Ring.Common.sub_congr",
+        "Mathlib.Tactic.Ring.Common.atom_pf",
+        "rfl",
+        "Eq.symm",
+        "Mathlib.Tactic.Ring.Common.sub_pf",
+        "Mathlib.Tactic.Ring.Common.neg_add",
+        "Mathlib.Tactic.Ring.Common.neg_mul",
+        "Mathlib.Meta.NormNum.IsInt.to_raw_eq",
+        "Neg.neg",
+        "NegZeroClass.toNeg",
+        "SubNegZeroMonoid.toNegZeroClass",
+        "SubtractionMonoid.toSubNegZeroMonoid",
+        "SubtractionCommMonoid.toSubtractionMonoid",
+        "AddCommGroup.toDivisionAddCommMonoid",
+        "Ring.toAddCommGroup",
+        "Mathlib.Meta.NormNum.isInt_neg",
+        "Int.ofNat",
+        "Mathlib.Meta.NormNum.IsNat.to_isInt",
+        "Mathlib.Meta.NormNum.IsNat.of_raw",
+        "Int",
+        "Mathlib.Tactic.Ring.Common.neg_zero",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_lt",
+        "Mathlib.Tactic.Ring.Common.add_pf_zero_add",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_gt",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_zero",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_overlap_zero",
+        "Mathlib.Tactic.Ring.Common.add_overlap_pf_zero",
+        "Mathlib.Meta.NormNum.IsInt.to_isNat",
+        "Mathlib.Meta.NormNum.isInt_add",
+        "Mathlib.Meta.NormNum.IsInt.of_raw",
+        "Mathlib.Tactic.Ring.cast_zero",
+        "Mathlib.Meta.NormNum.isNat_ofNat",
+        "AddGroupWithOne.toAddMonoidWithOne",
+        "Nat.cast_zero",
+        "Mathlib.Tactic.Linarith.add_lt_of_le_of_neg",
+        "Real.instIsStrictOrderedRing",
+        "Mathlib.Tactic.Linarith.le_of_le_of_eq",
+        "Mathlib.Tactic.Linarith.sub_nonpos_of_le",
+        "Real.instIsOrderedRing",
+        "sub_eq_zero_of_eq",
+        "Mathlib.Tactic.Linarith.sub_neg_of_lt"
+      ],
+      "range": {
+        "start": {
+          "line": 81,
+          "column": 0
+        },
+        "end": {
+          "line": 108,
+          "column": 12
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.block_elimination_reductionStep",
+      "module": "QUBOPreprocessing.BlockElimination",
       "kind": "theorem",
       "internal": false,
       "implemented_by": null,
@@ -21302,6 +23906,169 @@
       "partial": false,
       "name": "QUBOPreprocessing.single_step_spin_margin_sound",
       "module": "QUBOPreprocessing.ProbingMargin",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 59,
+          "column": 8
+        },
+        "end": {
+          "line": 59,
+          "column": 43
+        }
+      },
+      "references": [
+        "Set",
+        "Real",
+        "Eq",
+        "Membership.mem",
+        "Set.instMembership",
+        "LE.le",
+        "Real.instLE",
+        "Iff",
+        "Ne",
+        "LT.lt",
+        "Real.instLT",
+        "Set",
+        "Real",
+        "Eq",
+        "Membership.mem",
+        "Set.instMembership",
+        "LE.le",
+        "Real.instLE",
+        "Iff.intro",
+        "Ne",
+        "LT.lt",
+        "Real.instLT",
+        "Iff",
+        "Classical.byContradiction",
+        "Not",
+        "False.elim",
+        "False",
+        "Mathlib.Tactic.Linarith.lt_irrefl",
+        "Real.instPreorder",
+        "OfNat.ofNat",
+        "Zero.toOfNat0",
+        "Real.instZero",
+        "Eq.mp",
+        "Preorder.toLT",
+        "PartialOrder.toPreorder",
+        "Real.partialOrder",
+        "HAdd.hAdd",
+        "instHAdd",
+        "AddSemigroup.toAdd",
+        "AddMonoid.toAddSemigroup",
+        "Real.instAddMonoid",
+        "HSub.hSub",
+        "instHSub",
+        "SubNegMonoid.toSub",
+        "AddGroup.toSubNegMonoid",
+        "Real.instAddGroup",
+        "AddGroupWithOne.toAddGroup",
+        "Ring.toAddGroupWithOne",
+        "Real.instRing",
+        "MulZeroClass.toZero",
+        "instMulZeroClassOfSemiring",
+        "Real.semiring",
+        "congrArg",
+        "Mathlib.Tactic.Ring.of_eq",
+        "CommSemiring.toSemiring",
+        "Real.instCommSemiring",
+        "Mathlib.Tactic.Ring.Common.add_congr",
+        "Distrib.toAdd",
+        "instDistribOfSemiring",
+        "HMul.hMul",
+        "instHMul",
+        "Distrib.toMul",
+        "HPow.hPow",
+        "Nat",
+        "instHPow",
+        "NPow.toPow",
+        "Monoid.toNPow",
+        "Semiring.toMonoid",
+        "Nat.rawCast",
+        "AddCommMonoidWithOne.toAddMonoidWithOne",
+        "NonAssocSemiring.toAddCommMonoidWithOne",
+        "Semiring.toNonAssocSemiring",
+        "Nat.instCommSemiring",
+        "Int.rawCast",
+        "inferInstance",
+        "Ring",
+        "CommRing.toRing",
+        "Real.commRing",
+        "Int.negOfNat",
+        "Mathlib.Tactic.Ring.Common.sub_congr",
+        "Mathlib.Tactic.Ring.Common.atom_pf",
+        "rfl",
+        "Eq.mpr",
+        "id",
+        "Eq.symm",
+        "Eq.refl",
+        "Mathlib.Tactic.Ring.Common.sub_pf",
+        "Mathlib.Tactic.Ring.Common.neg_add",
+        "Mathlib.Tactic.Ring.Common.neg_mul",
+        "Mathlib.Meta.NormNum.IsInt.to_raw_eq",
+        "Neg.neg",
+        "NegZeroClass.toNeg",
+        "SubNegZeroMonoid.toNegZeroClass",
+        "SubtractionMonoid.toSubNegZeroMonoid",
+        "SubtractionCommMonoid.toSubtractionMonoid",
+        "AddCommGroup.toDivisionAddCommMonoid",
+        "Ring.toAddCommGroup",
+        "Mathlib.Meta.NormNum.isInt_neg",
+        "Int.ofNat",
+        "Mathlib.Meta.NormNum.IsNat.to_isInt",
+        "Mathlib.Meta.NormNum.IsNat.of_raw",
+        "Int",
+        "Mathlib.Tactic.Ring.Common.neg_zero",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_lt",
+        "Mathlib.Tactic.Ring.Common.add_pf_zero_add",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_gt",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_zero",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_overlap_zero",
+        "Mathlib.Tactic.Ring.Common.add_overlap_pf_zero",
+        "Mathlib.Meta.NormNum.IsInt.to_isNat",
+        "Mathlib.Meta.NormNum.isInt_add",
+        "Mathlib.Meta.NormNum.IsInt.of_raw",
+        "Mathlib.Tactic.Ring.cast_zero",
+        "Mathlib.Meta.NormNum.isNat_ofNat",
+        "AddGroupWithOne.toAddMonoidWithOne",
+        "Nat.cast_zero",
+        "Mathlib.Tactic.Linarith.lt_of_eq_of_lt",
+        "sub_eq_zero_of_eq",
+        "Mathlib.Tactic.Linarith.sub_neg_of_lt",
+        "Real.instIsOrderedRing",
+        "Eq.ndrec",
+        "Or.casesOn",
+        "Or",
+        "eq_or_lt_of_le",
+        "Iff.mp"
+      ],
+      "range": {
+        "start": {
+          "line": 55,
+          "column": 0
+        },
+        "end": {
+          "line": 79,
+          "column": 15
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.block_elimination_unique_argmin_iff",
+      "module": "QUBOPreprocessing.BlockElimination",
       "kind": "theorem",
       "internal": false,
       "implemented_by": null,
@@ -22201,6 +24968,196 @@
     },
     {
       "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 215,
+          "column": 4
+        },
+        "end": {
+          "line": 215,
+          "column": 15
+        }
+      },
+      "references": [
+        "Real",
+        "Real"
+      ],
+      "range": {
+        "start": {
+          "line": 214,
+          "column": 0
+        },
+        "end": {
+          "line": 215,
+          "column": 34
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.interp0Poly",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "definition",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 544,
+          "column": 8
+        },
+        "end": {
+          "line": 544,
+          "column": 37
+        }
+      },
+      "references": [
+        "Set",
+        "Prod",
+        "Real",
+        "QUBOPreprocessing.isSpin",
+        "Membership.mem",
+        "Set.instMembership",
+        "Eq",
+        "LE.le",
+        "Real.instLE",
+        "QUBOPreprocessing.ReductionStep",
+        "SProd.sprod",
+        "Set.instSProd",
+        "QUBOPreprocessing.sep2SpinSet",
+        "QUBOPreprocessing.blockFullEnergy",
+        "Prod.fst",
+        "Prod.snd",
+        "QUBOPreprocessing.blockReducedEnergy",
+        "QUBOPreprocessing.spin2QuadPoly",
+        "QUBOPreprocessing.reconstruct",
+        "Set",
+        "Prod",
+        "Real",
+        "QUBOPreprocessing.isSpin",
+        "Membership.mem",
+        "Set.instMembership",
+        "Eq",
+        "LE.le",
+        "Real.instLE",
+        "QUBOPreprocessing.block_elimination_reductionStep",
+        "QUBOPreprocessing.sep2SpinSet",
+        "Prod.fst",
+        "Prod.snd",
+        "QUBOPreprocessing.spin2QuadPoly",
+        "And.left",
+        "And",
+        "And.right",
+        "QUBOPreprocessing.spin2QuadPoly_eq"
+      ],
+      "range": {
+        "start": {
+          "line": 540,
+          "column": 0
+        },
+        "end": {
+          "line": 563,
+          "column": 60
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.sep2_spin_block_reductionStep",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 196,
+          "column": 8
+        },
+        "end": {
+          "line": 196,
+          "column": 52
+        }
+      },
+      "references": [
+        "Set",
+        "Real",
+        "Membership.mem",
+        "Set.instMembership",
+        "Eq",
+        "LE.le",
+        "Real.instLE",
+        "Ne",
+        "LT.lt",
+        "Real.instLT",
+        "Prod",
+        "Set.ofPred",
+        "QUBOPreprocessing.IsGlobalMin",
+        "SProd.sprod",
+        "Set.instSProd",
+        "QUBOPreprocessing.blockFullEnergy",
+        "Set.image",
+        "QUBOPreprocessing.reconstruct",
+        "QUBOPreprocessing.blockReducedEnergy",
+        "Set",
+        "Real",
+        "Membership.mem",
+        "Set.instMembership",
+        "Eq",
+        "LE.le",
+        "Real.instLE",
+        "Ne",
+        "LT.lt",
+        "Real.instLT",
+        "QUBOPreprocessing.StrongReductionStep.image_global_min_eq",
+        "Prod",
+        "SProd.sprod",
+        "Set.instSProd",
+        "QUBOPreprocessing.blockFullEnergy",
+        "QUBOPreprocessing.blockReducedEnergy",
+        "QUBOPreprocessing.reconstruct",
+        "QUBOPreprocessing.block_elimination_strongReductionStep"
+      ],
+      "range": {
+        "start": {
+          "line": 192,
+          "column": 0
+        },
+        "end": {
+          "line": 208,
+          "column": 60
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.block_elimination_strong_image_global_min_eq",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
       "selection": null,
       "references": [
         "Set",
@@ -23011,6 +25968,54 @@
       "name": "QUBOPreprocessing.cascadeFullRepair.eq_2",
       "module": "QUBOPreprocessing.ProbingMargin",
       "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 227,
+          "column": 4
+        },
+        "end": {
+          "line": 227,
+          "column": 13
+        }
+      },
+      "references": [
+        "Real",
+        "Real",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "QUBOPreprocessing.bool1Alpha0",
+        "HMul.hMul",
+        "instHMul",
+        "Real.instMul",
+        "QUBOPreprocessing.bool1Alpha1"
+      ],
+      "range": {
+        "start": {
+          "line": 226,
+          "column": 0
+        },
+        "end": {
+          "line": 228,
+          "column": 36
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.bool1Poly",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "definition",
       "internal": false,
       "implemented_by": null,
       "extern": false,
@@ -24676,6 +27681,54 @@
       "unsafe": false,
       "selection": {
         "start": {
+          "line": 316,
+          "column": 4
+        },
+        "end": {
+          "line": 316,
+          "column": 15
+        }
+      },
+      "references": [
+        "Real",
+        "Real",
+        "HSub.hSub",
+        "instHSub",
+        "Real.instSub",
+        "Neg.neg",
+        "Real.instNeg",
+        "OfNat.ofNat",
+        "One.toOfNat1",
+        "Real.instOne"
+      ],
+      "range": {
+        "start": {
+          "line": 314,
+          "column": 0
+        },
+        "end": {
+          "line": 316,
+          "column": 61
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.spin2Alpha2",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "definition",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
           "line": 215,
           "column": 2
         },
@@ -25126,6 +28179,54 @@
       "partial": false,
       "name": "QUBOPreprocessing.pairEnvEnergy",
       "module": "QUBOPreprocessing.CoflipCancellation",
+      "kind": "definition",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 241,
+          "column": 4
+        },
+        "end": {
+          "line": 241,
+          "column": 15
+        }
+      },
+      "references": [
+        "Real",
+        "Real",
+        "HSub.hSub",
+        "instHSub",
+        "Real.instSub",
+        "OfNat.ofNat",
+        "One.toOfNat1",
+        "Real.instOne",
+        "Neg.neg",
+        "Real.instNeg"
+      ],
+      "range": {
+        "start": {
+          "line": 240,
+          "column": 0
+        },
+        "end": {
+          "line": 241,
+          "column": 47
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.spin1Alpha1",
+      "module": "QUBOPreprocessing.BlockElimination",
       "kind": "definition",
       "internal": false,
       "implemented_by": null,
@@ -25710,6 +28811,51 @@
     },
     {
       "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 238,
+          "column": 4
+        },
+        "end": {
+          "line": 238,
+          "column": 15
+        }
+      },
+      "references": [
+        "Real",
+        "Real",
+        "Neg.neg",
+        "Real.instNeg",
+        "OfNat.ofNat",
+        "One.toOfNat1",
+        "Real.instOne"
+      ],
+      "range": {
+        "start": {
+          "line": 237,
+          "column": 0
+        },
+        "end": {
+          "line": 238,
+          "column": 41
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.spin1Alpha0",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "definition",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
       "selection": null,
       "references": [
         "Nat.AtLeastTwo",
@@ -25736,6 +28882,62 @@
       "extern": false,
       "axioms": [
         "propext"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 327,
+          "column": 18
+        },
+        "end": {
+          "line": 327,
+          "column": 28
+        }
+      },
+      "references": [
+        "Real",
+        "Real",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "QUBOPreprocessing.spin2Alpha0",
+        "HDiv.hDiv",
+        "instHDiv",
+        "DivInvMonoid.toDiv",
+        "Real.instDivInvMonoid",
+        "QUBOPreprocessing.spin2Alpha1",
+        "QUBOPreprocessing.spin2Alpha2",
+        "OfNat.ofNat",
+        "instOfNatAtLeastTwo",
+        "Real.instNatCast",
+        "QUBOPreprocessing.spin1Const._proof_1",
+        "QUBOPreprocessing.spin2Alpha12",
+        "QUBOPreprocessing.spin2Const._proof_1"
+      ],
+      "range": {
+        "start": {
+          "line": 324,
+          "column": 0
+        },
+        "end": {
+          "line": 328,
+          "column": 74
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.spin2Const",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "definition",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
       ]
     },
     {
@@ -26089,6 +29291,95 @@
       "unsafe": false,
       "selection": {
         "start": {
+          "line": 673,
+          "column": 8
+        },
+        "end": {
+          "line": 673,
+          "column": 57
+        }
+      },
+      "references": [
+        "Set",
+        "Prod",
+        "Real",
+        "QUBOPreprocessing.isSpin",
+        "Membership.mem",
+        "Set.instMembership",
+        "Eq",
+        "LE.le",
+        "Real.instLE",
+        "Ne",
+        "LT.lt",
+        "Real.instLT",
+        "QUBOPreprocessing.walshCubic",
+        "OfNat.ofNat",
+        "Zero.toOfNat0",
+        "Real.instZero",
+        "QUBOPreprocessing.StrongReductionStep",
+        "SProd.sprod",
+        "Set.instSProd",
+        "QUBOPreprocessing.sep3SpinSet",
+        "QUBOPreprocessing.blockFullEnergy",
+        "Prod.fst",
+        "Prod.snd",
+        "QUBOPreprocessing.blockReducedEnergy",
+        "QUBOPreprocessing.walshQuadPoly",
+        "QUBOPreprocessing.reconstruct",
+        "Set",
+        "Prod",
+        "Real",
+        "QUBOPreprocessing.isSpin",
+        "Membership.mem",
+        "Set.instMembership",
+        "Eq",
+        "LE.le",
+        "Real.instLE",
+        "Ne",
+        "LT.lt",
+        "Real.instLT",
+        "QUBOPreprocessing.walshCubic",
+        "OfNat.ofNat",
+        "Zero.toOfNat0",
+        "Real.instZero",
+        "QUBOPreprocessing.block_elimination_strongReductionStep",
+        "QUBOPreprocessing.sep3SpinSet",
+        "Prod.fst",
+        "Prod.snd",
+        "QUBOPreprocessing.walshQuadPoly",
+        "And.left",
+        "And",
+        "And.right",
+        "QUBOPreprocessing.walshQuadPoly_eq_of_cubic_zero"
+      ],
+      "range": {
+        "start": {
+          "line": 671,
+          "column": 0
+        },
+        "end": {
+          "line": 699,
+          "column": 34
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.sep3_spin_block_strongReductionStep_of_cubic_zero",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
           "line": 491,
           "column": 8
         },
@@ -26363,6 +29654,53 @@
     },
     {
       "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 47,
+          "column": 4
+        },
+        "end": {
+          "line": 47,
+          "column": 19
+        }
+      },
+      "references": [
+        "Real",
+        "Prod",
+        "Real",
+        "Prod",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "Prod.fst",
+        "Prod.snd"
+      ],
+      "range": {
+        "start": {
+          "line": 44,
+          "column": 0
+        },
+        "end": {
+          "line": 48,
+          "column": 30
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.blockFullEnergy",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "definition",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
       "selection": null,
       "references": [
         "List",
@@ -26429,6 +29767,87 @@
       "name": "QUBOPreprocessing.deltaFlipV",
       "module": "QUBOPreprocessing.CoflipCancellation",
       "kind": "definition",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 568,
+          "column": 8
+        },
+        "end": {
+          "line": 568,
+          "column": 43
+        }
+      },
+      "references": [
+        "Set",
+        "Prod",
+        "Real",
+        "QUBOPreprocessing.isSpin",
+        "Membership.mem",
+        "Set.instMembership",
+        "Eq",
+        "LE.le",
+        "Real.instLE",
+        "Ne",
+        "LT.lt",
+        "Real.instLT",
+        "QUBOPreprocessing.StrongReductionStep",
+        "SProd.sprod",
+        "Set.instSProd",
+        "QUBOPreprocessing.sep2SpinSet",
+        "QUBOPreprocessing.blockFullEnergy",
+        "Prod.fst",
+        "Prod.snd",
+        "QUBOPreprocessing.blockReducedEnergy",
+        "QUBOPreprocessing.spin2QuadPoly",
+        "QUBOPreprocessing.reconstruct",
+        "Set",
+        "Prod",
+        "Real",
+        "QUBOPreprocessing.isSpin",
+        "Membership.mem",
+        "Set.instMembership",
+        "Eq",
+        "LE.le",
+        "Real.instLE",
+        "Ne",
+        "LT.lt",
+        "Real.instLT",
+        "QUBOPreprocessing.block_elimination_strongReductionStep",
+        "QUBOPreprocessing.sep2SpinSet",
+        "Prod.fst",
+        "Prod.snd",
+        "QUBOPreprocessing.spin2QuadPoly",
+        "And.left",
+        "And",
+        "And.right",
+        "QUBOPreprocessing.spin2QuadPoly_eq"
+      ],
+      "range": {
+        "start": {
+          "line": 565,
+          "column": 0
+        },
+        "end": {
+          "line": 590,
+          "column": 60
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.sep2_spin_block_strongReductionStep",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "theorem",
       "internal": false,
       "implemented_by": null,
       "extern": false,
@@ -26658,6 +30077,56 @@
       "name": "QUBOPreprocessing.deg3StarMin_not_quad_representable_of_plateau_pos",
       "module": "QUBOPreprocessing.WalshDegree3",
       "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 347,
+          "column": 18
+        },
+        "end": {
+          "line": 347,
+          "column": 31
+        }
+      },
+      "references": [
+        "Real",
+        "Real",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "QUBOPreprocessing.spin2Const",
+        "HMul.hMul",
+        "instHMul",
+        "Real.instMul",
+        "QUBOPreprocessing.spin2H1",
+        "QUBOPreprocessing.spin2H2",
+        "QUBOPreprocessing.spin2J12"
+      ],
+      "range": {
+        "start": {
+          "line": 345,
+          "column": 0
+        },
+        "end": {
+          "line": 348,
+          "column": 71
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.spin2QuadPoly",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "definition",
       "internal": false,
       "implemented_by": null,
       "extern": false,
@@ -27497,6 +30966,55 @@
       "name": "QUBOPreprocessing.coflipLower_eq_center_of_twin",
       "module": "QUBOPreprocessing.CoflipCancellation",
       "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 250,
+          "column": 18
+        },
+        "end": {
+          "line": 250,
+          "column": 28
+        }
+      },
+      "references": [
+        "Real",
+        "Real",
+        "HDiv.hDiv",
+        "instHDiv",
+        "DivInvMonoid.toDiv",
+        "Real.instDivInvMonoid",
+        "QUBOPreprocessing.spin1Alpha1",
+        "OfNat.ofNat",
+        "instOfNatAtLeastTwo",
+        "Real.instNatCast",
+        "QUBOPreprocessing.spin1Const._proof_1"
+      ],
+      "range": {
+        "start": {
+          "line": 248,
+          "column": 0
+        },
+        "end": {
+          "line": 251,
+          "column": 19
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.spin1Field",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "definition",
       "internal": false,
       "implemented_by": null,
       "extern": false,
@@ -28531,6 +32049,352 @@
       "unsafe": false,
       "selection": {
         "start": {
+          "line": 301,
+          "column": 8
+        },
+        "end": {
+          "line": 301,
+          "column": 24
+        }
+      },
+      "references": [
+        "Real",
+        "QUBOPreprocessing.isBool",
+        "Eq",
+        "QUBOPreprocessing.bool2QuadPoly",
+        "Real",
+        "QUBOPreprocessing.isBool",
+        "id",
+        "Eq",
+        "QUBOPreprocessing.bool2QuadPoly",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "QUBOPreprocessing.bool2Alpha0",
+        "HMul.hMul",
+        "instHMul",
+        "Real.instMul",
+        "QUBOPreprocessing.bool2Alpha1",
+        "QUBOPreprocessing.bool2Alpha2",
+        "QUBOPreprocessing.bool2Alpha12",
+        "OfNat.ofNat",
+        "Zero.toOfNat0",
+        "Real.instZero",
+        "HSub.hSub",
+        "instHSub",
+        "Real.instSub",
+        "One.toOfNat1",
+        "Real.instOne",
+        "Or.casesOn",
+        "Eq.ndrec",
+        "Mathlib.Tactic.Ring.of_eq",
+        "Distrib.toAdd",
+        "instDistribOfSemiring",
+        "CommSemiring.toSemiring",
+        "Real.instCommSemiring",
+        "Distrib.toMul",
+        "HPow.hPow",
+        "Nat",
+        "instHPow",
+        "NPow.toPow",
+        "Monoid.toNPow",
+        "Semiring.toMonoid",
+        "Nat.rawCast",
+        "AddCommMonoidWithOne.toAddMonoidWithOne",
+        "NonAssocSemiring.toAddCommMonoidWithOne",
+        "Semiring.toNonAssocSemiring",
+        "Nat.instCommSemiring",
+        "MulZeroClass.toZero",
+        "instMulZeroClassOfSemiring",
+        "Mathlib.Tactic.Ring.Common.add_congr",
+        "Mathlib.Tactic.Ring.Common.atom_pf",
+        "rfl",
+        "Eq.mpr",
+        "congrArg",
+        "Eq.symm",
+        "Eq.refl",
+        "Mathlib.Tactic.Ring.Common.mul_congr",
+        "Int.rawCast",
+        "inferInstance",
+        "Ring",
+        "CommRing.toRing",
+        "Real.commRing",
+        "Int.negOfNat",
+        "Mathlib.Tactic.Ring.Common.sub_congr",
+        "Mathlib.Tactic.Ring.Common.sub_pf",
+        "Mathlib.Tactic.Ring.Common.neg_add",
+        "Mathlib.Tactic.Ring.Common.neg_mul",
+        "Mathlib.Meta.NormNum.IsInt.to_raw_eq",
+        "Neg.neg",
+        "NegZeroClass.toNeg",
+        "SubNegZeroMonoid.toNegZeroClass",
+        "SubtractionMonoid.toSubNegZeroMonoid",
+        "SubtractionCommMonoid.toSubtractionMonoid",
+        "AddCommGroup.toDivisionAddCommMonoid",
+        "Ring.toAddCommGroup",
+        "Mathlib.Meta.NormNum.isInt_neg",
+        "Int.ofNat",
+        "Mathlib.Meta.NormNum.IsNat.to_isInt",
+        "Mathlib.Meta.NormNum.IsNat.of_raw",
+        "Int",
+        "Mathlib.Tactic.Ring.Common.neg_zero",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_gt",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_zero",
+        "Mathlib.Tactic.Ring.cast_zero",
+        "Mathlib.Meta.NormNum.isNat_ofNat",
+        "AddGroupWithOne.toAddMonoidWithOne",
+        "Ring.toAddGroupWithOne",
+        "Real.instRing",
+        "Nat.cast_zero",
+        "Mathlib.Tactic.Ring.Common.add_mul",
+        "Mathlib.Tactic.Ring.Common.mul_zero",
+        "Mathlib.Tactic.Ring.Common.zero_mul",
+        "Mathlib.Tactic.Ring.Common.add_pf_zero_add",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_lt",
+        "Mathlib.Tactic.Ring.cast_pos",
+        "Nat.cast_one",
+        "Mathlib.Tactic.Ring.Common.mul_add",
+        "Mathlib.Tactic.Ring.Common.mul_pf_left",
+        "Mathlib.Meta.NormNum.isInt_mul",
+        "Ring.toSemiring",
+        "Mathlib.Meta.NormNum.IsInt.of_raw",
+        "Mathlib.Meta.NormNum.IsNat.to_raw_eq",
+        "Mathlib.Meta.NormNum.isNat_mul",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_overlap_zero",
+        "Mathlib.Tactic.Ring.Common.add_overlap_pf_zero",
+        "Mathlib.Meta.NormNum.IsInt.to_isNat",
+        "Mathlib.Meta.NormNum.isInt_add"
+      ],
+      "range": {
+        "start": {
+          "line": 298,
+          "column": 0
+        },
+        "end": {
+          "line": 305,
+          "column": 66
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.bool2QuadPoly_eq",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 366,
+          "column": 8
+        },
+        "end": {
+          "line": 366,
+          "column": 24
+        }
+      },
+      "references": [
+        "Real",
+        "Eq",
+        "QUBOPreprocessing.spin2H2",
+        "HDiv.hDiv",
+        "instHDiv",
+        "DivInvMonoid.toDiv",
+        "Real.instDivInvMonoid",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "HSub.hSub",
+        "instHSub",
+        "Real.instSub",
+        "Neg.neg",
+        "Real.instNeg",
+        "OfNat.ofNat",
+        "One.toOfNat1",
+        "Real.instOne",
+        "instOfNatAtLeastTwo",
+        "Real.instNatCast",
+        "Nat.instAtLeastTwoHAddOfNat",
+        "Nat",
+        "instOfNatNat",
+        "Nat.instNeZeroSucc",
+        "Real",
+        "id",
+        "Eq",
+        "QUBOPreprocessing.spin2H2",
+        "HDiv.hDiv",
+        "instHDiv",
+        "DivInvMonoid.toDiv",
+        "Real.instDivInvMonoid",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "HSub.hSub",
+        "instHSub",
+        "Real.instSub",
+        "Neg.neg",
+        "Real.instNeg",
+        "OfNat.ofNat",
+        "One.toOfNat1",
+        "Real.instOne",
+        "instOfNatAtLeastTwo",
+        "Real.instNatCast",
+        "Nat.instAtLeastTwoHAddOfNat",
+        "Nat",
+        "instOfNatNat",
+        "Nat.instNeZeroSucc",
+        "QUBOPreprocessing.spin2Alpha2",
+        "QUBOPreprocessing.spin1Const._proof_1",
+        "QUBOPreprocessing.spin2Alpha12",
+        "QUBOPreprocessing.spin2Const._proof_1",
+        "Mathlib.Tactic.Ring.of_eq",
+        "Distrib.toAdd",
+        "instDistribOfSemiring",
+        "CommSemiring.toSemiring",
+        "Real.instCommSemiring",
+        "HMul.hMul",
+        "instHMul",
+        "Distrib.toMul",
+        "HPow.hPow",
+        "instHPow",
+        "NPow.toPow",
+        "Monoid.toNPow",
+        "Semiring.toMonoid",
+        "Nat.rawCast",
+        "AddCommMonoidWithOne.toAddMonoidWithOne",
+        "NonAssocSemiring.toAddCommMonoidWithOne",
+        "Semiring.toNonAssocSemiring",
+        "Nat.instCommSemiring",
+        "NNRat.rawCast",
+        "DivisionRing.toDivisionSemiring",
+        "Real.instDivisionRing",
+        "Rat.rawCast",
+        "Int.negOfNat",
+        "Semifield.toDivisionSemiring",
+        "Field.toSemifield",
+        "Real.instField",
+        "Zero.toOfNat0",
+        "MulZeroClass.toZero",
+        "instMulZeroClassOfSemiring",
+        "Mathlib.Tactic.Ring.Common.add_congr",
+        "Mathlib.Tactic.Ring.Common.div_congr",
+        "Int.rawCast",
+        "inferInstance",
+        "Ring",
+        "CommRing.toRing",
+        "Real.commRing",
+        "Mathlib.Tactic.Ring.Common.sub_congr",
+        "Mathlib.Tactic.Ring.Common.atom_pf",
+        "rfl",
+        "Eq.mpr",
+        "congrArg",
+        "Eq.symm",
+        "Eq.refl",
+        "Mathlib.Tactic.Ring.Common.sub_pf",
+        "Mathlib.Tactic.Ring.Common.neg_add",
+        "Mathlib.Tactic.Ring.Common.neg_mul",
+        "Mathlib.Meta.NormNum.IsInt.to_raw_eq",
+        "NegZeroClass.toNeg",
+        "SubNegZeroMonoid.toNegZeroClass",
+        "SubtractionMonoid.toSubNegZeroMonoid",
+        "SubtractionCommMonoid.toSubtractionMonoid",
+        "AddCommGroup.toDivisionAddCommMonoid",
+        "Ring.toAddCommGroup",
+        "Mathlib.Meta.NormNum.isInt_neg",
+        "Int.ofNat",
+        "Mathlib.Meta.NormNum.IsNat.to_isInt",
+        "Mathlib.Meta.NormNum.IsNat.of_raw",
+        "Int",
+        "Mathlib.Tactic.Ring.Common.neg_zero",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_lt",
+        "Mathlib.Tactic.Ring.Common.add_pf_zero_add",
+        "Mathlib.Tactic.Ring.cast_pos",
+        "Mathlib.Meta.NormNum.isNat_ofNat",
+        "AddGroupWithOne.toAddMonoidWithOne",
+        "Ring.toAddGroupWithOne",
+        "Real.instRing",
+        "AddMonoidWithOne.toNatCast",
+        "Mathlib.Meta.NormNum.instAtLeastTwo",
+        "Mathlib.Tactic.Ring.Common.div_pf",
+        "Mathlib.Tactic.Ring.Common.inv_single",
+        "Mathlib.Meta.NormNum.IsNNRat.to_raw_eq",
+        "Inv.inv",
+        "InvOneClass.toInv",
+        "DivInvOneMonoid.toInvOneClass",
+        "DivisionMonoid.toDivInvOneMonoid",
+        "GroupWithZero.toDivisionMonoid",
+        "DivisionSemiring.toGroupWithZero",
+        "Mathlib.Meta.NormNum.isNNRat_inv_pos",
+        "FloorSemiring.instCharZero",
+        "Real.semiring",
+        "Real.partialOrder",
+        "FloorRing.toFloorSemiring",
+        "Real.linearOrder",
+        "Real.instFloorRing",
+        "Mathlib.Meta.NormNum.IsNat.to_isNNRat",
+        "DivisionSemiring.toSemiring",
+        "Mathlib.Tactic.Ring.Common.add_mul",
+        "Mathlib.Tactic.Ring.Common.mul_add",
+        "Mathlib.Tactic.Ring.Common.mul_pf_left",
+        "Mathlib.Meta.NormNum.isNNRat_mul",
+        "Mathlib.Meta.NormNum.IsNNRat.of_raw",
+        "Mathlib.Meta.NormNum.IsNNRat.den_nz",
+        "Nat.mul",
+        "Mathlib.Tactic.Ring.Common.mul_zero",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_zero",
+        "Mathlib.Meta.NormNum.IsRat.to_raw_eq",
+        "Mathlib.Meta.NormNum.isRat_mul",
+        "DivisionRing.toRing",
+        "Mathlib.Meta.NormNum.IsInt.to_isRat",
+        "Mathlib.Meta.NormNum.IsInt.of_raw",
+        "Mathlib.Meta.NormNum.IsNNRat.to_isRat",
+        "Int.mul",
+        "Mathlib.Tactic.Ring.Common.zero_mul",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_gt",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_overlap",
+        "Mathlib.Tactic.Ring.Common.add_overlap_pf",
+        "Mathlib.Meta.NormNum.IsRat.to_isNNRat",
+        "Mathlib.Meta.NormNum.isRat_add",
+        "Mathlib.Meta.NormNum.IsRat.of_raw",
+        "Mathlib.Meta.NormNum.IsRat.den_nz",
+        "Mathlib.Tactic.Ring.Common.neg_congr"
+      ],
+      "range": {
+        "start": {
+          "line": 364,
+          "column": 0
+        },
+        "end": {
+          "line": 369,
+          "column": 6
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.spin2H2_eq_walsh",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
           "line": 252,
           "column": 18
         },
@@ -29461,6 +33325,117 @@
       "unsafe": false,
       "selection": {
         "start": {
+          "line": 454,
+          "column": 8
+        },
+        "end": {
+          "line": 454,
+          "column": 32
+        }
+      },
+      "references": [
+        "Set",
+        "Real",
+        "Membership.mem",
+        "Set.instMembership",
+        "Eq",
+        "LE.le",
+        "Real.instLE",
+        "QUBOPreprocessing.ReductionStep",
+        "Prod",
+        "SProd.sprod",
+        "Set.instSProd",
+        "QUBOPreprocessing.blockFullEnergy",
+        "QUBOPreprocessing.blockReducedEnergy",
+        "QUBOPreprocessing.interp0Poly",
+        "QUBOPreprocessing.reconstruct",
+        "Set",
+        "Real",
+        "Membership.mem",
+        "Set.instMembership",
+        "Eq",
+        "LE.le",
+        "Real.instLE",
+        "QUBOPreprocessing.block_elimination_reductionStep",
+        "QUBOPreprocessing.interp0Poly",
+        "rfl"
+      ],
+      "range": {
+        "start": {
+          "line": 449,
+          "column": 0
+        },
+        "end": {
+          "line": 465,
+          "column": 80
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.sep0_block_reductionStep",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 281,
+          "column": 4
+        },
+        "end": {
+          "line": 281,
+          "column": 15
+        }
+      },
+      "references": [
+        "Real",
+        "Real",
+        "HSub.hSub",
+        "instHSub",
+        "Real.instSub",
+        "OfNat.ofNat",
+        "One.toOfNat1",
+        "Real.instOne",
+        "Zero.toOfNat0",
+        "Real.instZero"
+      ],
+      "range": {
+        "start": {
+          "line": 279,
+          "column": 0
+        },
+        "end": {
+          "line": 281,
+          "column": 52
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.bool2Alpha1",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "definition",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
           "line": 316,
           "column": 8
         },
@@ -29708,6 +33683,54 @@
       "unsafe": false,
       "selection": {
         "start": {
+          "line": 312,
+          "column": 4
+        },
+        "end": {
+          "line": 312,
+          "column": 15
+        }
+      },
+      "references": [
+        "Real",
+        "Real",
+        "HSub.hSub",
+        "instHSub",
+        "Real.instSub",
+        "OfNat.ofNat",
+        "One.toOfNat1",
+        "Real.instOne",
+        "Neg.neg",
+        "Real.instNeg"
+      ],
+      "range": {
+        "start": {
+          "line": 310,
+          "column": 0
+        },
+        "end": {
+          "line": 312,
+          "column": 61
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.spin2Alpha1",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "definition",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
           "line": 74,
           "column": 8
         },
@@ -29839,6 +33862,36 @@
         "propext",
         "Classical.choice",
         "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": null,
+      "references": [
+        "Nat.AtLeastTwo",
+        "HAdd.hAdd",
+        "Nat",
+        "instHAdd",
+        "instAddNat",
+        "OfNat.ofNat",
+        "instOfNatNat",
+        "Nat.instAtLeastTwoHAddOfNat",
+        "OfNat.ofNat",
+        "Nat",
+        "instOfNatNat",
+        "Nat.instNeZeroSucc"
+      ],
+      "range": null,
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.spin1Const._proof_1",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "theorem",
+      "internal": true,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext"
       ]
     },
     {
@@ -30789,6 +34842,54 @@
       "unsafe": false,
       "selection": {
         "start": {
+          "line": 254,
+          "column": 18
+        },
+        "end": {
+          "line": 254,
+          "column": 27
+        }
+      },
+      "references": [
+        "Real",
+        "Real",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "QUBOPreprocessing.spin1Const",
+        "HMul.hMul",
+        "instHMul",
+        "Real.instMul",
+        "QUBOPreprocessing.spin1Field"
+      ],
+      "range": {
+        "start": {
+          "line": 253,
+          "column": 0
+        },
+        "end": {
+          "line": 255,
+          "column": 34
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.spin1Poly",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "definition",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
           "line": 186,
           "column": 8
         },
@@ -31500,6 +35601,44 @@
       "unsafe": false,
       "selection": {
         "start": {
+          "line": 425,
+          "column": 4
+        },
+        "end": {
+          "line": 425,
+          "column": 19
+        }
+      },
+      "references": [
+        "Nat",
+        "Fin",
+        "Nat",
+        "Fin"
+      ],
+      "range": {
+        "start": {
+          "line": 422,
+          "column": 0
+        },
+        "end": {
+          "line": 426,
+          "column": 21
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.coordBlockTable",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "definition",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": []
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
           "line": 90,
           "column": 8
         },
@@ -31959,6 +36098,51 @@
       "unsafe": false,
       "selection": {
         "start": {
+          "line": 308,
+          "column": 4
+        },
+        "end": {
+          "line": 308,
+          "column": 15
+        }
+      },
+      "references": [
+        "Real",
+        "Real",
+        "Neg.neg",
+        "Real.instNeg",
+        "OfNat.ofNat",
+        "One.toOfNat1",
+        "Real.instOne"
+      ],
+      "range": {
+        "start": {
+          "line": 307,
+          "column": 0
+        },
+        "end": {
+          "line": 308,
+          "column": 50
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.spin2Alpha0",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "definition",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
           "line": 275,
           "column": 8
         },
@@ -32405,6 +36589,54 @@
       "unsafe": false,
       "selection": {
         "start": {
+          "line": 285,
+          "column": 4
+        },
+        "end": {
+          "line": 285,
+          "column": 15
+        }
+      },
+      "references": [
+        "Real",
+        "Real",
+        "HSub.hSub",
+        "instHSub",
+        "Real.instSub",
+        "OfNat.ofNat",
+        "Zero.toOfNat0",
+        "Real.instZero",
+        "One.toOfNat1",
+        "Real.instOne"
+      ],
+      "range": {
+        "start": {
+          "line": 283,
+          "column": 0
+        },
+        "end": {
+          "line": 285,
+          "column": 52
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.bool2Alpha2",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "definition",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
           "line": 426,
           "column": 8
         },
@@ -32580,6 +36812,91 @@
       "partial": false,
       "name": "QUBOPreprocessing.coflipDelta_nonneg",
       "module": "QUBOPreprocessing.CoflipCancellation",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 619,
+          "column": 8
+        },
+        "end": {
+          "line": 619,
+          "column": 50
+        }
+      },
+      "references": [
+        "Set",
+        "Prod",
+        "Real",
+        "QUBOPreprocessing.isSpin",
+        "Membership.mem",
+        "Set.instMembership",
+        "Eq",
+        "LE.le",
+        "Real.instLE",
+        "Ne",
+        "LT.lt",
+        "Real.instLT",
+        "Set.ofPred",
+        "QUBOPreprocessing.IsGlobalMin",
+        "SProd.sprod",
+        "Set.instSProd",
+        "QUBOPreprocessing.sep2SpinSet",
+        "QUBOPreprocessing.blockFullEnergy",
+        "Prod.fst",
+        "Prod.snd",
+        "Set.image",
+        "QUBOPreprocessing.reconstruct",
+        "QUBOPreprocessing.blockReducedEnergy",
+        "QUBOPreprocessing.spin2QuadPoly",
+        "Set",
+        "Prod",
+        "Real",
+        "QUBOPreprocessing.isSpin",
+        "Membership.mem",
+        "Set.instMembership",
+        "Eq",
+        "LE.le",
+        "Real.instLE",
+        "Ne",
+        "LT.lt",
+        "Real.instLT",
+        "QUBOPreprocessing.StrongReductionStep.image_global_min_eq",
+        "SProd.sprod",
+        "Set.instSProd",
+        "QUBOPreprocessing.sep2SpinSet",
+        "QUBOPreprocessing.blockFullEnergy",
+        "Prod.fst",
+        "Prod.snd",
+        "QUBOPreprocessing.blockReducedEnergy",
+        "QUBOPreprocessing.spin2QuadPoly",
+        "QUBOPreprocessing.reconstruct",
+        "QUBOPreprocessing.sep2_spin_block_strongReductionStep"
+      ],
+      "range": {
+        "start": {
+          "line": 614,
+          "column": 0
+        },
+        "end": {
+          "line": 634,
+          "column": 56
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.sep2_spin_block_strong_image_global_min_eq",
+      "module": "QUBOPreprocessing.BlockElimination",
       "kind": "theorem",
       "internal": false,
       "implemented_by": null,
@@ -33185,6 +37502,217 @@
       "partial": false,
       "name": "QUBOPreprocessing.okPat1_refutes_clause1",
       "module": "QUBOPreprocessing.ProbingMargin",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 136,
+          "column": 8
+        },
+        "end": {
+          "line": 136,
+          "column": 46
+        }
+      },
+      "references": [
+        "Set",
+        "Real",
+        "Membership.mem",
+        "Set.instMembership",
+        "Eq",
+        "LE.le",
+        "Real.instLE",
+        "QUBOPreprocessing.IsGlobalMin",
+        "QUBOPreprocessing.blockReducedEnergy",
+        "And",
+        "Prod",
+        "SProd.sprod",
+        "Set.instSProd",
+        "QUBOPreprocessing.blockFullEnergy",
+        "QUBOPreprocessing.reconstruct",
+        "Set",
+        "Real",
+        "Membership.mem",
+        "Set.instMembership",
+        "Eq",
+        "LE.le",
+        "Real.instLE",
+        "QUBOPreprocessing.IsGlobalMin",
+        "QUBOPreprocessing.blockReducedEnergy",
+        "QUBOPreprocessing.ReductionStep.preserves_global_min",
+        "Prod",
+        "SProd.sprod",
+        "Set.instSProd",
+        "QUBOPreprocessing.blockFullEnergy",
+        "QUBOPreprocessing.reconstruct",
+        "QUBOPreprocessing.block_elimination_reductionStep"
+      ],
+      "range": {
+        "start": {
+          "line": 132,
+          "column": 0
+        },
+        "end": {
+          "line": 148,
+          "column": 54
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.block_elimination_preserves_global_min",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 232,
+          "column": 8
+        },
+        "end": {
+          "line": 232,
+          "column": 20
+        }
+      },
+      "references": [
+        "Real",
+        "QUBOPreprocessing.isBool",
+        "Eq",
+        "QUBOPreprocessing.bool1Poly",
+        "Real",
+        "QUBOPreprocessing.isBool",
+        "id",
+        "Eq",
+        "QUBOPreprocessing.bool1Poly",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "QUBOPreprocessing.bool1Alpha0",
+        "HMul.hMul",
+        "instHMul",
+        "Real.instMul",
+        "QUBOPreprocessing.bool1Alpha1",
+        "OfNat.ofNat",
+        "Zero.toOfNat0",
+        "Real.instZero",
+        "Or.casesOn",
+        "One.toOfNat1",
+        "Real.instOne",
+        "HSub.hSub",
+        "instHSub",
+        "Real.instSub",
+        "Eq.ndrec",
+        "Mathlib.Tactic.Ring.of_eq",
+        "Distrib.toAdd",
+        "instDistribOfSemiring",
+        "CommSemiring.toSemiring",
+        "Real.instCommSemiring",
+        "Distrib.toMul",
+        "HPow.hPow",
+        "Nat",
+        "instHPow",
+        "NPow.toPow",
+        "Monoid.toNPow",
+        "Semiring.toMonoid",
+        "Nat.rawCast",
+        "AddCommMonoidWithOne.toAddMonoidWithOne",
+        "NonAssocSemiring.toAddCommMonoidWithOne",
+        "Semiring.toNonAssocSemiring",
+        "Nat.instCommSemiring",
+        "MulZeroClass.toZero",
+        "instMulZeroClassOfSemiring",
+        "Mathlib.Tactic.Ring.Common.add_congr",
+        "Mathlib.Tactic.Ring.Common.atom_pf",
+        "rfl",
+        "Eq.mpr",
+        "congrArg",
+        "Eq.symm",
+        "Eq.refl",
+        "Mathlib.Tactic.Ring.Common.mul_congr",
+        "Int.rawCast",
+        "inferInstance",
+        "Ring",
+        "CommRing.toRing",
+        "Real.commRing",
+        "Int.negOfNat",
+        "Mathlib.Tactic.Ring.Common.sub_congr",
+        "Mathlib.Tactic.Ring.Common.sub_pf",
+        "Mathlib.Tactic.Ring.Common.neg_add",
+        "Mathlib.Tactic.Ring.Common.neg_mul",
+        "Mathlib.Meta.NormNum.IsInt.to_raw_eq",
+        "Neg.neg",
+        "NegZeroClass.toNeg",
+        "SubNegZeroMonoid.toNegZeroClass",
+        "SubtractionMonoid.toSubNegZeroMonoid",
+        "SubtractionCommMonoid.toSubtractionMonoid",
+        "AddCommGroup.toDivisionAddCommMonoid",
+        "Ring.toAddCommGroup",
+        "Mathlib.Meta.NormNum.isInt_neg",
+        "Int.ofNat",
+        "Mathlib.Meta.NormNum.IsNat.to_isInt",
+        "Mathlib.Meta.NormNum.IsNat.of_raw",
+        "Int",
+        "Mathlib.Tactic.Ring.Common.neg_zero",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_gt",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_zero",
+        "Mathlib.Tactic.Ring.cast_zero",
+        "Mathlib.Meta.NormNum.isNat_ofNat",
+        "AddGroupWithOne.toAddMonoidWithOne",
+        "Ring.toAddGroupWithOne",
+        "Real.instRing",
+        "Nat.cast_zero",
+        "Mathlib.Tactic.Ring.Common.add_mul",
+        "Mathlib.Tactic.Ring.Common.mul_zero",
+        "Mathlib.Tactic.Ring.Common.zero_mul",
+        "Mathlib.Tactic.Ring.Common.add_pf_zero_add",
+        "Mathlib.Tactic.Ring.cast_pos",
+        "Nat.cast_one",
+        "Mathlib.Tactic.Ring.Common.mul_add",
+        "Mathlib.Tactic.Ring.Common.mul_pf_left",
+        "Mathlib.Meta.NormNum.isInt_mul",
+        "Ring.toSemiring",
+        "Mathlib.Meta.NormNum.IsInt.of_raw",
+        "Mathlib.Meta.NormNum.IsNat.to_raw_eq",
+        "Mathlib.Meta.NormNum.isNat_mul",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_lt",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_overlap_zero",
+        "Mathlib.Tactic.Ring.Common.add_overlap_pf_zero",
+        "Mathlib.Meta.NormNum.IsInt.to_isNat",
+        "Mathlib.Meta.NormNum.isInt_add"
+      ],
+      "range": {
+        "start": {
+          "line": 230,
+          "column": 0
+        },
+        "end": {
+          "line": 235,
+          "column": 36
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.bool1Poly_eq",
+      "module": "QUBOPreprocessing.BlockElimination",
       "kind": "theorem",
       "internal": false,
       "implemented_by": null,
@@ -34535,6 +39063,49 @@
     },
     {
       "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 52,
+          "column": 4
+        },
+        "end": {
+          "line": 52,
+          "column": 22
+        }
+      },
+      "references": [
+        "Real",
+        "Real",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd"
+      ],
+      "range": {
+        "start": {
+          "line": 50,
+          "column": 0
+        },
+        "end": {
+          "line": 53,
+          "column": 17
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.blockReducedEnergy",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "definition",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
       "selection": null,
       "references": [
         "Eq",
@@ -35740,6 +40311,405 @@
       "unsafe": false,
       "selection": {
         "start": {
+          "line": 277,
+          "column": 4
+        },
+        "end": {
+          "line": 277,
+          "column": 15
+        }
+      },
+      "references": [
+        "Real",
+        "Real",
+        "OfNat.ofNat",
+        "Zero.toOfNat0",
+        "Real.instZero"
+      ],
+      "range": {
+        "start": {
+          "line": 276,
+          "column": 0
+        },
+        "end": {
+          "line": 277,
+          "column": 44
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.bool2Alpha0",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "definition",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 114,
+          "column": 8
+        },
+        "end": {
+          "line": 114,
+          "column": 41
+        }
+      },
+      "references": [
+        "Set",
+        "Real",
+        "Membership.mem",
+        "Set.instMembership",
+        "Eq",
+        "LE.le",
+        "Real.instLE",
+        "And",
+        "Prod",
+        "SProd.sprod",
+        "Set.instSProd",
+        "QUBOPreprocessing.reconstruct",
+        "QUBOPreprocessing.blockFullEnergy",
+        "Prod.mk",
+        "Set",
+        "Real",
+        "Membership.mem",
+        "Set.instMembership",
+        "Eq",
+        "LE.le",
+        "Real.instLE",
+        "And.intro",
+        "Prod",
+        "SProd.sprod",
+        "Set.instSProd",
+        "QUBOPreprocessing.reconstruct",
+        "QUBOPreprocessing.blockFullEnergy",
+        "Prod.mk",
+        "Prod.fst",
+        "Prod.snd",
+        "id",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "le_of_not_gt",
+        "Real.linearOrder",
+        "LT.lt",
+        "Preorder.toLT",
+        "PartialOrder.toPreorder",
+        "LinearOrder.toPartialOrder",
+        "Mathlib.Tactic.Linarith.lt_irrefl",
+        "Real.instPreorder",
+        "OfNat.ofNat",
+        "Zero.toOfNat0",
+        "Real.instZero",
+        "Eq.mp",
+        "Real.partialOrder",
+        "AddSemigroup.toAdd",
+        "AddMonoid.toAddSemigroup",
+        "Real.instAddMonoid",
+        "HSub.hSub",
+        "instHSub",
+        "SubNegMonoid.toSub",
+        "AddGroup.toSubNegMonoid",
+        "Real.instAddGroup",
+        "AddGroupWithOne.toAddGroup",
+        "Ring.toAddGroupWithOne",
+        "Real.instRing",
+        "MulZeroClass.toZero",
+        "instMulZeroClassOfSemiring",
+        "Real.semiring",
+        "congrArg",
+        "Mathlib.Tactic.Ring.of_eq",
+        "CommSemiring.toSemiring",
+        "Real.instCommSemiring",
+        "Mathlib.Tactic.Ring.Common.add_congr",
+        "Distrib.toAdd",
+        "instDistribOfSemiring",
+        "HMul.hMul",
+        "instHMul",
+        "Distrib.toMul",
+        "HPow.hPow",
+        "Nat",
+        "instHPow",
+        "NPow.toPow",
+        "Monoid.toNPow",
+        "Semiring.toMonoid",
+        "Nat.rawCast",
+        "AddCommMonoidWithOne.toAddMonoidWithOne",
+        "NonAssocSemiring.toAddCommMonoidWithOne",
+        "Semiring.toNonAssocSemiring",
+        "Nat.instCommSemiring",
+        "Int.rawCast",
+        "inferInstance",
+        "Ring",
+        "CommRing.toRing",
+        "Real.commRing",
+        "Int.negOfNat",
+        "Mathlib.Tactic.Ring.Common.sub_congr",
+        "Mathlib.Tactic.Ring.Common.atom_pf",
+        "rfl",
+        "Eq.mpr",
+        "Eq.symm",
+        "Eq.refl",
+        "Mathlib.Tactic.Ring.Common.sub_pf",
+        "Mathlib.Tactic.Ring.Common.neg_add",
+        "Mathlib.Tactic.Ring.Common.neg_mul",
+        "Mathlib.Meta.NormNum.IsInt.to_raw_eq",
+        "Neg.neg",
+        "NegZeroClass.toNeg",
+        "SubNegZeroMonoid.toNegZeroClass",
+        "SubtractionMonoid.toSubNegZeroMonoid",
+        "SubtractionCommMonoid.toSubtractionMonoid",
+        "AddCommGroup.toDivisionAddCommMonoid",
+        "Ring.toAddCommGroup",
+        "Mathlib.Meta.NormNum.isInt_neg",
+        "Int.ofNat",
+        "Mathlib.Meta.NormNum.IsNat.to_isInt",
+        "Mathlib.Meta.NormNum.IsNat.of_raw",
+        "Int",
+        "Mathlib.Tactic.Ring.Common.neg_zero",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_lt",
+        "Mathlib.Tactic.Ring.Common.add_pf_zero_add",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_overlap_zero",
+        "Mathlib.Tactic.Ring.Common.add_overlap_pf_zero",
+        "Mathlib.Meta.NormNum.IsInt.to_isNat",
+        "Mathlib.Meta.NormNum.isInt_add",
+        "Mathlib.Meta.NormNum.IsInt.of_raw",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_gt",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_zero",
+        "Mathlib.Tactic.Ring.cast_zero",
+        "Mathlib.Meta.NormNum.isNat_ofNat",
+        "AddGroupWithOne.toAddMonoidWithOne",
+        "Nat.cast_zero",
+        "Mathlib.Tactic.Linarith.add_lt_of_le_of_neg",
+        "Real.instIsStrictOrderedRing",
+        "Mathlib.Tactic.Linarith.le_of_eq_of_le",
+        "sub_eq_zero_of_eq",
+        "Mathlib.Tactic.Linarith.sub_nonpos_of_le",
+        "Real.instIsOrderedRing",
+        "Mathlib.Tactic.Linarith.sub_neg_of_lt"
+      ],
+      "range": {
+        "start": {
+          "line": 110,
+          "column": 0
+        },
+        "end": {
+          "line": 130,
+          "column": 10
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.block_elimination_repair_monotone",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 154,
+          "column": 8
+        },
+        "end": {
+          "line": 154,
+          "column": 45
+        }
+      },
+      "references": [
+        "Set",
+        "Real",
+        "Membership.mem",
+        "Set.instMembership",
+        "Eq",
+        "LE.le",
+        "Real.instLE",
+        "Ne",
+        "LT.lt",
+        "Real.instLT",
+        "QUBOPreprocessing.StrongReductionStep",
+        "Prod",
+        "SProd.sprod",
+        "Set.instSProd",
+        "QUBOPreprocessing.blockFullEnergy",
+        "QUBOPreprocessing.blockReducedEnergy",
+        "QUBOPreprocessing.reconstruct",
+        "Set",
+        "Real",
+        "Membership.mem",
+        "Set.instMembership",
+        "Eq",
+        "LE.le",
+        "Real.instLE",
+        "Ne",
+        "LT.lt",
+        "Real.instLT",
+        "QUBOPreprocessing.ReductionStep",
+        "Prod",
+        "SProd.sprod",
+        "Set.instSProd",
+        "QUBOPreprocessing.blockFullEnergy",
+        "QUBOPreprocessing.blockReducedEnergy",
+        "QUBOPreprocessing.reconstruct",
+        "QUBOPreprocessing.block_elimination_reductionStep",
+        "QUBOPreprocessing.StrongReductionStep.mk",
+        "Prod.casesOn",
+        "QUBOPreprocessing.IsGlobalMin",
+        "Exists",
+        "And",
+        "Prod.mk",
+        "And.casesOn",
+        "Prod.fst",
+        "Prod.snd",
+        "dite",
+        "Classical.propDecidable",
+        "Exists.intro",
+        "And.intro",
+        "id",
+        "Eq.mpr",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "congrArg",
+        "Eq.mp",
+        "Eq.refl",
+        "Not",
+        "False.elim",
+        "False",
+        "Mathlib.Tactic.Linarith.lt_irrefl",
+        "Real.instPreorder",
+        "OfNat.ofNat",
+        "Zero.toOfNat0",
+        "Real.instZero",
+        "Preorder.toLT",
+        "PartialOrder.toPreorder",
+        "Real.partialOrder",
+        "AddSemigroup.toAdd",
+        "AddMonoid.toAddSemigroup",
+        "Real.instAddMonoid",
+        "HSub.hSub",
+        "instHSub",
+        "SubNegMonoid.toSub",
+        "AddGroup.toSubNegMonoid",
+        "AddGroupWithOne.toAddGroup",
+        "Ring.toAddGroupWithOne",
+        "Real.instRing",
+        "Real.instAddGroup",
+        "MulZeroClass.toZero",
+        "instMulZeroClassOfSemiring",
+        "Real.semiring",
+        "Mathlib.Tactic.Ring.of_eq",
+        "CommSemiring.toSemiring",
+        "Real.instCommSemiring",
+        "Mathlib.Tactic.Ring.Common.add_congr",
+        "Distrib.toAdd",
+        "instDistribOfSemiring",
+        "HMul.hMul",
+        "instHMul",
+        "Distrib.toMul",
+        "HPow.hPow",
+        "Nat",
+        "instHPow",
+        "NPow.toPow",
+        "Monoid.toNPow",
+        "Semiring.toMonoid",
+        "Nat.rawCast",
+        "AddCommMonoidWithOne.toAddMonoidWithOne",
+        "NonAssocSemiring.toAddCommMonoidWithOne",
+        "Semiring.toNonAssocSemiring",
+        "Nat.instCommSemiring",
+        "Int.rawCast",
+        "inferInstance",
+        "Ring",
+        "CommRing.toRing",
+        "Real.commRing",
+        "Int.negOfNat",
+        "Mathlib.Tactic.Ring.Common.sub_congr",
+        "Mathlib.Tactic.Ring.Common.atom_pf",
+        "rfl",
+        "Eq.symm",
+        "Mathlib.Tactic.Ring.Common.sub_pf",
+        "Mathlib.Tactic.Ring.Common.neg_add",
+        "Mathlib.Tactic.Ring.Common.neg_mul",
+        "Mathlib.Meta.NormNum.IsInt.to_raw_eq",
+        "Neg.neg",
+        "NegZeroClass.toNeg",
+        "SubNegZeroMonoid.toNegZeroClass",
+        "SubtractionMonoid.toSubNegZeroMonoid",
+        "SubtractionCommMonoid.toSubtractionMonoid",
+        "AddCommGroup.toDivisionAddCommMonoid",
+        "Ring.toAddCommGroup",
+        "Mathlib.Meta.NormNum.isInt_neg",
+        "Int.ofNat",
+        "Mathlib.Meta.NormNum.IsNat.to_isInt",
+        "Mathlib.Meta.NormNum.IsNat.of_raw",
+        "Int",
+        "Mathlib.Tactic.Ring.Common.neg_zero",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_lt",
+        "Mathlib.Tactic.Ring.Common.add_pf_zero_add",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_gt",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_zero",
+        "Mathlib.Tactic.Ring.Common.add_pf_add_overlap_zero",
+        "Mathlib.Tactic.Ring.Common.add_overlap_pf_zero",
+        "Mathlib.Meta.NormNum.IsInt.to_isNat",
+        "Mathlib.Meta.NormNum.isInt_add",
+        "Mathlib.Meta.NormNum.IsInt.of_raw",
+        "Mathlib.Tactic.Ring.cast_zero",
+        "Mathlib.Meta.NormNum.isNat_ofNat",
+        "AddGroupWithOne.toAddMonoidWithOne",
+        "Nat.cast_zero",
+        "Mathlib.Tactic.Linarith.lt_of_lt_of_eq",
+        "Mathlib.Tactic.Linarith.add_lt_of_neg_of_le",
+        "Real.instIsStrictOrderedRing",
+        "Ring.toSemiring",
+        "Mathlib.Tactic.Linarith.sub_neg_of_lt",
+        "Real.instIsOrderedRing",
+        "Mathlib.Tactic.Linarith.sub_nonpos_of_le",
+        "sub_eq_zero_of_eq"
+      ],
+      "range": {
+        "start": {
+          "line": 150,
+          "column": 0
+        },
+        "end": {
+          "line": 190,
+          "column": 14
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.block_elimination_strongReductionStep",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
           "line": 172,
           "column": 8
         },
@@ -36283,6 +41253,49 @@
       "name": "QUBOPreprocessing.double_probe_cascade_sound",
       "module": "QUBOPreprocessing.ProbingMargin",
       "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 221,
+          "column": 4
+        },
+        "end": {
+          "line": 221,
+          "column": 15
+        }
+      },
+      "references": [
+        "Real",
+        "Real",
+        "OfNat.ofNat",
+        "Zero.toOfNat0",
+        "Real.instZero"
+      ],
+      "range": {
+        "start": {
+          "line": 220,
+          "column": 0
+        },
+        "end": {
+          "line": 221,
+          "column": 38
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.bool1Alpha0",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "definition",
       "internal": false,
       "implemented_by": null,
       "extern": false,
@@ -37447,6 +42460,130 @@
       "unsafe": false,
       "selection": {
         "start": {
+          "line": 513,
+          "column": 8
+        },
+        "end": {
+          "line": 513,
+          "column": 43
+        }
+      },
+      "references": [
+        "Set",
+        "Prod",
+        "Real",
+        "QUBOPreprocessing.isSpin",
+        "Membership.mem",
+        "Set.instMembership",
+        "Eq",
+        "LE.le",
+        "Real.instLE",
+        "Ne",
+        "LT.lt",
+        "Real.instLT",
+        "QUBOPreprocessing.StrongReductionStep",
+        "SProd.sprod",
+        "Set.instSProd",
+        "QUBOPreprocessing.sep1SpinSet",
+        "QUBOPreprocessing.blockFullEnergy",
+        "Prod.fst",
+        "QUBOPreprocessing.blockReducedEnergy",
+        "QUBOPreprocessing.spin1Poly",
+        "QUBOPreprocessing.reconstruct",
+        "Set",
+        "Prod",
+        "Real",
+        "QUBOPreprocessing.isSpin",
+        "Membership.mem",
+        "Set.instMembership",
+        "Eq",
+        "LE.le",
+        "Real.instLE",
+        "Ne",
+        "LT.lt",
+        "Real.instLT",
+        "QUBOPreprocessing.block_elimination_strongReductionStep",
+        "QUBOPreprocessing.sep1SpinSet",
+        "Prod.fst",
+        "QUBOPreprocessing.spin1Poly",
+        "And.left",
+        "Prod.snd",
+        "QUBOPreprocessing.spin1Poly_eq"
+      ],
+      "range": {
+        "start": {
+          "line": 511,
+          "column": 0
+        },
+        "end": {
+          "line": 533,
+          "column": 41
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.sep1_spin_block_strongReductionStep",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 442,
+          "column": 8
+        },
+        "end": {
+          "line": 442,
+          "column": 38
+        }
+      },
+      "references": [
+        "Nat",
+        "Fin",
+        "Eq",
+        "Prod",
+        "QUBOPreprocessing.reconstruct",
+        "QUBOPreprocessing.coordBlockTable",
+        "Nat",
+        "Fin",
+        "rfl",
+        "Prod",
+        "QUBOPreprocessing.reconstruct",
+        "QUBOPreprocessing.coordBlockTable"
+      ],
+      "range": {
+        "start": {
+          "line": 441,
+          "column": 0
+        },
+        "end": {
+          "line": 443,
+          "column": 81
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.reconstruct_coordBlockTable_eq",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": []
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
           "line": 314,
           "column": 18
         },
@@ -37869,6 +43006,57 @@
       "name": "QUBOPreprocessing.deg3StarMin_quad_couplings_zero_of_field_dominant",
       "module": "QUBOPreprocessing.WalshDegree3",
       "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 290,
+          "column": 4
+        },
+        "end": {
+          "line": 290,
+          "column": 16
+        }
+      },
+      "references": [
+        "Real",
+        "Real",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "HSub.hSub",
+        "instHSub",
+        "Real.instSub",
+        "OfNat.ofNat",
+        "One.toOfNat1",
+        "Real.instOne",
+        "Zero.toOfNat0",
+        "Real.instZero"
+      ],
+      "range": {
+        "start": {
+          "line": 287,
+          "column": 0
+        },
+        "end": {
+          "line": 291,
+          "column": 31
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.bool2Alpha12",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "definition",
       "internal": false,
       "implemented_by": null,
       "extern": false,
@@ -40364,6 +45552,48 @@
       "unsafe": false,
       "selection": {
         "start": {
+          "line": 438,
+          "column": 8
+        },
+        "end": {
+          "line": 438,
+          "column": 32
+        }
+      },
+      "references": [
+        "Nat",
+        "Fin",
+        "Eq",
+        "QUBOPreprocessing.coordBlockTable",
+        "Nat",
+        "Fin",
+        "rfl",
+        "QUBOPreprocessing.coordBlockTable"
+      ],
+      "range": {
+        "start": {
+          "line": 434,
+          "column": 0
+        },
+        "end": {
+          "line": 439,
+          "column": 49
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.coordBlockTable_eq_joint",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": []
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
           "line": 130,
           "column": 8
         },
@@ -40741,6 +45971,66 @@
       "name": "QUBOPreprocessing.abs_gaugeH_eq",
       "module": "QUBOPreprocessing.GaugeCoercive",
       "kind": "theorem",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 396,
+          "column": 4
+        },
+        "end": {
+          "line": 396,
+          "column": 18
+        }
+      },
+      "references": [
+        "Nat",
+        "Real",
+        "Fin",
+        "HAdd.hAdd",
+        "instHAdd",
+        "instAddNat",
+        "OfNat.ofNat",
+        "instOfNatNat",
+        "Nat",
+        "Real",
+        "Fin",
+        "HAdd.hAdd",
+        "instHAdd",
+        "instAddNat",
+        "OfNat.ofNat",
+        "instOfNatNat",
+        "ite",
+        "Eq",
+        "Fin.last",
+        "instDecidableEqFin",
+        "Zero.toOfNat0",
+        "Real.instZero"
+      ],
+      "range": {
+        "start": {
+          "line": 392,
+          "column": 0
+        },
+        "end": {
+          "line": 397,
+          "column": 36
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.batchStepDelta",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "definition",
       "internal": false,
       "implemented_by": null,
       "extern": false,
@@ -41614,6 +46904,60 @@
       "unsafe": false,
       "selection": {
         "start": {
+          "line": 337,
+          "column": 18
+        },
+        "end": {
+          "line": 337,
+          "column": 25
+        }
+      },
+      "references": [
+        "Real",
+        "Real",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "HDiv.hDiv",
+        "instHDiv",
+        "DivInvMonoid.toDiv",
+        "Real.instDivInvMonoid",
+        "QUBOPreprocessing.spin2Alpha2",
+        "OfNat.ofNat",
+        "instOfNatAtLeastTwo",
+        "Real.instNatCast",
+        "QUBOPreprocessing.spin1Const._proof_1",
+        "QUBOPreprocessing.spin2Alpha12",
+        "QUBOPreprocessing.spin2Const._proof_1"
+      ],
+      "range": {
+        "start": {
+          "line": 335,
+          "column": 0
+        },
+        "end": {
+          "line": 338,
+          "column": 40
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.spin2H2",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "definition",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
           "line": 330,
           "column": 8
         },
@@ -41825,6 +47169,59 @@
         "Classical.choice",
         "Quot.sound"
       ]
+    },
+    {
+      "unsafe": false,
+      "selection": {
+        "start": {
+          "line": 245,
+          "column": 18
+        },
+        "end": {
+          "line": 245,
+          "column": 28
+        }
+      },
+      "references": [
+        "Real",
+        "Real",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "QUBOPreprocessing.spin1Alpha0",
+        "HDiv.hDiv",
+        "instHDiv",
+        "DivInvMonoid.toDiv",
+        "Real.instDivInvMonoid",
+        "QUBOPreprocessing.spin1Alpha1",
+        "OfNat.ofNat",
+        "instOfNatAtLeastTwo",
+        "Real.instNatCast",
+        "QUBOPreprocessing.spin1Const._proof_1"
+      ],
+      "range": {
+        "start": {
+          "line": 243,
+          "column": 0
+        },
+        "end": {
+          "line": 246,
+          "column": 35
+        }
+      },
+      "private": false,
+      "partial": false,
+      "name": "QUBOPreprocessing.spin1Const",
+      "module": "QUBOPreprocessing.BlockElimination",
+      "kind": "definition",
+      "internal": false,
+      "implemented_by": null,
+      "extern": false,
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ]
     }
   ],
   "public_source_theorems": [
@@ -41842,6 +47239,16 @@
     "QUBOPreprocessing.abs_neighbor_sum_le_couplingNorm1",
     "QUBOPreprocessing.abs_of_isSpin",
     "QUBOPreprocessing.allCascadePreds_imp_mem",
+    "QUBOPreprocessing.batchStepDelta_last",
+    "QUBOPreprocessing.batchStepDelta_lt_last",
+    "QUBOPreprocessing.block_elimination_preserves_global_min",
+    "QUBOPreprocessing.block_elimination_reductionStep",
+    "QUBOPreprocessing.block_elimination_repair_monotone",
+    "QUBOPreprocessing.block_elimination_strongReductionStep",
+    "QUBOPreprocessing.block_elimination_strong_image_global_min_eq",
+    "QUBOPreprocessing.block_elimination_unique_argmin_iff",
+    "QUBOPreprocessing.bool1Poly_eq",
+    "QUBOPreprocessing.bool2QuadPoly_eq",
     "QUBOPreprocessing.boolToSpinMargin_eq",
     "QUBOPreprocessing.boolToSpin_spinToBool",
     "QUBOPreprocessing.branchSpinMargin_le_of_mem",
@@ -41870,6 +47277,8 @@
     "QUBOPreprocessing.coflip_strongReductionStep",
     "QUBOPreprocessing.coflip_strong_image_global_min_eq",
     "QUBOPreprocessing.conditional_elimination_is_reduction",
+    "QUBOPreprocessing.coordBlockTable_apply",
+    "QUBOPreprocessing.coordBlockTable_eq_joint",
     "QUBOPreprocessing.coupled_twin_strong_contraction",
     "QUBOPreprocessing.couplingNorm1_gauge_invariant",
     "QUBOPreprocessing.deg3StarMin_achieved",
@@ -41913,6 +47322,7 @@
     "QUBOPreprocessing.gammaTriangle_supportive",
     "QUBOPreprocessing.gammaTriangle_zero_residual",
     "QUBOPreprocessing.in_place_compression_nonconstant_shift",
+    "QUBOPreprocessing.interp0Poly_eq",
     "QUBOPreprocessing.isBool_spinToBool_iff",
     "QUBOPreprocessing.isSpin_boolToSpin_iff",
     "QUBOPreprocessing.isSpin_mul",
@@ -41952,14 +47362,33 @@
     "QUBOPreprocessing.qubo_persist_one_iff_ising_coercive_neg",
     "QUBOPreprocessing.qubo_persist_zero_iff_ising_coercive_pos",
     "QUBOPreprocessing.qubo_upper_grad_eq_two_mul_ising_margin",
+    "QUBOPreprocessing.reconstruct_coordBlockTable_eq",
     "QUBOPreprocessing.repair_monotone",
     "QUBOPreprocessing.repair_strict_improvement",
     "QUBOPreprocessing.repair_u_satisfies_relation",
     "QUBOPreprocessing.repair_v_satisfies_relation",
+    "QUBOPreprocessing.sep0_block_reductionStep",
+    "QUBOPreprocessing.sep0_block_strongReductionStep",
+    "QUBOPreprocessing.sep1_spin_block_reductionStep",
+    "QUBOPreprocessing.sep1_spin_block_strongReductionStep",
+    "QUBOPreprocessing.sep2_spin_block_preserves_global_min",
+    "QUBOPreprocessing.sep2_spin_block_reductionStep",
+    "QUBOPreprocessing.sep2_spin_block_strongReductionStep",
+    "QUBOPreprocessing.sep2_spin_block_strong_image_global_min_eq",
+    "QUBOPreprocessing.sep3_spin_block_reductionStep_of_cubic_zero",
+    "QUBOPreprocessing.sep3_spin_block_strongReductionStep_of_cubic_zero",
     "QUBOPreprocessing.singleSpinFlipDelta_eq",
     "QUBOPreprocessing.single_step_spin_margin_neg_hi",
     "QUBOPreprocessing.single_step_spin_margin_pos_lo",
     "QUBOPreprocessing.single_step_spin_margin_sound",
+    "QUBOPreprocessing.spin1Const_eq_walsh",
+    "QUBOPreprocessing.spin1Field_eq_walsh",
+    "QUBOPreprocessing.spin1Poly_eq",
+    "QUBOPreprocessing.spin2Const_eq_walsh",
+    "QUBOPreprocessing.spin2H1_eq_walsh",
+    "QUBOPreprocessing.spin2H2_eq_walsh",
+    "QUBOPreprocessing.spin2J12_eq_walsh",
+    "QUBOPreprocessing.spin2QuadPoly_eq",
     "QUBOPreprocessing.spinToBool_boolToSpin",
     "QUBOPreprocessing.spin_rel_or_viol",
     "QUBOPreprocessing.starMin_achieved",
@@ -41967,6 +47396,7 @@
     "QUBOPreprocessing.starMin_even",
     "QUBOPreprocessing.starMin_le",
     "QUBOPreprocessing.starTriPoly_eq_starMin",
+    "QUBOPreprocessing.sum_batchStepDelta_eq",
     "QUBOPreprocessing.triEnergy_flip_a",
     "QUBOPreprocessing.triEnergy_flip_ac",
     "QUBOPreprocessing.uncorrected_multicut_triangle_counterexample",
