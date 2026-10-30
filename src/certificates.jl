@@ -1579,18 +1579,20 @@ function _block_elimination_witness(
     return (steps, :proved, :exact, visits, exact_work)
 end
 
-function _witness_satisfies_step(is_bool::Bool, pstep, w)
+function _witness_satisfies_step(is_bool::Bool, pstep, @nospecialize(w))
     if pstep isa Union{DominanceStep,ProbingStep,RoofDualityStep,SubmodularCutStep}
-        return w[pstep.variable] == pstep.value
+        return _entry_at(w, pstep.variable) == pstep.value
     elseif pstep isa MaxCutStep && pstep.representative == 0
-        return w[pstep.eliminated] == pstep.value
+        return _entry_at(w, pstep.eliminated) == pstep.value
     elseif pstep isa Union{RelationStep,MaxCutStep}
-        s_u = is_bool ? (2 * w[pstep.eliminated] - 1) : w[pstep.eliminated]
-        s_v = is_bool ? (2 * w[pstep.representative] - 1) : w[pstep.representative]
+        wu = _entry_at(w, pstep.eliminated)
+        wv = _entry_at(w, pstep.representative)
+        s_u = is_bool ? (2 * wu - 1) : wu
+        s_v = is_bool ? (2 * wv - 1) : wv
         return s_u == pstep.orig_sign * s_v
     elseif pstep isa EliminationStep
-        idx = 1 + sum(((1 << (b - 1)) for (b, nbr) in enumerate(pstep.neighbors) if w[nbr] == 1); init=0)
-        return w[pstep.variable] == pstep.table[idx]
+        idx = 1 + sum(((1 << (b - 1)) for (b, nbr) in enumerate(pstep.neighbors) if _entry_at(w, nbr) == 1); init=0)
+        return _entry_at(w, pstep.variable) == pstep.table[idx]
     end
     return true
 end
@@ -4735,17 +4737,20 @@ end
 
 function _verify_poly_witness_state(
     p::_PolyState,
-    w::Tuple{Vararg{Int}},
+    @nospecialize(w::Tuple{Vararg{Int}}),
     assumptions_prefix,
     prefix_steps,
     deadline,
 )
     is_bool = p.domain === QT.BoolDomain
     low_orig = is_bool ? 0 : -1
-    length(w) == p.n && all(v -> v in (low_orig, 1), w) ||
-        return (false, :invalid_witness, _Exact(0))
+    length(w) == p.n || return (false, :invalid_witness, _Exact(0))
+    for i in 1:p.n
+        v = _entry_at(w, i)
+        (v == low_orig || v == 1) || return (false, :invalid_witness, _Exact(0))
+    end
     for (idx, val) in assumptions_prefix
-        w[idx] == val || return (false, :invalid_witness, _Exact(0))
+        _entry_at(w, idx) == val || return (false, :invalid_witness, _Exact(0))
     end
     for pstep in prefix_steps
         _witness_satisfies_step(is_bool, pstep, w) || return (false, :invalid_witness, _Exact(0))
@@ -4754,10 +4759,11 @@ function _verify_poly_witness_state(
     for v_idx in 1:p.n
         _expired(deadline) && return (false, :deadline, _Exact(0))
         p.active[v_idx] || continue
-        w_energy += p.fields[v_idx] * w[v_idx]
+        wv = _entry_at(w, v_idx)
+        w_energy += p.fields[v_idx] * wv
         for (nbr, q) in p.adj[v_idx]
             (p.active[nbr] && v_idx < nbr) || continue
-            w_energy += q * w[v_idx] * w[nbr]
+            w_energy += q * wv * _entry_at(w, nbr)
         end
     end
     return (true, :verified, _direction_poly(p) * w_energy)

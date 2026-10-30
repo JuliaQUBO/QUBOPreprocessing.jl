@@ -30,18 +30,23 @@ mutable struct _GaugeConstantCursor
     constants::Vector{_Exact}
 end
 
-function _source_gauged_bool_constant(s::_Snapshot, g::Tuple{Vararg{Int}})
+function _source_gauged_bool_constant(s::_Snapshot, @nospecialize(g::Tuple{Vararg{Int}}))
     is_bool = s.domain === QT.BoolDomain
     c = _to_exact(s.offset)
+    gref = Ref{Tuple{Vararg{Int}}}(g)
     _foreach_linear_term(s.linear) do i, v
-        val_i = is_bool ? ((1 - g[i]) ÷ 2) : -g[i]
+        gi = _entry_at(gref[], i)
+        val_i = is_bool ? ((1 - gi) ÷ 2) : -gi
         val_i == 0 && return nothing
         c += _to_exact(v) * val_i
         return nothing
     end
     _foreach_quadratic_term(s.quadratic) do i, j, v
-        val_i = is_bool ? ((1 - g[i]) ÷ 2) : -g[i]
-        val_j = is_bool ? ((1 - g[j]) ÷ 2) : -g[j]
+        gt = gref[]
+        gi = _entry_at(gt, i)
+        gj = _entry_at(gt, j)
+        val_i = is_bool ? ((1 - gi) ÷ 2) : -gi
+        val_j = is_bool ? ((1 - gj) ÷ 2) : -gj
         (val_i == 0 || val_j == 0) && return nothing
         c += _to_exact(v) * (val_i * val_j)
         return nothing

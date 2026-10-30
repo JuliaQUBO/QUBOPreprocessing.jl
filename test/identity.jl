@@ -325,8 +325,16 @@ end
     # DomainGaugeMap does not compile a new constructor for every model size
     # (previously ~25s on the first call at n = 3000).
     domain_map(independent_workspace(10); domain=:spin)
+    domain_map(independent_workspace(10); domain=:bool, gauge=[isodd(i) ? -1 : 1 for i in 1:10])
     ws_fresh = independent_workspace(3_001)
     @test (@elapsed domain_map(ws_fresh; domain=:spin, gauge=[isodd(i) ? -1 : 1 for i in 1:3_001])) < 10.0
+    ws_fresh_bool = independent_workspace(3_002)
+    @test (@elapsed domain_map(ws_fresh_bool; domain=:bool, gauge=[isodd(i) ? -1 : 1 for i in 1:3_002])) < 10.0
+    p10 = QUBOPreprocessing._init_poly_state(independent_workspace(10)._snapshot)
+    QUBOPreprocessing._verify_poly_witness_state(p10, Tuple(zeros(Int, 10)), Tuple{Int,Int}[], Any[], nothing)
+    p_fresh = QUBOPreprocessing._init_poly_state(independent_workspace(3_003)._snapshot)
+    w_fresh = Tuple(zeros(Int, 3_003))
+    @test (@elapsed QUBOPreprocessing._verify_poly_witness_state(p_fresh, w_fresh, Tuple{Int,Int}[], Any[], nothing)) < 1.0
 
     # Export, verification and materialization stay linear at n = 20k
     # (previously ~14s each for export and materialize).
