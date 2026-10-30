@@ -3,6 +3,16 @@
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 const _Exact = Rational{BigInt}
+
+@inline function _to_exact(v::Float64)::_Exact
+    if v == trunc(v) && -9007199254740992.0 <= v <= 9007199254740992.0
+        return Base.unsafe_rational(BigInt, BigInt(Int64(v)), BigInt(1))
+    end
+    return _Exact(v)
+end
+@inline _to_exact(v::Integer)::_Exact = Base.unsafe_rational(BigInt, BigInt(v), BigInt(1))
+@inline _to_exact(v::_Exact)::_Exact = v
+
 abstract type _ProofRecord end
 const _NeighborRecord = Tuple{Int,_Exact,_Exact,_Exact}
 const _DualDegreeRecord = Tuple{Int,_Exact,Int}
