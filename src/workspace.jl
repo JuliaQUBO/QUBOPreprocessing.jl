@@ -55,14 +55,12 @@ end
 
 function _incremental(s::_Snapshot;rules=:identity)
     n = length(s.labels)
-    adjacency = [Pair{Int,_Exact}[] for _ in 1:n]
     adj_pos = [Dict{Int,Int}() for _ in 1:n]
     fields = fill(_Exact(0), n)
-    f = QT.Form{Float64}(n, _thaw(s.linear), _thaw(s.quadratic), s.scale, s.offset;
-                         sense=s.sense, domain=s.domain)
     all_int53 = isfinite(s.offset) && s.offset == trunc(s.offset) && abs(s.offset) <= 9007199254740992.0
     f_int = all_int53 ? zeros(Int128, n) : Int128[]
-    for (i, v) in QT.linear_terms(f)
+    _foreach_linear_term(s.linear) do i, v
+        iszero(v) && return nothing
         fields[i] = _to_exact(v)
         if all_int53
             if v == trunc(v) && abs(v) <= 9007199254740992.0
@@ -71,35 +69,40 @@ function _incremental(s::_Snapshot;rules=:identity)
                 all_int53 = false
             end
         end
+        return nothing
     end
     deg_init = zeros(Int, n)
-    for ((i, j), v) in QT.quadratic_terms(f)
-        iszero(v) && continue
+    _foreach_quadratic_term(s.quadratic) do i, j, v
+        iszero(v) && return nothing
         deg_init[i] += 1
         deg_init[j] += 1
         if all_int53 && !(v == trunc(v) && abs(v) <= 9007199254740992.0)
             all_int53 = false
         end
+        return nothing
     end
+    adjacency = [Vector{Pair{Int,_Exact}}(undef, deg_init[i]) for i in 1:n]
     for i in 1:n
         d_i = deg_init[i]
-        if d_i > 0
-            sizehint!(adjacency[i], d_i)
-            sizehint!(adj_pos[i], d_i)
-        end
+        d_i > 0 && sizehint!(adj_pos[i], d_i)
     end
     need_bounds = rules in (:dominance, :elimination, :relations, :mixed)
     csum_int = all_int53 ? zeros(Int128, n) : Int128[]
     neg_int = (all_int53 && need_bounds) ? zeros(Int128, n) : Int128[]
     pos_int = (all_int53 && need_bounds) ? zeros(Int128, n) : Int128[]
     quad_sum_int = Int128(0)
-    for ((i,j), v) in QT.quadratic_terms(f)
-        iszero(v) && continue
+    adj_cur = ones(Int, n)
+    _foreach_quadratic_term(s.quadratic) do i, j, v
+        iszero(v) && return nothing
         q = _to_exact(v)
-        push!(adjacency[i], j=>q)
-        adj_pos[i][j] = length(adjacency[i])
-        push!(adjacency[j], i=>q)
-        adj_pos[j][i] = length(adjacency[j])
+        pi = adj_cur[i]
+        adjacency[i][pi] = j => q
+        adj_pos[i][j] = pi
+        adj_cur[i] = pi + 1
+        pj = adj_cur[j]
+        adjacency[j][pj] = i => q
+        adj_pos[j][i] = pj
+        adj_cur[j] = pj + 1
         if all_int53
             iv = Int128(Int64(v))
             csum_int[i] += iv
@@ -115,6 +118,7 @@ function _incremental(s::_Snapshot;rules=:identity)
                 end
             end
         end
+        return nothing
     end
     degrees = deg_init
     initial_degrees = copy(degrees)

@@ -2714,11 +2714,12 @@ end
     rep::Int,
     q::_Exact,
     direction::Int,
-    map::Union{Nothing,DomainGaugeMap},
+    map::Union{Nothing,DomainGaugeMap};
+    check_coflip::Bool=true,
 )
     st, s = ws._state, ws._snapshot
     (st.lower !== nothing && st.upper !== nothing) || return true
-    iszero(q) && return false
+    q.num.size == 0 && return false
     is_spin_dom = s.domain === QT.SpinDomain
     tot_scale = is_spin_dom ? 0.5 : 0.25
     j_scale = is_spin_dom ? 1.0 : 0.25
@@ -2736,6 +2737,8 @@ end
     two_c_hi = _nextfloat_finite(2.0 * _nextfloat_finite(j_scale * max(abs(q_lo), abs(q_hi))))
     if isfinite(tot_e_lo) && isfinite(he_abs_hi) && isfinite(two_c_hi)
         if _nextfloat_finite(two_c_hi - he_abs_lo) < tot_e_lo
+            glk_ok = (he_raw.num.size != 0) && !(_nextfloat_finite(two_c_hi + he_abs_hi) < tot_e_lo)
+            (!glk_ok && !check_coflip) && return false
             up_r_lo, up_r_hi = _enclose(st.upper[rep])
             lo_r_lo, lo_r_hi = _enclose(st.lower[rep])
             tot_r_lo = _prevfloat_finite(tot_scale * _prevfloat_finite(up_r_lo - lo_r_hi))
@@ -2743,11 +2746,10 @@ end
             hr_raw = _spin_field(ws, rep)
             hrr_lo, hrr_hi = _enclose(hr_raw)
             hr_lo, hr_hi = (direction * g_r >= 0) ? (hrr_lo, hrr_hi) : (-hrr_hi, -hrr_lo)
-            q_mapped_nonpos = (direction * (g_e * g_r) >= 0) ? (q < 0) : (q > 0)
+            q_mapped_nonpos = (direction * (g_e * g_r) >= 0) ? (q.num.size < 0) : (q.num.size > 0)
             σ = q_mapped_nonpos ? 1 : -1
-            glk_ok = !iszero(he_raw) && !(_nextfloat_finite(two_c_hi + he_abs_hi) < tot_e_lo)
             if glk_ok
-                he_pos = (direction * g_e >= 0) ? (he_raw > 0) : (he_raw < 0)
+                he_pos = (direction * g_e >= 0) ? (he_raw.num.size > 0) : (he_raw.num.size < 0)
                 σ_he_pos = (σ == 1) ? he_pos : !he_pos
                 req_hr_hi = σ_he_pos ? hr_hi : -hr_lo
                 if isfinite(tot_r_lo) && isfinite(req_hr_hi) && _nextfloat_finite(two_c_hi + req_hr_hi) < tot_r_lo
@@ -2755,6 +2757,7 @@ end
                 end
             end
             if !glk_ok
+                check_coflip || return false
                 he_s_lo, he_s_hi = (direction * g_e >= 0) ? (he_lo, he_hi) : (-he_hi, -he_lo)
                 hd_lo = σ == 1 ? _prevfloat_finite(he_s_lo - hr_hi) : _prevfloat_finite(he_s_lo + hr_lo)
                 hd_hi = σ == 1 ? _nextfloat_finite(he_s_hi - hr_lo) : _nextfloat_finite(he_s_hi + hr_hi)
@@ -2770,7 +2773,7 @@ end
                         return false
                     end
                 else
-                    a_small, b_large, tot_a_hi, tot_b_lo = if length(st.adjacency[elim]) <= length(st.adjacency[rep])
+                    a_small, b_large, tot_a_hi, tot_b_lo = if 2 * length(st.adjacency[elim]) < length(st.adjacency[rep])
                         (elim, rep, tot_e_hi, tot_r_lo)
                     else
                         (rep, elim, tot_r_hi, tot_e_lo)
@@ -2781,7 +2784,7 @@ end
                         rem_budget_hi < 0.0 && return false
                         delta_lo_sum = 0.0
                         for (w, q_aw) in st.adjacency[a_small]
-                            (w != elim && w != rep && st.fixed[w] == 2 && !iszero(q_aw)) || continue
+                            (w != elim && w != rep && st.fixed[w] == 2 && q_aw.num.size != 0) || continue
                             qaw_lo, qaw_hi = _enclose(q_aw)
                             jaw_lo = _prevfloat_finite(j_scale * min(abs(qaw_lo), abs(qaw_hi)))
                             pos_bw = get(st.adj_pos[b_large], w, 0)
@@ -2789,7 +2792,7 @@ end
                                 delta_lo_sum = _prevfloat_finite(delta_lo_sum + _prevfloat_finite(2.0 * jaw_lo))
                             else
                                 q_bw = st.adjacency[b_large][pos_bw].second
-                                if iszero(q_bw) || ((q_aw > 0) != (orig_σ > 0 ? (q_bw > 0) : (q_bw < 0)))
+                                if q_bw.num.size == 0 || ((q_aw.num.size > 0) != (orig_σ > 0 ? (q_bw.num.size > 0) : (q_bw.num.size < 0)))
                                     delta_lo_sum = _prevfloat_finite(delta_lo_sum + _prevfloat_finite(2.0 * jaw_lo))
                                 else
                                     qbw_lo, qbw_hi = _enclose(q_bw)
@@ -2834,21 +2837,24 @@ function _step_relation_queue!(
     adj_u_len = length(st.adjacency[u])
     adj_u_len <= rem_work - 1 || return (:work_limit, 0, 0, 0, 0, 0, 0)
     nbrs = Pair{Int,_Exact}[]
+    sizehint!(nbrs, st.degrees[u])
     for (w, q) in st.adjacency[u]
         _expired(deadline_ns) && return (:deadline, 0, 0, 0, 0, 0, 0)
         if st.fixed[w] == 2 && !iszero(q)
             push!(nbrs, w => q)
         end
     end
-    sort!(nbrs; by=first)
+    !issorted(nbrs; by=first) && sort!(nbrs; by=first)
     u_visits = 0
     u_exact = 0
     u_fb = 0
     called_witness = false
     min_blocked = typemax(Int)
     fills_uv = fill(-1, length(nbrs))
+    cans_uv = falses(length(nbrs))
     for (idx, (v, q)) in enumerate(nbrs)
         can_uv = _can_possibly_contract(ws, u, v, q, direction, map)
+        cans_uv[idx] = can_uv
         if !can_uv && (mf == typemax(Int) || min_blocked <= mf + 1)
             continue
         end
@@ -2879,11 +2885,14 @@ function _step_relation_queue!(
         end
     end
     for (idx, (v, q)) in enumerate(nbrs)
-        can_vu = _can_possibly_contract(ws, v, u, q, direction, map)
+        f_uv = fills_uv[idx]
+        if f_uv <= mf && st.rel_queued[v] && st.degrees[v] - 1 <= mf
+            continue
+        end
+        can_vu = _can_possibly_contract(ws, v, u, q, direction, map; check_coflip=cans_uv[idx])
         if !can_vu && (mf == typemax(Int) || min_blocked <= mf + 1)
             continue
         end
-        f_uv = fills_uv[idx]
         if f_uv >= 0 && f_uv <= mf && st.rel_queued[v]
             if st.degrees[v] - 1 > mf && (can_vu || min_blocked > mf + 1)
                 f_vu = _contraction_fill(st, v, u)
@@ -2945,11 +2954,11 @@ function _step_relation_queue!(
             (v != u && st.fixed[v] == 2 && st.degrees[v] == d_u) || continue
             σ_cand = q_vw_piv == q_uw_piv ? 1 : (q_vw_piv == neg_q_uw_piv ? -1 : 0)
             σ_cand != 0 || continue
+            h_v_spin = _spin_field(ws, v)
+            (σ_cand == 1 ? (h_v_spin == h_u_spin) : (h_v_spin == neg_h_u_spin)) || continue
             pos_uv = get(st.adj_pos[u], v, 0)
             (pos_uv == 0 || iszero(st.adjacency[u][pos_uv].second)) || continue
             has_sum && (st.upper[v] - st.lower[v]) != tot_u_exact && continue
-            h_v_spin = _spin_field(ws, v)
-            (σ_cand == 1 ? (h_v_spin == h_u_spin) : (h_v_spin == neg_h_u_spin)) || continue
             all_match = true
             @inbounds for (w, q_uw) in nbrs
                 pos_vw = get(st.adj_pos[v], w, 0)

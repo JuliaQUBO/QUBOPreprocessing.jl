@@ -622,9 +622,24 @@ _direction(s::_Snapshot) = iszero(s.scale) ? 0 :
 # Check the enclosure against the exact cached field rather than assuming a
 # rational-to-float conversion is correctly rounded. No global rounding mode.
 @inline function _enclose(q::_Exact)
-    if q.den == 1 && -9007199254740992 <= q.num <= 9007199254740992
-        v = Float64(Int64(q.num))
-        return v, v
+    nsz = q.num.size
+    nsz == 0 && return (0.0, 0.0)
+    if Base.GMP.Limb === UInt64 && (nsz == 1 || nsz == -1) && q.den.size == 1
+        nlimb, dlimb = GC.@preserve q (unsafe_load(q.num.d), unsafe_load(q.den.d))
+        if nlimb <= 0x0020000000000000 && dlimb <= 0x0020000000000000
+            nf = nsz > 0 ? Float64(nlimb) : -Float64(nlimb)
+            dlimb == 0x0000000000000001 && return (nf, nf)
+            df = Float64(dlimb)
+            v = nf / df
+            rem = fma(v, df, -nf)
+            if rem == 0.0
+                return (v, v)
+            elseif rem > 0.0
+                return (prevfloat(v), v)
+            else
+                return (v, nextfloat(v))
+            end
+        end
     end
     v = Float64(q)
     isfinite(v) || return (-Inf,Inf)
@@ -2576,14 +2591,16 @@ end
 function _init_poly_state(s::_Snapshot; map::Union{Nothing,DomainGaugeMap}=nothing, deadline=nothing)
     n = length(s.labels)
     fields = fill(_Exact(0), n)
-    adj = [Pair{Int,_Exact}[] for _ in 1:n]
     adj_pos = [Dict{Int,Int}() for _ in 1:n]
-    f = QT.Form{Float64}(n, _thaw(s.linear), _thaw(s.quadratic), s.scale, s.offset;
-                         sense=s.sense, domain=s.domain)
     all_int53 = isfinite(s.offset) && s.offset == trunc(s.offset) && abs(s.offset) <= 9007199254740992.0
     f_int = all_int53 ? zeros(Int128, n) : Int128[]
-    for (i, v) in QT.linear_terms(f)
-        _expired(deadline) && return nothing
+    timed_out = false
+    _foreach_linear_term(s.linear) do i, v
+        if timed_out || _expired(deadline)
+            timed_out = true
+            return nothing
+        end
+        iszero(v) && return nothing
         fields[i] = _to_exact(v)
         if all_int53
             if v == trunc(v) && abs(v) <= 9007199254740992.0
@@ -2592,34 +2609,43 @@ function _init_poly_state(s::_Snapshot; map::Union{Nothing,DomainGaugeMap}=nothi
                 all_int53 = false
             end
         end
+        return nothing
     end
+    timed_out && return nothing
     deg_init = zeros(Int, n)
-    for ((i, j), v) in QT.quadratic_terms(f)
-        iszero(v) && continue
+    _foreach_quadratic_term(s.quadratic) do i, j, v
+        iszero(v) && return nothing
         deg_init[i] += 1
         deg_init[j] += 1
         if all_int53 && !(v == trunc(v) && abs(v) <= 9007199254740992.0)
             all_int53 = false
         end
+        return nothing
     end
+    adj = [Vector{Pair{Int,_Exact}}(undef, deg_init[i]) for i in 1:n]
     for i in 1:n
         d_i = deg_init[i]
-        if d_i > 0
-            sizehint!(adj[i], d_i)
-            sizehint!(adj_pos[i], d_i)
-        end
+        d_i > 0 && sizehint!(adj_pos[i], d_i)
     end
     csum_int = all_int53 ? zeros(Int128, n) : Int128[]
     quad_sum_int = Int128(0)
     quad_sum = _Exact(0)
-    for ((i, j), v) in QT.quadratic_terms(f)
-        _expired(deadline) && return nothing
-        iszero(v) && continue
+    adj_cur = ones(Int, n)
+    _foreach_quadratic_term(s.quadratic) do i, j, v
+        if timed_out || _expired(deadline)
+            timed_out = true
+            return nothing
+        end
+        iszero(v) && return nothing
         q = _to_exact(v)
-        push!(adj[i], j => q)
-        adj_pos[i][j] = length(adj[i])
-        push!(adj[j], i => q)
-        adj_pos[j][i] = length(adj[j])
+        pi = adj_cur[i]
+        adj[i][pi] = j => q
+        adj_pos[i][j] = pi
+        adj_cur[i] = pi + 1
+        pj = adj_cur[j]
+        adj[j][pj] = i => q
+        adj_pos[j][i] = pj
+        adj_cur[j] = pj + 1
         if all_int53
             iv = Int128(Int64(v))
             csum_int[i] += iv
@@ -2628,7 +2654,9 @@ function _init_poly_state(s::_Snapshot; map::Union{Nothing,DomainGaugeMap}=nothi
         else
             quad_sum += q
         end
+        return nothing
     end
+    timed_out && return nothing
     constant = _to_exact(s.offset)
     is_bool = s.domain === QT.BoolDomain
     h_spin = Vector{_Exact}(undef, n)

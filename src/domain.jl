@@ -12,7 +12,7 @@ _sense_symbol(s::QT.Sense) = s === QT.Min ? :min : :max
 
 function _same_storage(a::_Storage, b::_Storage)
     return a.kind === b.kind && a.shape == b.shape && isequal(a.values, b.values) &&
-           a.indices == b.indices && a.pointers == b.pointers
+           a.indices == b.indices && a.pair_indices == b.pair_indices && a.pointers == b.pointers
 end
 function _same_source(a::_Snapshot, b::_Snapshot)
     return a.label_type === b.label_type && a.state_type === b.state_type &&
@@ -31,21 +31,20 @@ mutable struct _GaugeConstantCursor
 end
 
 function _source_gauged_bool_constant(s::_Snapshot, g::Tuple{Vararg{Int}})
-    n = length(s.labels)
-    f = QT.Form{Float64}(n, _thaw(s.linear), _thaw(s.quadratic), s.scale, s.offset;
-                         sense=s.sense, domain=s.domain)
     is_bool = s.domain === QT.BoolDomain
-    c = _Exact(s.offset)
-    for (i, v) in QT.linear_terms(f)
+    c = _to_exact(s.offset)
+    _foreach_linear_term(s.linear) do i, v
         val_i = is_bool ? ((1 - g[i]) ÷ 2) : -g[i]
-        val_i == 0 && continue
-        c += _Exact(v) * val_i
+        val_i == 0 && return nothing
+        c += _to_exact(v) * val_i
+        return nothing
     end
-    for ((i, j), v) in QT.quadratic_terms(f)
+    _foreach_quadratic_term(s.quadratic) do i, j, v
         val_i = is_bool ? ((1 - g[i]) ÷ 2) : -g[i]
         val_j = is_bool ? ((1 - g[j]) ÷ 2) : -g[j]
-        (val_i == 0 || val_j == 0) && continue
-        c += _Exact(v) * (val_i * val_j)
+        (val_i == 0 || val_j == 0) && return nothing
+        c += _to_exact(v) * (val_i * val_j)
+        return nothing
     end
     return c
 end
