@@ -93,19 +93,26 @@ RelationStep(u,v,s,os,lo,hi,c,p,m) = RelationStep(u,v,s,os,lo,hi,c,p,m,-1,:stron
 RelationStep(u,v,s,os,lo,hi,c,p,m,sc) = RelationStep(u,v,s,os,lo,hi,c,p,m,sc,:strong,nothing)
 RelationStep(u,v,s,os,lo,hi,c,p,m,sc,pers) = RelationStep(u,v,s,os,lo,hi,c,p,m,sc,pers,nothing)
 
+struct _BlockEliminationWitness
+    block_variables::Tuple{Vararg{Int}}
+    batch_index::Int
+    block_tables::Tuple{Vararg{Tuple{Vararg{Int}}}}
+    block_phi::Tuple{Vararg{_Exact}}
+end
+
 """
     EliminationStep
 
-Compact bounded-degree (`0 <= length(neighbors) <= 3`) exact local variable
-elimination witness certifying
-``F'(y) = \\operatorname{opt}_{x_u} F(y, x_u)`` across all ``2^d \\le 8``
-boundary assignments of `neighbors` (stored in ascending original-index order).
-`table` stores the reconstructing original-domain assignment for `variable`
-indexed by `1 + sum(((z_b == 1) << (b - 1)) for b in 1:d)`. `constant_delta`,
-`linear_deltas` and `quadratic_deltas` store the exact source-domain polynomial
-update induced by eliminating `variable`. `unique_argmin` is `true` when the
-minimizing value of `variable` is strict (`L_u(z) != 0`) for every boundary
-configuration `z`.
+Compact bounded-degree (`0 <= length(neighbors) <= 3`) exact local variable or
+bounded-separator (`0 <= length(neighbors) <= 2`) connected block elimination
+witness certifying ``F'(y) = \\operatorname{opt}_{x_u} F(y, x_u)`` (or
+``F'(y) = \\operatorname{opt}_{x_B} F(y, x_B)`` across `block_witness.block_variables`)
+across all ``2^d`` boundary assignments of `neighbors` (stored in ascending
+original-index order). `table` stores the reconstructing original-domain
+assignment for `variable` indexed by `1 + sum(((z_b == 1) << (b - 1)) for b in 1:d)`.
+`constant_delta`, `linear_deltas` and `quadratic_deltas` store the exact
+source-domain polynomial update induced by the elimination. `unique_argmin` is
+`true` when the minimizing assignment is strict for every boundary configuration `z`.
 """
 struct EliminationStep <: _ProofRecord
     variable::Int
@@ -118,8 +125,10 @@ struct EliminationStep <: _ProofRecord
     predecessors::Int
     scope_length::Int
     unique_argmin::Bool
+    block_witness::Union{Nothing,_BlockEliminationWitness}
 end
-EliminationStep(u,nbrs,tbl,cd,ld,qd,c,p) = EliminationStep(u,nbrs,tbl,cd,ld,qd,c,p,-1,true)
+EliminationStep(u,nbrs,tbl,cd,ld,qd,c,p) = EliminationStep(u,nbrs,tbl,cd,ld,qd,c,p,-1,true,nothing)
+EliminationStep(u,nbrs,tbl,cd,ld,qd,c,p,sc,ua) = EliminationStep(u,nbrs,tbl,cd,ld,qd,c,p,sc,ua,nothing)
 
 """
     ProbingStep
@@ -322,6 +331,16 @@ function Base.deepcopy_internal(s::RelationStep, dict::IdDict)
     )
 end
 
+function Base.deepcopy_internal(w::_BlockEliminationWitness, dict::IdDict)
+    haskey(dict, w) && return dict[w]::_BlockEliminationWitness
+    return _BlockEliminationWitness(
+        _deepcopy_tuple(w.block_variables, dict),
+        w.batch_index,
+        _deepcopy_tuple(w.block_tables, dict),
+        _deepcopy_tuple(w.block_phi, dict),
+    )
+end
+
 function Base.deepcopy_internal(s::EliminationStep, dict::IdDict)
     haskey(dict, s) && return dict[s]::EliminationStep
     return EliminationStep(
@@ -335,6 +354,7 @@ function Base.deepcopy_internal(s::EliminationStep, dict::IdDict)
         s.predecessors,
         s.scope_length,
         s.unique_argmin,
+        s.block_witness === nothing ? nothing : Base.deepcopy_internal(s.block_witness, dict),
     )
 end
 
@@ -1210,6 +1230,50 @@ function _relation_witness(ws::Workspace, u::Int, v::Int;
     return (nothing, :not_strict, err_method, visits, 1, exact_work)
 end
 
+function _interpolate_quadratic_deltas(
+    is_bool::Bool,
+    neighbors::Tuple{Vararg{Int}},
+    phi::Vector{_Exact},
+)
+    d = length(neighbors)
+    alpha_0 = phi[1]
+    alpha_lin = Vector{_Exact}(undef, d)
+    for a in 1:d
+        alpha_lin[a] = phi[1 + (1 << (a - 1))] - phi[1]
+    end
+    alpha_quad = fill(_Exact(0), d, d)
+    for a in 1:d, b in (a + 1):d
+        q_ab = phi[1 + (1 << (a - 1)) + (1 << (b - 1))] - phi[1 + (1 << (a - 1))] - phi[1 + (1 << (b - 1))] + phi[1]
+        alpha_quad[a, b] = q_ab
+        alpha_quad[b, a] = q_ab
+    end
+    if is_bool
+        const_delta = alpha_0
+        lin_deltas = Pair{Int,_Exact}[
+            neighbors[a] => deepcopy(alpha_lin[a]) for a in 1:d if !iszero(alpha_lin[a])
+        ]
+        quad_deltas = Tuple{Int,Int,_Exact}[
+            (neighbors[a], neighbors[b], deepcopy(alpha_quad[a, b]))
+            for a in 1:d for b in (a + 1):d if !iszero(alpha_quad[a, b])
+        ]
+    else
+        const_delta = alpha_0 + sum(alpha_lin; init=_Exact(0)) // 2 +
+                      sum((alpha_quad[a, b] for a in 1:d for b in (a + 1):d); init=_Exact(0)) // 4
+        lin_deltas = Pair{Int,_Exact}[]
+        for a in 1:d
+            df = alpha_lin[a] // 2 + sum((alpha_quad[a, b] for b in 1:d if b != a); init=_Exact(0)) // 4
+            !iszero(df) && push!(lin_deltas, neighbors[a] => deepcopy(df))
+        end
+        quad_deltas = Tuple{Int,Int,_Exact}[
+            (neighbors[a], neighbors[b], deepcopy(alpha_quad[a, b] // 4))
+            for a in 1:d for b in (a + 1):d if !iszero(alpha_quad[a, b])
+        ]
+    end
+    return const_delta, lin_deltas, quad_deltas
+end
+
+const _MAX_BLOCK_ELIMINATION_SIZE = 16
+
 function _elimination_witness(ws::Workspace, u::Int;
                               map::Union{Nothing,DomainGaugeMap}=nothing,
                               tie_break::Symbol=:low,
@@ -1283,39 +1347,7 @@ function _elimination_witness(ws::Workspace, u::Int;
         alpha_123 = phi[8] - phi[4] - phi[6] - phi[7] + phi[2] + phi[3] + phi[5] - phi[1]
         iszero(alpha_123) || return (nothing, :nonquadratic_elimination, :exact, visits, exact_work)
     end
-    alpha_0 = phi[1]
-    alpha_lin = Vector{_Exact}(undef, d)
-    for a in 1:d
-        alpha_lin[a] = phi[1 + (1 << (a - 1))] - phi[1]
-    end
-    alpha_quad = fill(_Exact(0), d, d)
-    for a in 1:d, b in (a + 1):d
-        q_ab = phi[1 + (1 << (a - 1)) + (1 << (b - 1))] - phi[1 + (1 << (a - 1))] - phi[1 + (1 << (b - 1))] + phi[1]
-        alpha_quad[a, b] = q_ab
-        alpha_quad[b, a] = q_ab
-    end
-    if is_bool
-        const_delta = alpha_0
-        lin_deltas = Pair{Int,_Exact}[
-            neighbors[a] => deepcopy(alpha_lin[a]) for a in 1:d if !iszero(alpha_lin[a])
-        ]
-        quad_deltas = Tuple{Int,Int,_Exact}[
-            (neighbors[a], neighbors[b], deepcopy(alpha_quad[a, b]))
-            for a in 1:d for b in (a + 1):d if !iszero(alpha_quad[a, b])
-        ]
-    else
-        const_delta = alpha_0 + sum(alpha_lin; init=_Exact(0)) // 2 +
-                      sum((alpha_quad[a, b] for a in 1:d for b in (a + 1):d); init=_Exact(0)) // 4
-        lin_deltas = Pair{Int,_Exact}[]
-        for a in 1:d
-            df = alpha_lin[a] // 2 + sum((alpha_quad[a, b] for b in 1:d if b != a); init=_Exact(0)) // 4
-            !iszero(df) && push!(lin_deltas, neighbors[a] => deepcopy(df))
-        end
-        quad_deltas = Tuple{Int,Int,_Exact}[
-            (neighbors[a], neighbors[b], deepcopy(alpha_quad[a, b] // 4))
-            for a in 1:d for b in (a + 1):d if !iszero(alpha_quad[a, b])
-        ]
-    end
+    const_delta, lin_deltas, quad_deltas = _interpolate_quadratic_deltas(is_bool, neighbors, phi)
     _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, exact_work)
     c_val = _mapped_constant(ws, map)
     step = EliminationStep(
@@ -1331,6 +1363,195 @@ function _elimination_witness(ws::Workspace, u::Int;
         unique_argmin,
     )
     return (step, :proved, :exact, visits, exact_work)
+end
+
+function _block_elimination_witness(
+    ws::Workspace,
+    block_vars::Vector{Int};
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+    tie_break::Symbol=:low,
+    max_block_size=12,
+    max_separator=2,
+    require_unique::Bool=false,
+    max_work=typemax(Int),
+    max_exact_work=typemax(Int),
+    deadline_ns=nothing,
+    predecessors::Int=0,
+    scope_length::Int=-1,
+)
+    _limits(max_work, deadline_ns)
+    _limits(max_exact_work, deadline_ns)
+    max_block_size isa Integer && !(max_block_size isa Bool) && 2 <= max_block_size <= _MAX_BLOCK_ELIMINATION_SIZE ||
+        throw(ArgumentError("max_block_size must be an integer between 2 and $_MAX_BLOCK_ELIMINATION_SIZE"))
+    max_separator isa Integer && !(max_separator isa Bool) && 0 <= max_separator <= 2 ||
+        throw(ArgumentError("max_separator must be an integer between 0 and 2"))
+    map === nothing || _validate_domain_map(ws, map)
+    tie_break in (:low, :high) || throw(ArgumentError("tie_break must be :low or :high"))
+    B = sort!(unique(block_vars))
+    k = length(B)
+    k >= 2 || throw(ArgumentError("block must contain at least 2 distinct variables"))
+    st, s = ws._state, ws._snapshot
+    for u in B
+        st.fixed[u] == 2 || return (nothing, :already_fixed, :none, 0, 0)
+    end
+    direction = _direction(s)
+    direction != 0 || return (nothing, :zero_scale, :none, 0, 0)
+    k <= Int(max_block_size) || return (nothing, :block_too_large, :none, 0, 0)
+    _expired(deadline_ns) && return (nothing, :deadline, :none, 0, 0)
+    local_idx = Dict{Int,Int}(B[r] => r for r in 1:k)
+    int_adj = [Int[] for _ in 1:k]
+    int_edges = Tuple{Int,Int,_Exact}[]
+    sep_set = Set{Int}()
+    sep_edges = Tuple{Int,Int,_Exact}[]
+    visits = 0
+    for r in 1:k
+        u = B[r]
+        adj_len = length(st.adjacency[u])
+        adj_len <= max_work - visits || return (nothing, :work_limit, :exact, visits, 0)
+        for (w, q) in st.adjacency[u]
+            _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, 0)
+            visits += 1
+            (st.fixed[w] == 2 && !iszero(q)) || continue
+            r_w = get(local_idx, w, 0)
+            if r_w != 0
+                push!(int_adj[r], r_w)
+                r < r_w && push!(int_edges, (r, r_w, q))
+            else
+                push!(sep_set, w)
+                push!(sep_edges, (r, w, q))
+            end
+        end
+    end
+    vis_b = falses(k)
+    vis_b[1] = true
+    q_b = Int[1]
+    head_b = 1
+    while head_b <= length(q_b)
+        curr = q_b[head_b]
+        head_b += 1
+        for nxt in int_adj[curr]
+            if !vis_b[nxt]
+                vis_b[nxt] = true
+                push!(q_b, nxt)
+            end
+        end
+    end
+    length(q_b) == k || return (nothing, :disconnected_block, :exact, visits, 0)
+    sep_vec = sort!(collect(sep_set))
+    d = length(sep_vec)
+    d <= Int(max_separator) || return (nothing, :separator_too_large, :exact, visits, 0)
+    neighbors = Tuple(sep_vec)
+    sep_pos = Dict{Int,Int}(sep_vec[b] => b for b in 1:d)
+    sep_couplings = fill(_Exact(0), k, d)
+    for (r, w, q) in sep_edges
+        sep_couplings[r, sep_pos[w]] = q
+    end
+    num_sep_states = 1 << d
+    num_block_states = 1 << k
+    total_evals = num_sep_states * num_block_states
+    total_evals <= max_exact_work || return (nothing, :verification_limit, :exact, visits, 0)
+    is_bool = s.domain === QT.BoolDomain
+    low_orig = is_bool ? 0 : -1
+    tie_orig = Vector{Int}(undef, k)
+    alt_orig = Vector{Int}(undef, k)
+    for r in 1:k
+        u = B[r]
+        t_val = if map === nothing
+            tie_break === :low ? low_orig : 1
+        else
+            low_t = map.target_domain === :bool ? 0 : -1
+            _lift_index_value(map, u, tie_break === :low ? low_t : 1)
+        end
+        tie_orig[r] = t_val
+        alt_orig[r] = t_val == 1 ? low_orig : 1
+    end
+    phi = Vector{_Exact}(undef, num_sep_states)
+    tables = [Vector{Int}(undef, num_sep_states) for _ in 1:k]
+    L_r = Vector{_Exact}(undef, k)
+    x_cur = Vector{Int}(undef, k)
+    x_best = Vector{Int}(undef, k)
+    unique_argmin = true
+    exact_work = 0
+    for idx in 1:num_sep_states
+        for r in 1:k
+            lv = st.fields[B[r]]
+            for b in 1:d
+                z_b = (((idx - 1) >> (b - 1)) & 1) == 1 ? 1 : low_orig
+                lv += sep_couplings[r, b] * z_b
+            end
+            L_r[r] = lv
+        end
+        best_E = _Exact(0)
+        opt_count = 0
+        for mask in 0:(num_block_states - 1)
+            _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, exact_work)
+            exact_work += 1
+            E = _Exact(0)
+            @inbounds for r in 1:k
+                xr = (((mask >> (k - r)) & 1) == 0) ? tie_orig[r] : alt_orig[r]
+                x_cur[r] = xr
+                E += L_r[r] * xr
+            end
+            @inbounds for (ra, rb, q) in int_edges
+                E += q * x_cur[ra] * x_cur[rb]
+            end
+            if mask == 0 || direction * E < direction * best_E
+                best_E = E
+                opt_count = 1
+                @inbounds for r in 1:k
+                    x_best[r] = x_cur[r]
+                end
+            elseif E == best_E
+                opt_count += 1
+            end
+        end
+        opt_count > 1 && (unique_argmin = false)
+        phi[idx] = best_E
+        for r in 1:k
+            tables[r][idx] = x_best[r]
+        end
+    end
+    if require_unique && !unique_argmin
+        return (nothing, :not_strict, :exact, visits, exact_work)
+    end
+    const_delta, lin_deltas, quad_deltas = _interpolate_quadratic_deltas(is_bool, neighbors, phi)
+    _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, exact_work)
+    block_tuple = Tuple(B)
+    tables_tuple = Tuple(Tuple(tables[r]) for r in 1:k)
+    phi_tuple = Tuple(deepcopy(v) for v in phi)
+    c_base = deepcopy(st.constant)
+    steps = Vector{EliminationStep}(undef, k)
+    for r in 1:(k - 1)
+        bw_r = _BlockEliminationWitness(block_tuple, r, tables_tuple, phi_tuple)
+        steps[r] = EliminationStep(
+            B[r],
+            neighbors,
+            tables_tuple[r],
+            _Exact(0),
+            (),
+            (),
+            deepcopy(c_base),
+            predecessors + r - 1,
+            scope_length,
+            unique_argmin,
+            bw_r,
+        )
+    end
+    bw_k = _BlockEliminationWitness(block_tuple, k, tables_tuple, phi_tuple)
+    steps[k] = EliminationStep(
+        B[k],
+        neighbors,
+        tables_tuple[k],
+        deepcopy(const_delta),
+        Tuple(lin_deltas),
+        Tuple(quad_deltas),
+        deepcopy(c_base),
+        predecessors + k - 1,
+        scope_length,
+        unique_argmin,
+        bw_k,
+    )
+    return (steps, :proved, :exact, visits, exact_work)
 end
 
 function _witness_satisfies_step(is_bool::Bool, pstep, w)
@@ -2789,6 +3010,7 @@ function _transport_one_step(
             estep.variable, estep.neighbors, estep.table,
             deepcopy(estep.constant_delta), _deepcopy_tuple(estep.linear_deltas, IdDict()), _deepcopy_tuple(estep.quadratic_deltas, IdDict()),
             deepcopy(c_to), estep.predecessors, estep.scope_length, estep.unique_argmin,
+            estep.block_witness === nothing ? nothing : Base.deepcopy_internal(estep.block_witness, IdDict()),
         )
         _poly_apply_deltas!(p, estep.variable, estep.constant_delta, estep.linear_deltas, estep.quadratic_deltas)
         return out
@@ -2838,6 +3060,27 @@ function _build_proof_certificate(ws::Workspace, step::_ProofRecord,
     else
         _transport_steps(ws, _caller_scope(ws), Tuple(raw_vec), nothing, owned_map; tail_step=step)
     end
+    _expired(deadline_ns) && return nothing
+    return DominanceCertificate(generation(ws), checkpoint(ws), _caller_scope(ws), steps, source, owned_map)
+end
+
+function _build_block_proof_certificate(
+    ws::Workspace,
+    block_steps::Vector{EliminationStep},
+    map::Union{Nothing,DomainGaugeMap},
+    deadline_ns,
+)
+    source = deepcopy(ws._snapshot)
+    _validate_label_copy(ws._snapshot.labels, source.labels)
+    owned_map = map === nothing ? nothing : deepcopy(map)
+    raw_vec = _ProofRecord[
+        deepcopy(ws._state.trail[p].proof) for p in ws._state.fixes
+        if ws._state.trail[p].proof !== nothing
+    ]
+    append!(raw_vec, block_steps)
+    raw_all = Tuple(raw_vec)
+    steps = owned_map === nothing ? raw_all :
+        _transport_steps(ws, _caller_scope(ws), raw_all, nothing, owned_map)
     _expired(deadline_ns) && return nothing
     return DominanceCertificate(generation(ws), checkpoint(ws), _caller_scope(ws), steps, source, owned_map)
 end
@@ -2936,23 +3179,48 @@ end
 """
     prove_elimination(ws, label; map=nothing, tie_break=:low, max_degree=2,
                       max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing)
+    prove_elimination(ws, block_labels; map=nothing, tie_break=:low,
+                      max_block_size=12, max_separator=2, require_unique=false,
+                      max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing)
 
 Prove an exact bounded-degree (`0 <= degree(ws, label) <= max_degree`) local
-variable elimination without mutating `ws`. By default (`max_degree=2`), only
-isolated, leaf and degree-two variables are eligible; higher-degree variables
-are refused with `:degree_too_high`. When `max_degree=3` is explicitly requested,
-guarded zero-cubic-Fourier degree-three reduction (`alpha_123 == 0`) is enabled,
-covering zero-field star–triangle elimination as well as nonzero-field degree-3
-vertices whose conditional minimum over the ``2^3 = 8`` neighbor states is an
-exact quadratic polynomial; degree-3 variables whose exact marginal has a nonzero
-cubic interaction (`alpha_123 != 0`) are refused with `:nonquadratic_elimination`.
+variable elimination or a bounded-separator (`0 <= |N(B)| <= max_separator <= 2`,
+`2 <= |B| <= max_block_size`) connected block elimination without mutating `ws`.
+By default (`max_degree=2`), only isolated, leaf and degree-two single variables
+are eligible; higher-degree variables are refused with `:degree_too_high`. When
+`max_degree=3` is explicitly requested, guarded zero-cubic-Fourier degree-three
+reduction (`alpha_123 == 0`) is enabled, covering zero-field star–triangle
+elimination as well as nonzero-field degree-3 vertices whose conditional minimum
+over the ``2^3 = 8`` neighbor states is an exact quadratic polynomial; degree-3
+variables whose exact marginal has a nonzero cubic interaction (`alpha_123 != 0`)
+are refused with `:nonquadratic_elimination`. When a collection `block_labels` of
+at least 2 active variables is supplied, proves a batch of `|B|`
+[`EliminationStep`](@ref)s across the external separator ``S = N(B)`` (`|S| <= 2`).
 """
 function prove_elimination(ws::Workspace, label;
                            map::Union{Nothing,DomainGaugeMap}=nothing,
                            tie_break::Symbol=:low,
                            max_degree=2,
+                           max_block_size=12,
+                           max_separator=2,
+                           require_unique::Bool=false,
                            max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing)
     map === nothing || _validate_domain_map(ws, map; full=true)
+    if label isa Union{AbstractVector,Tuple,AbstractSet} && !haskey(ws._state.labels, label)
+        block_vars = Int[_variable(ws, lbl) for lbl in label]
+        steps, reason, method, visits, exact_work = _block_elimination_witness(
+            ws, block_vars;
+            map, tie_break, max_block_size, max_separator, require_unique,
+            max_work, max_exact_work, deadline_ns,
+            predecessors=ws._state.proof_count, scope_length=length(ws._state.callers),
+        )
+        if steps === nothing
+            return EliminationAttempt(nothing, reason, method, visits, exact_work)
+        end
+        certificate = _build_block_proof_certificate(ws, steps, map, deadline_ns)
+        certificate === nothing && return EliminationAttempt(nothing, :deadline, method, visits, exact_work)
+        return EliminationAttempt(certificate, reason, method, visits, exact_work)
+    end
     u = _variable(ws, label)
     step, reason, method, visits, exact_work = _elimination_witness(
         ws, u; map, tie_break, max_degree, max_work, max_exact_work, deadline_ns,
@@ -4684,12 +4952,186 @@ function _verify_elimination_step(
     p::_PolyState,
     step::EliminationStep,
     active_map::Union{Nothing,DomainGaugeMap},
+    prefix_steps,
+    all_steps,
+    step_idx::Int,
     cost::Int,
     deadline,
 )
     u = step.variable
     1 <= u <= p.n && p.active[u] || return (false, :invalid_step, 0)
     d = length(step.neighbors)
+    low_orig = p.domain === QT.BoolDomain ? 0 : -1
+    direction = _direction_poly(p)
+    direction != 0 || return (false, :zero_scale, 0)
+    if step.block_witness !== nothing
+        wit = step.block_witness::_BlockEliminationWitness
+        B = wit.block_variables
+        k_b = length(B)
+        (2 <= k_b <= _MAX_BLOCK_ELIMINATION_SIZE && 1 <= wit.batch_index <= k_b && B[wit.batch_index] == u) ||
+            return (false, :invalid_step, 0)
+        0 <= d <= 2 || return (false, :invalid_step, 0)
+        num_states = 1 << d
+        (length(wit.block_tables) == k_b && length(wit.block_phi) == num_states &&
+         step.table == wit.block_tables[wit.batch_index] &&
+         length(step.table) == num_states && all(v -> v in (low_orig, 1), step.table)) ||
+            return (false, :invalid_value, 0)
+        c_expected = _poly_mapped_constant(p, active_map)
+        _expired(deadline) && return (false, :deadline, cost)
+        c_expected == step.constant || return (false, :invalid_constant, cost)
+        if wit.batch_index == 1
+            step_idx + k_b - 1 <= length(all_steps) || return (false, :invalid_step, cost)
+            for r in 1:k_b
+                u_r = B[r]
+                (1 <= u_r <= p.n && p.active[u_r]) || return (false, :invalid_step, cost)
+                r > 1 && B[r - 1] >= u_r && return (false, :invalid_step, cost)
+                tbl_r = wit.block_tables[r]
+                (length(tbl_r) == num_states && all(v -> v in (low_orig, 1), tbl_r)) ||
+                    return (false, :invalid_value, cost)
+                s_r = all_steps[step_idx + r - 1]
+                (s_r isa EliminationStep &&
+                 s_r.variable == u_r &&
+                 s_r.neighbors == step.neighbors &&
+                 s_r.table == tbl_r &&
+                 s_r.scope_length == step.scope_length &&
+                 s_r.unique_argmin == step.unique_argmin &&
+                 s_r.block_witness isa _BlockEliminationWitness) ||
+                    return (false, :invalid_step, cost)
+                w_r = s_r.block_witness::_BlockEliminationWitness
+                (w_r.batch_index == r &&
+                 w_r.block_variables == B &&
+                 w_r.block_tables == wit.block_tables &&
+                 w_r.block_phi == wit.block_phi) ||
+                    return (false, :invalid_step, cost)
+                if r < k_b
+                    (iszero(s_r.constant_delta) && isempty(s_r.linear_deltas) && isempty(s_r.quadratic_deltas)) ||
+                        return (false, :invalid_step, cost)
+                end
+            end
+            local_idx = Dict{Int,Int}(B[r] => r for r in 1:k_b)
+            for idx in 1:d
+                nbr = step.neighbors[idx]
+                (1 <= nbr <= p.n && !haskey(local_idx, nbr) && p.active[nbr]) ||
+                    return (false, :invalid_step, cost)
+                idx > 1 && step.neighbors[idx - 1] >= nbr && return (false, :invalid_step, cost)
+            end
+            sep_pos = Dict{Int,Int}(step.neighbors[b] => b for b in 1:d)
+            sep_seen = falses(d)
+            sep_couplings = fill(_Exact(0), k_b, d)
+            int_adj = [Int[] for _ in 1:k_b]
+            int_edges = Tuple{Int,Int,_Exact}[]
+            for r in 1:k_b
+                u_r = B[r]
+                for (w, q) in p.adj[u_r]
+                    _expired(deadline) && return (false, :deadline, cost)
+                    (p.active[w] && !iszero(q)) || continue
+                    r_w = get(local_idx, w, 0)
+                    if r_w != 0
+                        push!(int_adj[r], r_w)
+                        r < r_w && push!(int_edges, (r, r_w, q))
+                    else
+                        b_pos = get(sep_pos, w, 0)
+                        b_pos != 0 || return (false, :invalid_step, cost)
+                        sep_seen[b_pos] = true
+                        sep_couplings[r, b_pos] = q
+                    end
+                end
+            end
+            all(sep_seen) || return (false, :invalid_step, cost)
+            vis_b = falses(k_b)
+            vis_b[1] = true
+            q_b = Int[1]
+            head_b = 1
+            while head_b <= length(q_b)
+                curr = q_b[head_b]
+                head_b += 1
+                for nxt in int_adj[curr]
+                    if !vis_b[nxt]
+                        vis_b[nxt] = true
+                        push!(q_b, nxt)
+                    end
+                end
+            end
+            length(q_b) == k_b || return (false, :invalid_step, cost)
+            s_last = all_steps[step_idx + k_b - 1]::EliminationStep
+            seen_lin = Set{Int}()
+            for (w, df) in s_last.linear_deltas
+                (!iszero(df) && haskey(sep_pos, w) && !(w in seen_lin)) ||
+                    return (false, :invalid_step, cost)
+                push!(seen_lin, w)
+            end
+            seen_quad = Set{Tuple{Int,Int}}()
+            for (a, b, dq) in s_last.quadratic_deltas
+                (!iszero(dq) && a < b && haskey(sep_pos, a) && haskey(sep_pos, b) && !((a, b) in seen_quad)) ||
+                    return (false, :invalid_step, cost)
+                push!(seen_quad, (a, b))
+            end
+            num_block_states = 1 << k_b
+            L_r = Vector{_Exact}(undef, k_b)
+            x_cur = Vector{Int}(undef, k_b)
+            z_map = Dict{Int,Int}()
+            all_strict = true
+            for idx in 1:num_states
+                for b in 1:d
+                    z_b = (((idx - 1) >> (b - 1)) & 1) == 1 ? 1 : low_orig
+                    z_map[step.neighbors[b]] = z_b
+                end
+                e_chosen = _Exact(0)
+                for r in 1:k_b
+                    lv = p.fields[B[r]]
+                    for b in 1:d
+                        lv += sep_couplings[r, b] * z_map[step.neighbors[b]]
+                    end
+                    L_r[r] = lv
+                    e_chosen += lv * wit.block_tables[r][idx]
+                end
+                for (ra, rb, q) in int_edges
+                    e_chosen += q * wit.block_tables[ra][idx] * wit.block_tables[rb][idx]
+                end
+                e_chosen == wit.block_phi[idx] || return (false, :invalid_bound, cost)
+                opt_count = 0
+                for mask in 0:(num_block_states - 1)
+                    _expired(deadline) && return (false, :deadline, cost)
+                    e_mask = _Exact(0)
+                    for r in 1:k_b
+                        xr = (((mask >> (r - 1)) & 1) == 1) ? 1 : low_orig
+                        x_cur[r] = xr
+                        e_mask += L_r[r] * xr
+                    end
+                    for (ra, rb, q) in int_edges
+                        e_mask += q * x_cur[ra] * x_cur[rb]
+                    end
+                    direction * e_chosen <= direction * e_mask || return (false, :invalid_bound, cost)
+                    e_mask == e_chosen && (opt_count += 1)
+                end
+                opt_count > 1 && (all_strict = false)
+                delta_val = s_last.constant_delta
+                for (w, df) in s_last.linear_deltas
+                    delta_val += df * z_map[w]
+                end
+                for (a, b, dq) in s_last.quadratic_deltas
+                    delta_val += dq * z_map[a] * z_map[b]
+                end
+                delta_val == e_chosen || return (false, :invalid_bound, cost)
+            end
+            step.unique_argmin == all_strict || return (false, :invalid_bound, cost)
+        else
+            !isempty(prefix_steps) || return (false, :invalid_step, cost)
+            prev = prefix_steps[end]
+            (prev isa EliminationStep &&
+             prev.block_witness isa _BlockEliminationWitness &&
+             prev.block_witness.batch_index == wit.batch_index - 1 &&
+             prev.block_witness.block_variables == B &&
+             prev.block_witness.block_tables == wit.block_tables &&
+             prev.block_witness.block_phi == wit.block_phi &&
+             prev.neighbors == step.neighbors &&
+             prev.scope_length == step.scope_length &&
+             prev.unique_argmin == step.unique_argmin) ||
+                return (false, :invalid_step, cost)
+        end
+        _poly_apply_deltas!(p, u, step.constant_delta, step.linear_deltas, step.quadratic_deltas)
+        return (true, :verified, cost)
+    end
     0 <= d <= 3 || return (false, :invalid_step, 0)
     for idx in 1:d
         nbr = step.neighbors[idx]
@@ -4701,7 +5143,6 @@ function _verify_elimination_step(
         w in step.neighbors || return (false, :invalid_step, 0)
     end
     num_states = 1 << d
-    low_orig = p.domain === QT.BoolDomain ? 0 : -1
     length(step.table) == num_states && all(v -> v in (low_orig, 1), step.table) ||
         return (false, :invalid_value, 0)
     seen_lin = Set{Int}()
@@ -4715,8 +5156,6 @@ function _verify_elimination_step(
             return (false, :invalid_step, 0)
         push!(seen_quad, (a, b))
     end
-    direction = _direction_poly(p)
-    direction != 0 || return (false, :zero_scale, 0)
     c_expected = _poly_mapped_constant(p, active_map)
     _expired(deadline) && return (false, :deadline, cost)
     c_expected == step.constant || return (false, :invalid_constant, cost)
@@ -5297,7 +5736,11 @@ function verify_certificate(ws::Workspace, cert::DominanceCertificate;
             later = cert.assumptions[(count + 1):end]
             _verify_maxcut_step(p, step, active_map, later, step_cost, deadline_ns)
         else
-            _verify_elimination_step(p, step::EliminationStep, active_map, step_cost, deadline_ns)
+            _verify_elimination_step(
+                p, step::EliminationStep, active_map,
+                cert.steps[1:(k - 1)], cert.steps, k,
+                step_cost, deadline_ns,
+            )
         end
         cost += visits
         valid || return VerificationResult(false,reason,cost)

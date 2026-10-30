@@ -2077,6 +2077,92 @@ function contract_relation!(ws::Workspace, eliminated, representative;
     )
 end
 
+function _commit_block_elimination!(
+    ws::Workspace,
+    steps::Vector{EliminationStep};
+    max_fill::Int=typemax(Int),
+    max_work::Int=typemax(Int),
+    deadline_ns=nothing,
+    precharged_visits::Int=0,
+)
+    st = ws._state
+    actual_fill = _elimination_fill(st, steps[end].quadratic_deltas)
+    if actual_fill > max_fill
+        return (UpdateReport(:fill_limit, precharged_visits, 0), 0, actual_fill)
+    end
+    k = length(steps)
+    st.serial <= typemax(UInt64) - UInt64(k + 1) ||
+        throw(ArgumentError("trail serial exhausted; reset workspace"))
+    _reserve!(st.trail, length(st.trail) + k + 1)
+    cp = checkpoint(ws)
+    apply_visits = 0
+    for r in 1:k
+        step_r = steps[r]
+        field_deltas = Pair{Int,_Exact}[p for p in step_r.linear_deltas]
+        quad_deltas = Tuple{Int,Int,_Exact}[t for t in step_r.quadratic_deltas]
+        rem_w = max_work - precharged_visits - apply_visits
+        rep = _apply_reduction!(
+            ws, step_r.variable, Int8(4), step_r,
+            step_r.constant_delta, field_deltas, quad_deltas;
+            max_work=rem_w, deadline_ns=deadline_ns, precharged_visits=0,
+        )
+        apply_visits += rep.edge_visits
+        if rep.stop_reason !== :applied
+            rollback!(ws, cp)
+            return (UpdateReport(rep.stop_reason, precharged_visits + apply_visits, 0), apply_visits, 0)
+        end
+    end
+    return (UpdateReport(:applied, precharged_visits + apply_visits, k), apply_visits, actual_fill)
+end
+
+"""
+    eliminate_block!(ws, block_labels; map=nothing, tie_break=:low,
+                     max_block_size=12, max_separator=2, max_fill=typemax(Int),
+                     require_unique=false, max_work=typemax(Int),
+                     max_exact_work=typemax(Int), deadline_ns=nothing)
+
+Certify and transactionally eliminate a connected active block `block_labels`
+of size `2 <= |B| <= max_block_size` across its external active separator
+``S = N(B)`` of size `0 <= |S| <= max_separator <= 2`, recording a batch of
+`|B|` [`EliminationStep`](@ref)s on the reversible trail and updating surviving
+separator fields, fill edges and degrees. Returns an [`UpdateReport`](@ref) with
+`changed == |B|` when applied.
+"""
+function eliminate_block!(
+    ws::Workspace,
+    block_labels;
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+    tie_break::Symbol=:low,
+    max_block_size=12,
+    max_separator=2,
+    max_fill=typemax(Int),
+    require_unique::Bool=false,
+    max_work=typemax(Int),
+    max_exact_work=typemax(Int),
+    deadline_ns=nothing,
+)
+    _limits(max_work, deadline_ns)
+    _limits(max_exact_work, deadline_ns)
+    max_fill isa Integer && !(max_fill isa Bool) && 0 <= max_fill <= typemax(Int) ||
+        throw(ArgumentError("max_fill must be a nonnegative machine-sized integer"))
+    map === nothing || _validate_domain_map(ws, map)
+    block_vars = Int[_variable(ws, lbl) for lbl in block_labels]
+    st = ws._state
+    steps, reason, _, visits, _ = _block_elimination_witness(
+        ws, block_vars;
+        map, tie_break, max_block_size, max_separator, require_unique,
+        max_work, max_exact_work, deadline_ns,
+        predecessors=st.proof_count, scope_length=length(st.callers),
+    )
+    steps === nothing && return UpdateReport(reason, visits, 0)
+    rep, _, _ = _commit_block_elimination!(
+        ws, steps;
+        max_fill=Int(max_fill), max_work=Int(max_work),
+        deadline_ns=deadline_ns, precharged_visits=visits,
+    )
+    return rep
+end
+
 """
     eliminate_variable!(ws, label; map=nothing, tie_break=:low, max_degree=2,
                         max_work=typemax(Int), max_exact_work=typemax(Int),
@@ -2086,14 +2172,26 @@ Certify and transactionally eliminate a free variable of active degree
 `0..max_degree` (default `max_degree=2`) from `ws`, recording an
 [`EliminationStep`](@ref) with its exact argmin reconstruction table and
 updating surviving neighbor fields, fill edges and degrees on the reversible
-trail. Higher-degree variables are refused with `:degree_too_high`. Returns an
-[`UpdateReport`](@ref).
+trail. Higher-degree variables are refused with `:degree_too_high`. When a
+collection of labels is passed, delegates to [`eliminate_block!`](@ref).
+Returns an [`UpdateReport`](@ref).
 """
 function eliminate_variable!(ws::Workspace, label;
                              map::Union{Nothing,DomainGaugeMap}=nothing,
                              tie_break::Symbol=:low,
                              max_degree=2,
+                             max_block_size=12,
+                             max_separator=2,
+                             max_fill=typemax(Int),
+                             require_unique::Bool=false,
                              max_work=typemax(Int), max_exact_work=typemax(Int), deadline_ns=nothing)
+    if label isa Union{AbstractVector,Tuple,AbstractSet} && !haskey(ws._state.labels, label)
+        return eliminate_block!(
+            ws, label;
+            map, tie_break, max_block_size, max_separator, max_fill,
+            require_unique, max_work, max_exact_work, deadline_ns,
+        )
+    end
     _limits(max_work, deadline_ns)
     _limits(max_exact_work, deadline_ns)
     map === nothing || _validate_domain_map(ws, map)
@@ -2122,6 +2220,228 @@ function _is_float64_exact_elimination(step::EliminationStep)
     return step.unique_argmin && _is_exact_float64(step.constant_delta) &&
            all(p -> _is_exact_float64(p.second), step.linear_deltas) &&
            all(t -> _is_exact_float64(t[3]), step.quadratic_deltas)
+end
+
+function _is_float64_exact_block_elimination(steps::Vector{EliminationStep})
+    last_step = steps[end]
+    wit = last_step.block_witness::_BlockEliminationWitness
+    return _is_float64_exact_elimination(last_step) && all(_is_exact_float64, wit.block_phi)
+end
+
+function _check_closed_separator_block(
+    u_0::Int,
+    s1::Int,
+    s2::Int,
+    is_cand::BitVector,
+    act_nbrs::Vector{Vector{Int}},
+    max_block_size::Int,
+    max_separator::Int,
+    rejected_blocks::Set{Tuple{Vararg{Int}}},
+)
+    q = Int[u_0]
+    head = 1
+    while head <= length(q) && head <= max_block_size
+        v = q[head]
+        head += 1
+        for w in act_nbrs[v]
+            if w >= u_0 && is_cand[w] && w != s1 && w != s2
+                !(w in q) && push!(q, w)
+            end
+        end
+    end
+    if head > length(q) && 2 <= length(q) <= max_block_size
+        B = sort(q)
+        b_tup = Tuple(B)
+        if !(b_tup in rejected_blocks)
+            sep = Int[]
+            for v in B
+                for w in act_nbrs[v]
+                    if !insorted(w, B) && !(w in sep)
+                        push!(sep, w)
+                        length(sep) > max_separator && break
+                    end
+                end
+                length(sep) > max_separator && break
+            end
+            if length(sep) <= max_separator
+                return (true, length(sep), B, q)
+            end
+        end
+    end
+    return (false, 0, Int[], q)
+end
+
+function _find_separator_blocks(
+    ws::Workspace;
+    max_block_size::Int=12,
+    max_separator::Int=2,
+    rejected_blocks::Set{Tuple{Vararg{Int}}}=Set{Tuple{Vararg{Int}}}(),
+    max_work::Int=typemax(Int),
+    deadline_ns=nothing,
+)
+    st = ws._state
+    n = length(ws._snapshot.labels)
+    D_max = max_block_size + max_separator - 1
+    is_cand = falses(n)
+    act_nbrs = [Int[] for _ in 1:n]
+    visits = 0
+    for u in 1:n
+        _expired(deadline_ns) && return (Vector{Int}[], :deadline, visits)
+        (st.fixed[u] == 2 && 1 <= st.degrees[u] <= D_max) || continue
+        adj_len = length(st.adjacency[u])
+        adj_len <= max_work - visits || return (Vector{Int}[], :work_limit, visits)
+        for (w, q) in st.adjacency[u]
+            _expired(deadline_ns) && return (Vector{Int}[], :deadline, visits)
+            visits += 1
+            (st.fixed[w] == 2 && !iszero(q)) && push!(act_nbrs[u], w)
+        end
+        if !isempty(act_nbrs[u])
+            sort!(act_nbrs[u])
+            is_cand[u] = true
+        end
+    end
+    for u in 1:n
+        is_cand[u] || continue
+        high_deg = count(w -> !(st.fixed[w] == 2 && 1 <= st.degrees[w] <= D_max), act_nbrs[u])
+        high_deg > max_separator && (is_cand[u] = false)
+    end
+    found = Tuple{Int,Int,Vector{Int}}[]
+    seen_blocks = Set{Tuple{Vararg{Int}}}()
+    for u_0 in 1:n
+        is_cand[u_0] || continue
+        _expired(deadline_ns) && return (Vector{Int}[], :deadline, visits)
+        forced_u0 = count(w -> w < u_0 || !is_cand[w], act_nbrs[u_0])
+        forced_u0 <= max_separator || continue
+        ok0, sep0, B0, q0 = _check_closed_separator_block(
+            u_0, 0, 0, is_cand, act_nbrs, max_block_size, max_separator, rejected_blocks,
+        )
+        if ok0
+            bt0 = Tuple(B0)
+            if !(bt0 in seen_blocks)
+                push!(seen_blocks, bt0)
+                push!(found, (sep0, -length(B0), B0))
+            end
+        end
+        if max_separator >= 1 && forced_u0 <= max_separator - 1
+            cand_s1 = q0[2:min(length(q0), max_block_size + 1)]
+            seen_pairs = Set{Tuple{Int,Int}}()
+            for s1 in reverse(cand_s1)
+                _expired(deadline_ns) && return (Vector{Int}[], :deadline, visits)
+                ok1, sep1, B1, q1 = _check_closed_separator_block(
+                    u_0, s1, 0, is_cand, act_nbrs, max_block_size, max_separator, rejected_blocks,
+                )
+                if ok1
+                    bt1 = Tuple(B1)
+                    if !(bt1 in seen_blocks)
+                        push!(seen_blocks, bt1)
+                        push!(found, (sep1, -length(B1), B1))
+                    end
+                elseif max_separator >= 2 && forced_u0 == 0
+                    cand_s2 = q1[2:min(length(q1), max_block_size + 1)]
+                    for s2 in reverse(cand_s2)
+                        pair_key = s1 < s2 ? (s1, s2) : (s2, s1)
+                        pair_key in seen_pairs && continue
+                        push!(seen_pairs, pair_key)
+                        ok2, sep2, B2, _ = _check_closed_separator_block(
+                            u_0, s1, s2, is_cand, act_nbrs, max_block_size, max_separator, rejected_blocks,
+                        )
+                        if ok2
+                            bt2 = Tuple(B2)
+                            if !(bt2 in seen_blocks)
+                                push!(seen_blocks, bt2)
+                                push!(found, (sep2, -length(B2), B2))
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    sort!(found)
+    return (Vector{Int}[t[3] for t in found], :ok, visits)
+end
+
+function _step_block_elimination!(
+    ws::Workspace,
+    max_block_size::Int,
+    max_separator::Int,
+    mf::Int,
+    map::Union{Nothing,DomainGaugeMap},
+    tie_break::Symbol,
+    direction::Int,
+    rem_work::Int,
+    rem_exact::Int,
+    rem_deductions::Int,
+    deadline_ns;
+    require_unique::Bool=false,
+    allow_exact_fallback::Bool=true,
+    rejected_blocks::Set{Tuple{Vararg{Int}}}=Set{Tuple{Vararg{Int}}}(),
+)
+    _expired(deadline_ns) && return (:deadline, 0, 0, 0, 0, 0, 0, false)
+    rem_work > 0 || return (:work_limit, 0, 0, 0, 0, 0, 0, false)
+    direction == 0 && return (:none, 0, 0, 0, 0, 0, 0, false)
+    blocks, f_reason, scan_visits = _find_separator_blocks(
+        ws;
+        max_block_size=max_block_size,
+        max_separator=max_separator,
+        rejected_blocks=rejected_blocks,
+        max_work=rem_work,
+        deadline_ns=deadline_ns,
+    )
+    f_reason !== :ok && return (f_reason, 0, scan_visits, 0, 0, 0, 0, false)
+    isempty(blocks) && return (:none, 0, scan_visits, 0, 0, 0, 0, false)
+    st = ws._state
+    cand_count = 0
+    edges_used = scan_visits
+    exact_used = 0
+    fb_used = 0
+    fill_blocked = false
+    for B in blocks
+        _expired(deadline_ns) && return (:deadline, cand_count, edges_used, 0, exact_used, fb_used, 0, fill_blocked)
+        k = length(B)
+        k <= rem_deductions || return (:deduction_limit, cand_count, edges_used, 0, exact_used, fb_used, 0, fill_blocked)
+        rem_w = rem_work - cand_count - edges_used
+        rem_ex = rem_exact - exact_used
+        rem_w > 0 || return (:work_limit, cand_count, edges_used, 0, exact_used, fb_used, 0, fill_blocked)
+        rem_ex > 0 || return (:verification_limit, cand_count, edges_used, 0, exact_used, fb_used, 0, fill_blocked)
+        cand_count += 1
+        steps, w_reason, _, w_visits, w_exact = _block_elimination_witness(
+            ws, B;
+            map=map, tie_break=tie_break, max_block_size=max_block_size,
+            max_separator=max_separator, require_unique=require_unique,
+            max_work=rem_w, max_exact_work=rem_ex, deadline_ns=deadline_ns,
+            predecessors=st.proof_count, scope_length=length(st.callers),
+        )
+        edges_used += w_visits
+        exact_used += w_exact
+        w_reason in (:deadline, :work_limit, :verification_limit) &&
+            return (w_reason, cand_count, edges_used, 0, exact_used, fb_used, 0, fill_blocked)
+        if steps === nothing
+            push!(rejected_blocks, Tuple(B))
+            continue
+        end
+        dfb = _is_float64_exact_block_elimination(steps) ? 0 : 1
+        fb_used += dfb
+        (!allow_exact_fallback && dfb > 0) &&
+            return (:unsupported_arithmetic, cand_count, edges_used, 0, exact_used, fb_used, 0, fill_blocked)
+        actual_fill = _elimination_fill(st, steps[end].quadratic_deltas)
+        if actual_fill > mf
+            push!(rejected_blocks, Tuple(B))
+            fill_blocked = true
+            continue
+        end
+        rep, apply_visits, _ = _commit_block_elimination!(
+            ws, steps;
+            max_fill=mf, max_work=rem_work - cand_count - edges_used,
+            deadline_ns=deadline_ns, precharged_visits=0,
+        )
+        edges_used += apply_visits
+        exact_used += k + 3 * length(steps[end].neighbors)
+        rep.stop_reason === :applied ||
+            return (rep.stop_reason, cand_count, edges_used, 0, exact_used, fb_used, 0, fill_blocked)
+        return (:applied, cand_count, edges_used, k, exact_used, fb_used, actual_fill, fill_blocked)
+    end
+    return (:none, cand_count, edges_used, 0, exact_used, fb_used, 0, fill_blocked)
 end
 
 function _step_elimination_queue!(
@@ -2196,7 +2516,9 @@ end
 """
     eliminate_low_degree!(ws; map=nothing, max_degree=2, max_fill=typemax(Int),
                           tie_break=:low, cascade_dominance=false,
-                          allow_weak_dominance=false, max_work=typemax(Int),
+                          allow_weak_dominance=false, enable_blocks=false,
+                          max_block_size=12, max_separator=2,
+                          require_unique_blocks=false, max_work=typemax(Int),
                           max_deductions=typemax(Int), max_exact_work=typemax(Int),
                           deadline_ns=nothing)
 
@@ -2206,7 +2528,11 @@ enables guarded degree-three Ising reduction whenever the local conditional mini
 zero cubic Fourier coefficient `α_123 = 0`) without
 scanning the whole graph per elimination. Eliminations that would introduce more
 than `max_fill` new fill edges are skipped and deferred. When
-`cascade_dominance=true` (requiring `Workspace(model; rules=:dominance)`,
+`enable_blocks=true`, also discovers and eliminates connected active vertex
+blocks `2 <= |B| <= max_block_size` separated from the rest of the active graph
+by a boundary `0 <= |N(B)| <= max_separator <= 2` (0-separator small components,
+1-separator articulation-point pendant blocks, and 2-separator biconnected blocks).
+When `cascade_dominance=true` (requiring `Workspace(model; rules=:dominance)`,
 `rules=:elimination`, `rules=:relations` or `rules=:mixed`), dirty dominance candidates are
 interleaved with low-degree eliminations so dominance fixings that drop neighbor
 degrees to `<= max_degree` and local eliminations that strengthen neighbor
@@ -2220,6 +2546,10 @@ function eliminate_low_degree!(
     tie_break::Symbol=:low,
     cascade_dominance::Bool=false,
     allow_weak_dominance::Bool=false,
+    enable_blocks::Bool=false,
+    max_block_size=12,
+    max_separator=2,
+    require_unique_blocks::Bool=false,
     max_work=typemax(Int),
     max_deductions=typemax(Int),
     max_exact_work=typemax(Int),
@@ -2232,6 +2562,10 @@ function eliminate_low_degree!(
         throw(ArgumentError("eliminate_low_degree! supports max_degree in 0..3"))
     max_fill isa Integer && !(max_fill isa Bool) && 0 <= max_fill <= typemax(Int) ||
         throw(ArgumentError("max_fill must be a nonnegative machine-sized integer"))
+    max_block_size isa Integer && !(max_block_size isa Bool) && 2 <= max_block_size <= _MAX_BLOCK_ELIMINATION_SIZE ||
+        throw(ArgumentError("max_block_size must be an integer between 2 and $_MAX_BLOCK_ELIMINATION_SIZE"))
+    max_separator isa Integer && !(max_separator isa Bool) && 0 <= max_separator <= 2 ||
+        throw(ArgumentError("max_separator must be an integer between 0 and 2"))
     tie_break in (:low, :high) || throw(ArgumentError("tie_break must be :low or :high"))
     map === nothing || _validate_domain_map(ws, map)
     st = ws._state
@@ -2241,6 +2575,8 @@ function eliminate_low_degree!(
     end
     md = Int(max_degree)
     mf = Int(max_fill)
+    mbs = Int(max_block_size)
+    msep = Int(max_separator)
     candidates, edges, deductions, exact = 0, 0, 0, 0
     function pending_count()
         p = cascade_dominance ? (length(st.queue) - st.head + 1) : 0
@@ -2253,7 +2589,10 @@ function eliminate_low_degree!(
     finish(reason) = _propagation_report!(ws, reason, candidates, edges, deductions, exact;
                                           pending=pending_count())
     direction = _direction(ws._snapshot)
-    while _next_elim_bucket(st, md) != 0 || _next_deferred_elim(ws, md, mf) != 0 || (cascade_dominance && st.head <= length(st.queue))
+    blocks_quiescent = !enable_blocks
+    rejected_blocks = Set{Tuple{Vararg{Int}}}()
+    while _next_elim_bucket(st, md) != 0 || _next_deferred_elim(ws, md, mf) != 0 ||
+          (cascade_dominance && st.head <= length(st.queue)) || !blocks_quiescent
         if cascade_dominance && st.head <= length(st.queue)
             _expired(deadline_ns) && return finish(:deadline)
             deductions < max_deductions || return finish(:deduction_limit)
@@ -2265,20 +2604,51 @@ function eliminate_low_degree!(
             edges += de
             deductions += dd
             exact += dx
+            if dd > 0 && enable_blocks
+                blocks_quiescent = false
+                empty!(rejected_blocks)
+            end
+            status in (:applied, :continue) || return finish(status)
+            continue
+        end
+        if _next_elim_bucket(st, md) != 0 || _next_deferred_elim(ws, md, mf) != 0
+            _expired(deadline_ns) && return finish(:deadline)
+            deductions < max_deductions || return finish(:deduction_limit)
+            status, dc, de, dd, dx, _, _ = _step_elimination_queue!(
+                ws, md, mf, map, tie_break, direction,
+                Int(max_work - candidates - edges), Int(max_exact_work - exact), deadline_ns,
+            )
+            candidates += dc
+            edges += de
+            deductions += dd
+            exact += dx
+            if dd > 0 && enable_blocks
+                blocks_quiescent = false
+                empty!(rejected_blocks)
+            end
             status in (:applied, :continue) || return finish(status)
             continue
         end
         _expired(deadline_ns) && return finish(:deadline)
         deductions < max_deductions || return finish(:deduction_limit)
-        status, dc, de, dd, dx, _, _ = _step_elimination_queue!(
-            ws, md, mf, map, tie_break, direction,
-            Int(max_work - candidates - edges), Int(max_exact_work - exact), deadline_ns,
+        status, dc, de, dd, dx, _, _, _ = _step_block_elimination!(
+            ws, mbs, msep, mf, map, tie_break, direction,
+            Int(max_work - candidates - edges), Int(max_exact_work - exact),
+            Int(max_deductions - deductions), deadline_ns;
+            require_unique=require_unique_blocks, rejected_blocks=rejected_blocks,
         )
         candidates += dc
         edges += de
         deductions += dd
         exact += dx
-        status in (:applied, :continue) || return finish(status)
+        if status === :applied
+            blocks_quiescent = false
+            empty!(rejected_blocks)
+        elseif status === :none
+            blocks_quiescent = true
+        else
+            return finish(status)
+        end
     end
     return finish(:quiescent)
 end
@@ -2972,7 +3342,9 @@ end
 """
     schedule_reductions!(ws; map=nothing, enable_dominance=true,
                          enable_elimination=true, enable_relations=true,
-                         enable_star_triangle=false, allow_weak_dominance=false,
+                         enable_star_triangle=false, enable_blocks=false,
+                         max_block_size=12, max_separator=2,
+                         require_unique_blocks=false, allow_weak_dominance=false,
                          allow_weak_relations=false, allow_exact_fallback=true,
                          stop_on_disabled_optional=false, tie_break=:low,
                          max_fill=typemax(Int), max_total_fill=typemax(Int),
@@ -2984,10 +3356,10 @@ Run a deterministic mixed exact reduction schedule on one shared [`Workspace`](@
 and [`Generation`](@ref) without alternating full QUBO↔Ising materializations.
 Cheap dirty-neighborhood unary propagation (`:dominance`) and degree-`<= 2` local
 elimination (`:elimination`) run first; heavier passes (`:star_triangle` at degree 3,
-disabled by default, and `:relations` bounded by `relation_work_budget` and
-`max_fill` / `max_total_fill`) run only when cheap passes are quiescent, and
-immediately cascade back to cheap passes whenever a reduction dirties a local
-neighborhood. Returns a [`ScheduleReport`](@ref).
+disabled by default, `:relations` bounded by `relation_work_budget` and
+`max_fill` / `max_total_fill`, and `:block_elimination` when `enable_blocks=true`)
+run only when cheap passes are quiescent, and immediately cascade back to cheap
+passes whenever a reduction dirties a local neighborhood. Returns a [`ScheduleReport`](@ref).
 """
 function schedule_reductions!(
     ws::Workspace;
@@ -2996,6 +3368,10 @@ function schedule_reductions!(
     enable_elimination::Bool=true,
     enable_relations::Bool=true,
     enable_star_triangle::Bool=false,
+    enable_blocks::Bool=false,
+    max_block_size=12,
+    max_separator=2,
+    require_unique_blocks::Bool=false,
     allow_weak_dominance::Bool=false,
     allow_weak_relations::Bool=false,
     allow_exact_fallback::Bool=true,
@@ -3015,6 +3391,10 @@ function schedule_reductions!(
     _limits(max_fill, deadline_ns)
     _limits(max_total_fill, deadline_ns)
     _limits(relation_work_budget, deadline_ns)
+    max_block_size isa Integer && !(max_block_size isa Bool) && 2 <= max_block_size <= _MAX_BLOCK_ELIMINATION_SIZE ||
+        throw(ArgumentError("max_block_size must be an integer between 2 and $_MAX_BLOCK_ELIMINATION_SIZE"))
+    max_separator isa Integer && !(max_separator isa Bool) && 0 <= max_separator <= 2 ||
+        throw(ArgumentError("max_separator must be an integer between 0 and 2"))
     tie_break in (:low, :high) || throw(ArgumentError("tie_break must be :low or :high"))
     map === nothing || _validate_domain_map(ws, map)
     st = ws._state
@@ -3023,6 +3403,8 @@ function schedule_reductions!(
     mf_cap = Int(max_fill)
     mtf_cap = Int(max_total_fill)
     rel_budget = Int(relation_work_budget)
+    mbs = Int(max_block_size)
+    msep = Int(max_separator)
     candidates = edges = deductions = exact = exact_fallbacks = 0
     dom_ded = elim_ded = star_ded = rel_ded = 0
     total_fill = 0
@@ -3082,11 +3464,14 @@ function schedule_reductions!(
             dis,
         )
     end
-    !enable_dominance && !enable_elimination && !enable_relations && !enable_star_triangle &&
+    !enable_dominance && !enable_elimination && !enable_relations && !enable_star_triangle && !enable_blocks &&
         return finish(:optional_pass_disabled)
     direction = _direction(ws._snapshot)
     (direction == 0 && length(st.fixes) < length(st.fixed)) &&
         return finish(:unsupported_arithmetic)
+    blocks_quiescent = !enable_blocks
+    rejected_blocks = Set{Tuple{Vararg{Int}}}()
+    block_fill_blocked = false
     while true
         ef = eff_fill()
         if enable_dominance && st.head <= length(st.queue)
@@ -3109,6 +3494,11 @@ function schedule_reductions!(
                     p_reason = status
                     break
                 end
+            end
+            if p_ded > 0 && enable_blocks
+                blocks_quiescent = false
+                block_fill_blocked = false
+                empty!(rejected_blocks)
             end
             push!(passes, SchedulePassSummary(:dominance, p_reason, p_cand, p_edges, p_ded, p_exact, p_fb, 0))
             p_reason === :quiescent || return finish(p_reason)
@@ -3135,6 +3525,11 @@ function schedule_reductions!(
                     break
                 end
             end
+            if p_ded > 0 && enable_blocks
+                blocks_quiescent = false
+                block_fill_blocked = false
+                empty!(rejected_blocks)
+            end
             push!(passes, SchedulePassSummary(:elimination, p_reason, p_cand, p_edges, p_ded, p_exact, p_fb, p_fill))
             p_reason === :quiescent || return finish(p_reason)
             continue
@@ -3158,6 +3553,11 @@ function schedule_reductions!(
                     p_reason = status
                     break
                 end
+            end
+            if p_ded > 0 && enable_blocks
+                blocks_quiescent = false
+                block_fill_blocked = false
+                empty!(rejected_blocks)
             end
             push!(passes, SchedulePassSummary(:star_triangle, p_reason, p_cand, p_edges, p_ded, p_exact, p_fb, p_fill))
             p_reason === :quiescent || return finish(p_reason)
@@ -3185,14 +3585,47 @@ function schedule_reductions!(
                     break
                 end
             end
+            if p_ded > 0 && enable_blocks
+                blocks_quiescent = false
+                block_fill_blocked = false
+                empty!(rejected_blocks)
+            end
             push!(passes, SchedulePassSummary(:relations, p_reason, p_cand, p_edges, p_ded, p_exact, p_fb, p_fill))
             p_reason === :quiescent || return finish(p_reason)
+            continue
+        elseif enable_blocks && !blocks_quiescent
+            if deductions >= max_deductions
+                push!(passes, SchedulePassSummary(:block_elimination, :deduction_limit, 0, 0, 0, 0, 0, 0))
+                return finish(:deduction_limit)
+            end
+            status, dc, de, dd, dx, dfb, dfill, fblocked = _step_block_elimination!(
+                ws, mbs, msep, eff_fill(), map, tie_break, direction,
+                Int(max_work - candidates - edges), Int(max_exact_work - exact),
+                Int(max_deductions - deductions), deadline_ns;
+                require_unique=require_unique_blocks, allow_exact_fallback=allow_exact_fallback,
+                rejected_blocks=rejected_blocks,
+            )
+            candidates += dc; edges += de; deductions += dd; exact += dx; exact_fallbacks += dfb; total_fill += dfill
+            elim_ded += dd
+            fblocked && (block_fill_blocked = true)
+            p_reason = status in (:applied, :none) ? :quiescent : status
+            if dd > 0 || dc > 0 || p_reason !== :quiescent
+                push!(passes, SchedulePassSummary(:block_elimination, p_reason, dc, de, dd, dx, dfb, dfill))
+            end
+            if status === :applied
+                blocks_quiescent = false
+                empty!(rejected_blocks)
+            elseif status === :none
+                blocks_quiescent = true
+            else
+                return finish(status)
+            end
             continue
         else
             break
         end
     end
-    _has_active_fill_blocked(ws, enable_elimination, enable_star_triangle, enable_relations, eff_fill()) &&
+    (_has_active_fill_blocked(ws, enable_elimination, enable_star_triangle, enable_relations, eff_fill()) || block_fill_blocked) &&
         return finish(:fill_limit)
     disabled = _disabled_optional_passes_with_work(
         ws, enable_dominance, enable_elimination, enable_star_triangle,

@@ -827,4 +827,374 @@ end
     @test verify_certificate(ws_dup, export_certificate(ws_dup)).valid
 end
 
+@testset "0-, 1-, and 2-Separator Biconnected Block Elimination" begin
+    R = Rational{BigInt}
+
+    # 1. 0-separator (|S| = 0) K_4 block where every vertex has degree 3 and alpha_123 != 0
+    L_k4 = [0.5, -0.25, 0.75, -0.5]
+    Q_k4 = [0.0 1.0 1.0 1.0;
+            0.0 0.0 1.0 1.0;
+            0.0 0.0 0.0 1.0;
+            0.0 0.0 0.0 0.0]
+    m_k4 = fixture([:x1, :x2, :x3, :x4], L_k4, Q_k4; domain=:spin, sense=:min)
+    ws_k4 = Workspace(m_k4; rules=:elimination)
+    # Single-vertex degree-3 elimination cannot eliminate any vertex because alpha_123 != 0:
+    @test eliminate_low_degree!(ws_k4; max_degree=3).deductions == 0
+    att_k4 = prove_elimination(ws_k4, [:x1, :x2, :x3, :x4])
+    @test att_k4.stop_reason === :proved
+    @test length(att_k4.certificate.steps) == 4
+    @test verify_certificate(ws_k4, att_k4.certificate).valid
+    @test certificate_guarantee(att_k4.certificate) === :exact_elimination
+
+    rep_k4 = eliminate_low_degree!(ws_k4; enable_blocks=true, max_block_size=4, max_separator=0)
+    @test rep_k4.stop_reason === :quiescent
+    @test rep_k4.deductions == 4
+    @test verify_certificate(ws_k4, export_certificate(ws_k4)).valid
+    rec_k4 = reconstruct(materialize(ws_k4; coefficient_type=R), Int[])
+    best_k4 = minimum(
+        reference(L_k4, Q_k4, 1.0, 0.0, [s1, s2, s3, s4], R)
+        for s1 in (-1, 1), s2 in (-1, 1), s3 in (-1, 1), s4 in (-1, 1)
+    )
+    @test reference(L_k4, Q_k4, 1.0, 0.0, rec_k4.state, R) == best_k4
+    @test rec_k4.energy.value == best_k4
+
+    # Helper to convert spin (h, J) to an equivalent (L, Q) in either :spin or :bool domain:
+    function spin_to_dom(h::Vector{Float64}, J::Matrix{Float64}, dom::Symbol)
+        n = length(h)
+        dom === :spin && return (copy(h), copy(J))
+        L = zeros(Float64, n)
+        Q = 4.0 .* J
+        for i in 1:n
+            s_row = sum(J[min(i, j), max(i, j)] for j in 1:n if j != i; init=0.0)
+            L[i] = 2.0 * h[i] - 2.0 * s_row
+        end
+        return (L, Q)
+    end
+
+    # 2. 1-separator (|S| = 1) articulation-point pendant block B = (:b1, :b2, :b3) attached to :s1
+    #    Every vertex in B has degree 3 (two internal edges in B + one edge to :s1) with alpha_123 != 0,
+    #    and the core (:s1, :c1, :c2, :c3, :c4) is a 5-clique so all core vertices have degree >= 4.
+    #    Test both index orderings: s1 < min(B) and min(B) < s1.
+    for labels_1sep in (
+        [:s1, :c1, :c2, :c3, :c4, :b1, :b2, :b3],
+        [:b1, :b2, :b3, :s1, :c1, :c2, :c3, :c4],
+    )
+        idx_of = Dict(lbl => i for (i, lbl) in enumerate(labels_1sep))
+        h_1 = zeros(8)
+        h_1[idx_of[:b1]] = 0.5
+        h_1[idx_of[:b2]] = -0.25
+        h_1[idx_of[:b3]] = 0.75
+        h_1[idx_of[:s1]] = -0.5
+        h_1[idx_of[:c1]] = 0.25
+        h_1[idx_of[:c2]] = -0.75
+        h_1[idx_of[:c3]] = 0.5
+        h_1[idx_of[:c4]] = -0.25
+        J_1 = zeros(8, 8)
+        function add_edge!(Q, u, v, w)
+            Q[min(u, v), max(u, v)] = w
+        end
+        add_edge!(J_1, idx_of[:b1], idx_of[:b2], 1.0)
+        add_edge!(J_1, idx_of[:b1], idx_of[:b3], 1.0)
+        add_edge!(J_1, idx_of[:b2], idx_of[:b3], 1.0)
+        add_edge!(J_1, idx_of[:b1], idx_of[:s1], 1.0)
+        add_edge!(J_1, idx_of[:b2], idx_of[:s1], -1.0)
+        add_edge!(J_1, idx_of[:b3], idx_of[:s1], 1.0)
+        core_1 = [:s1, :c1, :c2, :c3, :c4]
+        for i in 1:length(core_1), j in (i + 1):length(core_1)
+            add_edge!(J_1, idx_of[core_1[i]], idx_of[core_1[j]], isodd(i + j) ? 1.25 : -0.75)
+        end
+
+        for dom in (:bool, :spin), sense in (:min, :max)
+            L_1, Q_1 = spin_to_dom(h_1, J_1, dom)
+            m_1 = fixture(labels_1sep, L_1, Q_1; domain=dom, sense=sense)
+            ws_1 = Workspace(m_1; rules=:mixed)
+            # Single-vertex degree-3 elimination cannot eliminate any vertex:
+            @test eliminate_low_degree!(ws_1; max_degree=3, cascade_dominance=false).deductions == 0
+            att_1 = prove_elimination(ws_1, [:b1, :b2, :b3])
+            @test att_1.stop_reason === :proved
+            @test verify_certificate(ws_1, att_1.certificate).valid
+
+            cp_1 = checkpoint(ws_1)
+            rep_b1 = eliminate_variable!(ws_1, [:b1, :b2, :b3])
+            @test rep_b1.stop_reason === :applied
+            @test rep_b1.changed == 3
+            @test verify_certificate(ws_1, export_certificate(ws_1)).valid
+
+            # Verify exact conditional optimum for all 2^5 = 32 assignments of (:s1, :c1, :c2, :c3, :c4)
+            exp_1 = materialize(ws_1; coefficient_type=R)
+            res_vars_1 = QT.variables(export_model(exp_1))
+            vals_dom = dom === :bool ? (0, 1) : (-1, 1)
+            for vs in vals_dom, vc1 in vals_dom, vc2 in vals_dom, vc3 in vals_dom, vc4 in vals_dom
+                y_dict = Dict(:s1 => vs, :c1 => vc1, :c2 => vc2, :c3 => vc3, :c4 => vc4)
+                y_vec = [y_dict[v] for v in res_vars_1]
+                rec = reconstruct(exp_1, y_vec)
+                opt_b = (sense === :min ? minimum : maximum)(
+                    begin
+                        st_vec = zeros(Int, 8)
+                        st_vec[idx_of[:s1]] = vs
+                        st_vec[idx_of[:c1]] = vc1
+                        st_vec[idx_of[:c2]] = vc2
+                        st_vec[idx_of[:c3]] = vc3
+                        st_vec[idx_of[:c4]] = vc4
+                        st_vec[idx_of[:b1]] = vb1
+                        st_vec[idx_of[:b2]] = vb2
+                        st_vec[idx_of[:b3]] = vb3
+                        reference(L_1, Q_1, 1.0, 0.0, st_vec, R)
+                    end
+                    for vb1 in vals_dom, vb2 in vals_dom, vb3 in vals_dom
+                )
+                @test reference(L_1, Q_1, 1.0, 0.0, rec.state, R) == opt_b
+                @test rec.energy.value == opt_b
+            end
+
+            # Rollback and test automatic discovery via schedule_reductions!(enable_blocks=true)
+            rollback!(ws_1, cp_1)
+            @test isempty(reductions(ws_1))
+            srep_1 = schedule_reductions!(
+                ws_1;
+                enable_dominance=false, enable_elimination=false,
+                enable_relations=false, enable_star_triangle=false,
+                enable_blocks=true, max_block_size=3, max_separator=1,
+            )
+            @test srep_1.stop_reason === :quiescent
+            @test srep_1.elimination_deductions == 3
+            @test any(p -> p.pass === :block_elimination && p.deductions == 3, srep_1.passes)
+            @test verify_certificate(ws_1, export_certificate(ws_1)).valid
+        end
+    end
+
+    # 3. 2-separator (|S| = 2) biconnected block B = (:b1, :b2, :b3) across separator S = (:s1, :s2)
+    #    Test all three relative index orderings of B vs (s1, s2):
+    #    - s1 < s2 < min(B)
+    #    - s1 < min(B) < max(B) < s2
+    #    - min(B) < max(B) < s1 < s2
+    for labels_2sep in (
+        [:s1, :s2, :c1, :c2, :c3, :c4, :b1, :b2, :b3],
+        [:s1, :b1, :b2, :b3, :s2, :c1, :c2, :c3, :c4],
+        [:b1, :b2, :b3, :s1, :s2, :c1, :c2, :c3, :c4],
+    )
+        idx_of = Dict(lbl => i for (i, lbl) in enumerate(labels_2sep))
+        h_2 = zeros(9)
+        h_2[idx_of[:b1]] = 0.5
+        h_2[idx_of[:b2]] = -0.25
+        h_2[idx_of[:b3]] = 0.5
+        h_2[idx_of[:s1]] = 0.25
+        h_2[idx_of[:s2]] = -0.5
+        h_2[idx_of[:c1]] = 0.75
+        h_2[idx_of[:c2]] = -0.25
+        h_2[idx_of[:c3]] = 0.5
+        h_2[idx_of[:c4]] = -0.5
+        J_2 = zeros(9, 9)
+        function add_edge2!(Q, u, v, w)
+            Q[min(u, v), max(u, v)] = w
+        end
+        # B is a triangle (:b1, :b2, :b3) where :b1, :b2 couple to :s1 and :b2, :b3 couple to :s2
+        add_edge2!(J_2, idx_of[:b1], idx_of[:b2], 1.0)
+        add_edge2!(J_2, idx_of[:b1], idx_of[:b3], 1.0)
+        add_edge2!(J_2, idx_of[:b2], idx_of[:b3], 1.0)
+        add_edge2!(J_2, idx_of[:b1], idx_of[:s1], 1.0)
+        add_edge2!(J_2, idx_of[:b2], idx_of[:s1], -1.0)
+        add_edge2!(J_2, idx_of[:b2], idx_of[:s2], 1.0)
+        add_edge2!(J_2, idx_of[:b3], idx_of[:s2], 1.0)
+        # Core (:c1, :c2, :c3, :c4) is a 4-clique coupled to both :s1 and :s2 (so degree 5 each),
+        # with NO direct edge between :s1 and :s2 initially (so fill == 1)
+        c_vars = [:c1, :c2, :c3, :c4]
+        for i in 1:length(c_vars)
+            add_edge2!(J_2, idx_of[:s1], idx_of[c_vars[i]], isodd(i) ? 1.0 : -1.0)
+            add_edge2!(J_2, idx_of[:s2], idx_of[c_vars[i]], isodd(i) ? -1.0 : 1.0)
+            for j in (i + 1):length(c_vars)
+                add_edge2!(J_2, idx_of[c_vars[i]], idx_of[c_vars[j]], 1.0)
+            end
+        end
+
+        for dom in (:bool, :spin)
+            L_2, Q_2 = spin_to_dom(h_2, J_2, dom)
+            m_2 = fixture(labels_2sep, L_2, Q_2; domain=dom, sense=:min)
+            ws_2 = Workspace(m_2; rules=:mixed)
+            # Single-vertex degree-3 elimination cannot eliminate B:
+            @test eliminate_low_degree!(ws_2; max_degree=3, cascade_dominance=false).deductions == 0
+            # With max_separator=1, B is refused with :separator_too_large:
+            @test prove_elimination(ws_2, [:b1, :b2, :b3]; max_separator=1).stop_reason === :separator_too_large
+            @test eliminate_block!(ws_2, [:b1, :b2, :b3]; max_separator=1).stop_reason === :separator_too_large
+            # With max_fill=0, B is refused with :fill_limit because eliminating B creates edge (:s1, :s2):
+            @test eliminate_block!(ws_2, [:b1, :b2, :b3]; max_fill=0).stop_reason === :fill_limit
+            srep_fill = schedule_reductions!(
+                ws_2;
+                enable_dominance=false, enable_elimination=false,
+                enable_relations=false, enable_star_triangle=false,
+                enable_blocks=true, max_block_size=3, max_separator=2, max_fill=0,
+            )
+            @test srep_fill.stop_reason === :fill_limit
+            @test srep_fill.deductions == 0
+
+            # Now run schedule_reductions! with max_fill=1 and enable_blocks=true:
+            srep_2 = schedule_reductions!(
+                ws_2;
+                enable_dominance=false, enable_elimination=false,
+                enable_relations=false, enable_star_triangle=false,
+                enable_blocks=true, max_block_size=3, max_separator=2, max_fill=1,
+            )
+            @test srep_2.stop_reason === :quiescent
+            @test srep_2.elimination_deductions == 3
+            @test srep_2.fill_edges == 1
+            cert_2 = export_certificate(ws_2)
+            @test verify_certificate(ws_2, cert_2).valid
+
+            # Check DomainGaugeMap transport and witness satisfaction:
+            g_vec = [isodd(i) ? -1 : 1 for i in 1:9]
+            for target_dom in (:bool, :spin)
+                dmap = domain_map(ws_2; domain=target_dom, gauge=g_vec)
+                tcert = transport_certificate(ws_2, cert_2, dmap)
+                @test verify_certificate(ws_2, tcert; map=dmap).valid
+                @test verify_certificate(ws_2, export_certificate(ws_2; map=dmap); map=dmap).valid
+            end
+            w_coerc = coercive_field_witness(ws_2)
+            @test length(w_coerc) == 9
+
+            # Verify exact conditional optimum across all 2^6 = 64 states of (:s1, :s2, :c1, :c2, :c3, :c4)
+            exp_2 = materialize(ws_2; coefficient_type=R)
+            res_vars_2 = QT.variables(export_model(exp_2))
+            vals_dom = dom === :bool ? (0, 1) : (-1, 1)
+            for vs1 in vals_dom, vs2 in vals_dom, vc1 in vals_dom, vc2 in vals_dom, vc3 in vals_dom, vc4 in vals_dom
+                y_dict = Dict(:s1 => vs1, :s2 => vs2, :c1 => vc1, :c2 => vc2, :c3 => vc3, :c4 => vc4)
+                y_vec = [y_dict[v] for v in res_vars_2]
+                rec = reconstruct(exp_2, y_vec)
+                opt_b = minimum(
+                    begin
+                        st_vec = zeros(Int, 9)
+                        st_vec[idx_of[:s1]] = vs1
+                        st_vec[idx_of[:s2]] = vs2
+                        st_vec[idx_of[:c1]] = vc1
+                        st_vec[idx_of[:c2]] = vc2
+                        st_vec[idx_of[:c3]] = vc3
+                        st_vec[idx_of[:c4]] = vc4
+                        st_vec[idx_of[:b1]] = vb1
+                        st_vec[idx_of[:b2]] = vb2
+                        st_vec[idx_of[:b3]] = vb3
+                        reference(L_2, Q_2, 1.0, 0.0, st_vec, R)
+                    end
+                    for vb1 in vals_dom, vb2 in vals_dom, vb3 in vals_dom
+                )
+                @test reference(L_2, Q_2, 1.0, 0.0, rec.state, R) == opt_b
+                @test rec.energy.value == opt_b
+            end
+        end
+    end
+
+    # 4. Tied block argmin, tie_break (:low vs :high), require_unique, assume!/rollback!, and tamper rejection:
+    L_tie = [0.0, 0.0, 0.25]
+    Q_tie = [0.0 0.0 0.0;
+             0.0 0.0 0.0;
+             0.0 0.0 0.0]
+    Q_tie[1, 2] = -1.0 # ferromagnetic pair (:b1, :b2) with zero field -> (-1,-1) and (+1,+1) tied!
+    Q_tie[1, 3] = 1.0
+    Q_tie[2, 3] = -1.0 # for s3 in {-1, +1}, b1 == b2 has 0 net coupling to s3, so (-1,-1) and (+1,+1) remain tied!
+    m_tie = fixture([:b1, :b2, :s3], L_tie, Q_tie; domain=:spin, sense=:min)
+    ws_tie_lo = Workspace(m_tie; rules=:elimination)
+    @test prove_elimination(ws_tie_lo, [:b1, :b2]; require_unique=true).stop_reason === :not_strict
+    @test eliminate_block!(ws_tie_lo, [:b1, :b2]; require_unique=true).stop_reason === :not_strict
+
+    att_tie_lo = prove_elimination(ws_tie_lo, [:b1, :b2]; tie_break=:low)
+    att_tie_hi = prove_elimination(ws_tie_lo, [:b1, :b2]; tie_break=:high)
+    @test att_tie_lo.stop_reason === :proved && att_tie_hi.stop_reason === :proved
+    @test persistency(att_tie_lo.certificate) === :weak
+    @test all(==(-1), att_tie_lo.certificate.steps[1].table)
+    @test all(==(1), att_tie_hi.certificate.steps[1].table)
+    @test verify_certificate(ws_tie_lo, att_tie_lo.certificate).valid
+    @test verify_certificate(ws_tie_lo, att_tie_hi.certificate).valid
+
+    # DomainGaugeMap tie_break invariance:
+    dmap_tie = domain_map(ws_tie_lo; domain=:bool, gauge=[-1, -1, 1])
+    att_tie_map_lo = prove_elimination(ws_tie_lo, [:b1, :b2]; map=dmap_tie, tie_break=:low)
+    @test att_tie_map_lo.stop_reason === :proved
+    @test verify_certificate(ws_tie_lo, att_tie_map_lo.certificate; map=dmap_tie).valid
+    # In gauged bool with gauge -1 on :b1, :b2, target low (0) corresponds to original +1:
+    @test all(==(1), att_tie_map_lo.certificate.steps[1].table)
+
+    # Validation & error guards:
+    @test_throws ArgumentError prove_elimination(ws_tie_lo, [:b1])
+    @test_throws ArgumentError prove_elimination(ws_tie_lo, [:b1, :b2]; max_block_size=1)
+    @test_throws ArgumentError prove_elimination(ws_tie_lo, [:b1, :b2]; max_separator=3)
+    @test_throws ArgumentError prove_elimination(ws_tie_lo, [:b1, :b1])
+    @test prove_elimination(ws_tie_lo, [:b1, :b2, :s3]; max_block_size=2).stop_reason === :block_too_large
+
+    cp_af = checkpoint(ws_tie_lo)
+    assume!(ws_tie_lo, :b1, 1)
+    @test prove_elimination(ws_tie_lo, [:b1, :b2]).stop_reason === :already_fixed
+    rollback!(ws_tie_lo, cp_af)
+
+    m_zs = fixture([:b1, :b2], [0.1, 0.2], [0.0 1.0; 0.0 0.0]; domain=:spin, scale=0.0)
+    ws_zs = Workspace(m_zs; rules=:elimination)
+    @test prove_elimination(ws_zs, [:b1, :b2]).stop_reason === :zero_scale
+
+    # allow_exact_fallback=false and deduction_limit in eliminate_low_degree! / schedule_reductions!(enable_blocks=true):
+    ws_k4_f64 = Workspace(m_k4; rules=:mixed)
+    @test eliminate_low_degree!(ws_k4_f64; enable_blocks=true, max_block_size=4, max_separator=0, max_deductions=2).stop_reason === :deduction_limit
+    @test schedule_reductions!(ws_k4_f64; enable_blocks=true, max_block_size=4, max_separator=0, allow_exact_fallback=false).deductions == 4
+
+    # Disconnected block rejection:
+    m_disc = fixture([:x1, :x2, :x3], [0.1, 0.2, 0.3], [0.0 1.0 0.0; 0.0 0.0 0.0; 0.0 0.0 0.0]; domain=:spin)
+    ws_disc = Workspace(m_disc; rules=:elimination)
+    @test prove_elimination(ws_disc, [:x1, :x3]).stop_reason === :disconnected_block
+
+    # Tamper rejection in verify_certificate:
+    s1_orig = att_tie_lo.certificate.steps[1]::EliminationStep
+    s2_orig = att_tie_lo.certificate.steps[2]::EliminationStep
+    bw1 = s1_orig.block_witness
+    # Tamper block_phi:
+    bw1_bad_phi = QUBOPreprocessing._BlockEliminationWitness(
+        bw1.block_variables, 1, bw1.block_tables, (bw1.block_phi[1] + 1, bw1.block_phi[2]),
+    )
+    s1_bad_phi = EliminationStep(
+        s1_orig.variable, s1_orig.neighbors, s1_orig.table,
+        s1_orig.constant_delta, s1_orig.linear_deltas, s1_orig.quadratic_deltas,
+        s1_orig.constant, s1_orig.predecessors, s1_orig.scope_length, s1_orig.unique_argmin, bw1_bad_phi,
+    )
+    cert_bad_phi = DominanceCertificate(
+        generation(ws_tie_lo), att_tie_lo.certificate._scope_checkpoint,
+        att_tie_lo.certificate.assumptions, (s1_bad_phi, s2_orig),
+        att_tie_lo.certificate._source, nothing,
+    )
+    @test verify_certificate(ws_tie_lo, cert_bad_phi).stop_reason === :invalid_step
+
+    # Tamper unique_argmin:
+    s1_bad_ua = EliminationStep(
+        s1_orig.variable, s1_orig.neighbors, s1_orig.table,
+        s1_orig.constant_delta, s1_orig.linear_deltas, s1_orig.quadratic_deltas,
+        s1_orig.constant, s1_orig.predecessors, s1_orig.scope_length, true, s1_orig.block_witness,
+    )
+    s2_bad_ua = EliminationStep(
+        s2_orig.variable, s2_orig.neighbors, s2_orig.table,
+        s2_orig.constant_delta, s2_orig.linear_deltas, s2_orig.quadratic_deltas,
+        s2_orig.constant, s2_orig.predecessors, s2_orig.scope_length, true, s2_orig.block_witness,
+    )
+    cert_bad_ua = DominanceCertificate(
+        generation(ws_tie_lo), att_tie_lo.certificate._scope_checkpoint,
+        att_tie_lo.certificate.assumptions, (s1_bad_ua, s2_bad_ua),
+        att_tie_lo.certificate._source, nothing,
+    )
+    @test verify_certificate(ws_tie_lo, cert_bad_ua).stop_reason === :invalid_bound
+
+    # Tamper step table vs block_tables and incomplete batch:
+    s2_bad_tbl = EliminationStep(
+        s2_orig.variable, s2_orig.neighbors, (1, 1),
+        s2_orig.constant_delta, s2_orig.linear_deltas, s2_orig.quadratic_deltas,
+        s2_orig.constant, s2_orig.predecessors, s2_orig.scope_length, s2_orig.unique_argmin, s2_orig.block_witness,
+    )
+    cert_bad_tbl = DominanceCertificate(
+        generation(ws_tie_lo), att_tie_lo.certificate._scope_checkpoint,
+        att_tie_lo.certificate.assumptions, (s1_orig, s2_bad_tbl),
+        att_tie_lo.certificate._source, nothing,
+    )
+    @test verify_certificate(ws_tie_lo, cert_bad_tbl).stop_reason === :invalid_step
+
+    cert_incomplete = DominanceCertificate(
+        generation(ws_tie_lo), att_tie_lo.certificate._scope_checkpoint,
+        att_tie_lo.certificate.assumptions, (s1_orig,),
+        att_tie_lo.certificate._source, nothing,
+    )
+    @test verify_certificate(ws_tie_lo, cert_incomplete).stop_reason === :invalid_step
+end
+
+
 

@@ -155,6 +155,42 @@ the number of new triangle edges introduced per step and defers blocked vertices
 reversibly on the trail so progressive `max_fill` increases reconsider them
 without rescanning the graph.
 
+### Connected 0-, 1-, and 2-separator block elimination (`eliminate_block!`, `enable_blocks=true`)
+
+When a connected subset of active variables ``B \subseteq V_{\text{act}}`` with
+``2 \le |B| \le \text{max\_block\_size} \le 16`` is separated from the rest of the
+active graph by a boundary ``S = N_G(B) \subseteq V_{\text{act}} \setminus B`` of
+at most two active vertices (`0 <= |S| <= max_separator <= 2`, Rehfeldt et al. 2023
+Section 3), the conditional optimum of the internal block energy over all
+``2^{|B|}`` internal assignments is a function of at most two binary/spin boundary
+variables ``x_S``:
+```math
+\Phi_B(x_S) = \operatorname{opt}_{x_B \in \mathcal{D}^{|B|}} E_{B,S}(x_B, x_S), \quad x_S \in \mathcal{D}^{|S|}.
+```
+Because any pseudo-Boolean function of ``|S| \le 2`` variables has degree at most 2,
+``\Phi_B(x_S)`` is **always** an exact quadratic polynomial on ``S`` regardless of
+internal frustration, internal degree-3+ cubic terms (such as ``K_4`` blocks with
+``\alpha_{123} \ne 0``), or arbitrary local fields:
+- **0-separator closed component (`|S| == 0`):** solved to a pure constant shift
+  ``\Delta c = \Phi_B(\emptyset)`` with zero fill edges;
+- **1-separator articulation-point pendant block (`|S| == 1`, ``S = \{s_1\}``):**
+  eliminated into a constant shift ``\Delta c`` and linear shift ``\Delta L_{s_1}``
+  on the articulation vertex ``s_1`` with zero fill edges;
+- **2-separator biconnected block (`|S| == 2`, ``S = \{s_1, s_2\}``):** eliminated
+  into ``\Delta c``, linear shifts ``(\Delta L_{s_1}, \Delta L_{s_2})``, and a
+  single quadratic coupling shift ``\Delta Q_{s_1, s_2}`` between ``s_1`` and
+  ``s_2`` (introducing at most 1 fill edge when ``(s_1, s_2)`` is not already an
+  active edge, subject to `max_fill`).
+
+`prove_elimination(ws, block_labels; ...)` and `eliminate_block!(ws, block_labels; ...)`
+certify and commit an atomic batch of `|B|` [`EliminationStep`](@ref) records on
+the reversible trail (the first carrying the polynomial deltas on ``S`` and the
+remaining steps carrying zero deltas and their coordinate's ``2^{|S|}``-entry marginal
+argmin table). Pass `enable_blocks=true` (along with `max_block_size=12`,
+`max_separator=2`, and `require_unique_blocks=false`) to `eliminate_low_degree!`
+or `schedule_reductions!` to automatically discover and eliminate 0-, 1-, and
+2-separator blocks once single-vertex degree-`\le 3` elimination is quiescent.
+
 ```@example dominance
 using QUBOPreprocessing
 import QUBOTools as QT
