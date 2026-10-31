@@ -384,6 +384,11 @@ end
     cert_roof_copy = deepcopy(cert_roof)
     @test cert_roof_copy.steps[1].flow_edges === cert_roof_copy.steps[2].flow_edges
     @test cert_roof_copy.steps[1].flow_edges !== cert_roof.steps[1].flow_edges
+    res_roof = materialize(ws_roof)
+    res_roof_copy = deepcopy(res_roof)
+    @test res_roof_copy.certificate.reduction_chain === res_roof_copy.certificate.proof.steps
+    @test res_roof_copy.certificate.reduction_chain[1].flow_edges === res_roof_copy.certificate.reduction_chain[2].flow_edges
+    @test res_roof_copy.certificate.reduction_chain[1].flow_edges !== res_roof.certificate.reduction_chain[1].flow_edges
     @test verify_certificate(ws_roof, cert_roof).valid
 
     # Heterogeneous reduction chains (DominanceStep + EliminationStep + RelationStep)

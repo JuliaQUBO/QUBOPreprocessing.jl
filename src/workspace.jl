@@ -1039,12 +1039,20 @@ original_variables(r::ConditionedExport) = _labels_vector(r._snapshot)
 
 function Base.deepcopy_internal(r::ConditionedExport{T}, dict::IdDict) where T
     haskey(dict, r) && return dict[r]::ConditionedExport{T}
+    proof_copy = Base.deepcopy_internal(r.certificate.proof, dict)
+    chain_copy = if proof_copy isa DominanceCertificate &&
+            r.certificate.proof isa DominanceCertificate &&
+            r.certificate.reduction_chain === r.certificate.proof.steps
+        proof_copy.steps
+    else
+        _deepcopy_steps(r.certificate.reduction_chain, dict)
+    end
     cert_copy = _ConditionedCertNT((
         r.certificate.scope,
         _deepcopy_tuple(r.certificate.assumptions, dict),
-        _deepcopy_tuple(r.certificate.reduction_chain, dict),
+        chain_copy,
         r.certificate.unchanged_representation,
-        Base.deepcopy_internal(r.certificate.proof, dict),
+        proof_copy,
     ))
     return ConditionedExport{T}(
         Base.deepcopy_internal(r._snapshot, dict),
