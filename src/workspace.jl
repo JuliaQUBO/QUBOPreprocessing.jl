@@ -1006,6 +1006,11 @@ function index_map(ws::Workspace)
     return map
 end
 
+const _ConditionedCertNT = NamedTuple{
+    (:scope, :assumptions, :reduction_chain, :unchanged_representation, :proof),
+    Tuple{Symbol, Tuple, Tuple, Bool, Any},
+}
+
 """
     ConditionedExport
 
@@ -1016,11 +1021,6 @@ contains the ordered strong-deduction proof when present; no solver proof is pro
 Original labels/maps, scope and exact residual data are immutable snapshots;
 `export_model` returns a separately owned QUBOTools model.
 """
-const _ConditionedCertNT = NamedTuple{
-    (:scope, :assumptions, :reduction_chain, :unchanged_representation, :proof),
-    Tuple{Symbol, Tuple, Tuple, Bool, Any},
-}
-
 struct ConditionedExport{T}
     _snapshot::_Snapshot
     generation::Generation
