@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.1.5
+
+Batch witness export memoization, type-erased `ConditionedExport` reduction chains,
+and zero-promotion incremental bound initialization release:
+
+- **$O(M + k)$ shared batch witness export (`_deepcopy_tuple`, `_copy_proof_step`,
+  `_proof_steps`, `reductions`):** fast-pathed `isbitstype` and `Symbol` tuples
+  (`batch_fixings`, `witness_state`, `cut_S`) to return in $O(1)$ without
+  elementwise copying and reused deep-copied batch witness payloads (`flow_edges`,
+  `block_tables`, `block_phi`) across consecutive steps in the same
+  `RoofDualityStep`, `SubmodularCutStep`, `_RoofSCCPairWitness`, or
+  `_BlockEliminationWitness` batch during `_proof_steps`, `reductions`, and
+  `deepcopy(::DominanceCertificate)`, eliminating $O(k \cdot M)$ redundant
+  `Rational{BigInt}` allocations when a single flow batch fixes thousands of
+  variables (e.g. `0.21s` vs. $>20\text{ min}$ on `MQLib` `g001571.txt` with
+  $k = 4{,}756, M = 16{,}900$).
+- **Type-erased `reduction_chain` in `ConditionedExport` (`_ConditionedCertNT`,
+  `_conditioned_export`):** defined the `certificate` field of `ConditionedExport`
+  with an explicit `Tuple`-typed `reduction_chain` (`_ConditionedCertNT`) and
+  replaced dynamic tuple indexing (`steps[k]`, `free[j]`) with `_entry_at`
+  (`getfield`), preventing LLVM's `llvm-late-gc-lowering.cpp` `LocalScan` pass from
+  spending $O(K^2)$ compile time specializing `NamedTuple` constructors on long
+  interleaved heterogeneous `(DominanceStep, EliminationStep, RelationStep, ...)`
+  chains (e.g. `0.42s` vs. $>10\text{ min}$ on `MQLib` `g001587.txt` with
+  $K = 2{,}965$ steps).
+- **Zero-promotion bound initialization (`_incremental`):** replaced `min(0, q)`
+  and `max(0, q)` in `_incremental` with `signbit(q.num)` branches so non-53-bit
+  rational edge weights no longer allocate $4m$ temporary `Rational{BigInt}(0, 1)`
+  objects during `Workspace` construction.
+
 ## 0.1.4
 
 Literature reduction rules, kernel-checked Lean 4 formalization of all eight

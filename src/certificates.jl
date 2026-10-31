@@ -288,7 +288,6 @@ DominanceCertificate(g,cp,a,s,src) = DominanceCertificate(g,cp,a,s,src,nothing)
 generation(c::DominanceCertificate) = c.generation
 
 function Base.deepcopy_internal(w::_ProbingPairWitness, dict::IdDict)
-    haskey(dict, w) && return dict[w]::_ProbingPairWitness
     return _ProbingPairWitness(
         w.assume_var_1,
         w.assume_val_1,
@@ -300,7 +299,6 @@ function Base.deepcopy_internal(w::_ProbingPairWitness, dict::IdDict)
 end
 
 function Base.deepcopy_internal(w::_RoofSCCPairWitness, dict::IdDict)
-    haskey(dict, w) && return dict[w]::_RoofSCCPairWitness
     return _RoofSCCPairWitness(
         Base.deepcopy_internal(w.roof_lower, dict),
         Base.deepcopy_internal(w.max_flow, dict),
@@ -314,7 +312,6 @@ function Base.deepcopy_internal(w::_RoofSCCPairWitness, dict::IdDict)
 end
 
 function Base.deepcopy_internal(s::RelationStep, dict::IdDict)
-    haskey(dict, s) && return dict[s]::RelationStep
     return RelationStep(
         s.eliminated,
         s.representative,
@@ -332,7 +329,6 @@ function Base.deepcopy_internal(s::RelationStep, dict::IdDict)
 end
 
 function Base.deepcopy_internal(w::_BlockEliminationWitness, dict::IdDict)
-    haskey(dict, w) && return dict[w]::_BlockEliminationWitness
     return _BlockEliminationWitness(
         _deepcopy_tuple(w.block_variables, dict),
         w.batch_index,
@@ -342,7 +338,6 @@ function Base.deepcopy_internal(w::_BlockEliminationWitness, dict::IdDict)
 end
 
 function Base.deepcopy_internal(s::EliminationStep, dict::IdDict)
-    haskey(dict, s) && return dict[s]::EliminationStep
     return EliminationStep(
         s.variable,
         _deepcopy_tuple(s.neighbors, dict),
@@ -359,7 +354,6 @@ function Base.deepcopy_internal(s::EliminationStep, dict::IdDict)
 end
 
 function Base.deepcopy_internal(s::ProbingStep, dict::IdDict)
-    haskey(dict, s) && return dict[s]::ProbingStep
     return ProbingStep(
         s.variable,
         s.value,
@@ -379,7 +373,6 @@ function Base.deepcopy_internal(s::ProbingStep, dict::IdDict)
 end
 
 function Base.deepcopy_internal(s::RoofDualityStep, dict::IdDict)
-    haskey(dict, s) && return dict[s]::RoofDualityStep
     return RoofDualityStep(
         s.variable,
         s.value,
@@ -397,7 +390,6 @@ function Base.deepcopy_internal(s::RoofDualityStep, dict::IdDict)
 end
 
 function Base.deepcopy_internal(s::SubmodularCutStep, dict::IdDict)
-    haskey(dict, s) && return dict[s]::SubmodularCutStep
     return SubmodularCutStep(
         s.variable,
         s.value,
@@ -417,7 +409,6 @@ function Base.deepcopy_internal(s::SubmodularCutStep, dict::IdDict)
 end
 
 function Base.deepcopy_internal(s::MaxCutStep, dict::IdDict)
-    haskey(dict, s) && return dict[s]::MaxCutStep
     return MaxCutStep(
         s.eliminated,
         s.representative,
@@ -437,13 +428,128 @@ function Base.deepcopy_internal(s::MaxCutStep, dict::IdDict)
     )
 end
 
+function _copy_proof_step(@nospecialize(s::_ProofRecord), dict::IdDict, @nospecialize(prev_raw), @nospecialize(prev_copy))
+    if s isa RoofDualityStep && prev_raw isa RoofDualityStep &&
+       s.batch_index == prev_raw.batch_index + 1 &&
+       s.batch_fixings === prev_raw.batch_fixings && s.flow_edges === prev_raw.flow_edges
+        pc = prev_copy::RoofDualityStep
+        return RoofDualityStep(
+            s.variable,
+            s.value,
+            Base.deepcopy_internal(s.roof_lower, dict),
+            Base.deepcopy_internal(s.max_flow, dict),
+            pc.flow_edges,
+            s.batch_fixings,
+            s.batch_index,
+            Base.deepcopy_internal(s.constant, dict),
+            s.predecessors,
+            s.method,
+            s.scope_length,
+            s.persistency,
+        )
+    elseif s isa SubmodularCutStep && prev_raw isa SubmodularCutStep &&
+           s.batch_index == prev_raw.batch_index + 1 &&
+           s.batch_fixings === prev_raw.batch_fixings && s.flow_edges === prev_raw.flow_edges
+        pc = prev_copy::SubmodularCutStep
+        return SubmodularCutStep(
+            s.variable,
+            s.value,
+            s.component_variables,
+            s.gauge,
+            Base.deepcopy_internal(s.component_opt, dict),
+            Base.deepcopy_internal(s.max_flow, dict),
+            pc.flow_edges,
+            s.batch_fixings,
+            s.batch_index,
+            Base.deepcopy_internal(s.constant, dict),
+            s.predecessors,
+            s.method,
+            s.scope_length,
+            s.persistency,
+        )
+    elseif s isa RelationStep && s.witness isa _RoofSCCPairWitness &&
+           prev_raw isa RelationStep && prev_raw.witness isa _RoofSCCPairWitness &&
+           s.witness.batch_index == prev_raw.witness.batch_index + 1 &&
+           s.witness.batch_contractions === prev_raw.witness.batch_contractions &&
+           s.witness.flow_edges === prev_raw.witness.flow_edges
+        pw = (prev_copy::RelationStep).witness::_RoofSCCPairWitness
+        w = s.witness::_RoofSCCPairWitness
+        w_copy = _RoofSCCPairWitness(
+            Base.deepcopy_internal(w.roof_lower, dict),
+            Base.deepcopy_internal(w.max_flow, dict),
+            pw.flow_edges,
+            Base.deepcopy_internal(w.witness_upper, dict),
+            w.witness_state,
+            w.scc_literals,
+            w.batch_contractions,
+            w.batch_index,
+        )
+        return RelationStep(
+            s.eliminated,
+            s.representative,
+            s.sign,
+            s.orig_sign,
+            Base.deepcopy_internal(s.lower, dict),
+            Base.deepcopy_internal(s.upper, dict),
+            Base.deepcopy_internal(s.constant, dict),
+            s.predecessors,
+            s.method,
+            s.scope_length,
+            s.persistency,
+            w_copy,
+        )
+    elseif s isa EliminationStep && s.block_witness isa _BlockEliminationWitness &&
+           prev_raw isa EliminationStep && prev_raw.block_witness isa _BlockEliminationWitness &&
+           s.block_witness.batch_index == prev_raw.block_witness.batch_index + 1 &&
+           s.block_witness.block_variables === prev_raw.block_witness.block_variables &&
+           s.block_witness.block_phi === prev_raw.block_witness.block_phi
+        pw = (prev_copy::EliminationStep).block_witness::_BlockEliminationWitness
+        w = s.block_witness::_BlockEliminationWitness
+        w_copy = _BlockEliminationWitness(
+            w.block_variables,
+            w.batch_index,
+            w.block_tables,
+            pw.block_phi,
+        )
+        return EliminationStep(
+            s.variable,
+            _deepcopy_tuple(s.neighbors, dict),
+            _deepcopy_tuple(s.table, dict),
+            Base.deepcopy_internal(s.constant_delta, dict),
+            _deepcopy_tuple(s.linear_deltas, dict),
+            _deepcopy_tuple(s.quadratic_deltas, dict),
+            Base.deepcopy_internal(s.constant, dict),
+            s.predecessors,
+            s.scope_length,
+            s.unique_argmin,
+            w_copy,
+        )
+    end
+    return Base.deepcopy_internal(s, dict)
+end
+
+function _deepcopy_steps(@nospecialize(steps::Tuple), dict::IdDict)
+    n = length(steps)
+    n == 0 && return ()
+    out = Vector{Any}(undef, n)
+    prev_raw = nothing
+    prev_copy = nothing
+    for i in 1:n
+        s = getfield(steps, i)
+        c = _copy_proof_step(s, dict, prev_raw, prev_copy)
+        out[i] = c
+        prev_raw = s
+        prev_copy = c
+    end
+    return Tuple(out)
+end
+
 function Base.deepcopy_internal(c::DominanceCertificate, dict::IdDict)
-    haskey(dict, c) && return dict[c]::DominanceCertificate
     return DominanceCertificate(
         c.generation,
         c._scope_checkpoint,
         _deepcopy_tuple(c.assumptions, dict),
-        _deepcopy_tuple(c.steps, dict),
+        _deepcopy_steps(c.steps, dict),
         Base.deepcopy_internal(c._source, dict),
         Base.deepcopy_internal(c._map, dict),
     )
@@ -481,7 +587,7 @@ persistency(step::Union{DominanceStep,RelationStep,ProbingStep,RoofDualityStep,S
 persistency(step::EliminationStep) = step.unique_argmin ? :strong : :weak
 function persistency(cert::DominanceCertificate)
     for k in 1:length(cert.steps)
-        persistency(cert.steps[k]::_ProofRecord) === :weak && return :weak
+        persistency(_entry_at(cert.steps, k)::_ProofRecord) === :weak && return :weak
     end
     return :strong
 end
@@ -497,7 +603,7 @@ Return the overall guarantee class of `cert`:
 function certificate_guarantee(cert::DominanceCertificate)
     isempty(cert.steps) && return :energy_identity
     for k in 1:length(cert.steps)
-        cert.steps[k] isa EliminationStep || return :optimum_preserving_restriction
+        _entry_at(cert.steps, k) isa EliminationStep || return :optimum_preserving_restriction
     end
     return :exact_elimination
 end
@@ -5774,7 +5880,7 @@ function verify_certificate(ws::Workspace, cert::DominanceCertificate;
     p === nothing && return VerificationResult(false,:deadline,cost)
     steps_vec = Vector{_ProofRecord}(undef, n_steps)
     for k in 1:n_steps
-        raw_step = cert.steps[k]
+        raw_step = _entry_at(cert.steps, k)
         raw_step isa _ProofRecord || return VerificationResult(false,:invalid_predecessors,cost)
         steps_vec[k] = raw_step
     end
