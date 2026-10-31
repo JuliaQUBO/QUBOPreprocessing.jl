@@ -12,8 +12,8 @@ authors:
 repository-code: "https://github.com/JuliaQUBO/QUBOPreprocessing.jl"
 url: "https://juliaqubo.github.io/QUBOPreprocessing.jl/"
 license: MPL-2.0
-version: "0.1.4"
-date-released: "2026-10-30"
+version: "0.1.5"
+date-released: "2026-10-31"
 keywords:
   - "Julia"
   - "QUBO"
@@ -30,8 +30,8 @@ references:
         family-names: "Maciel Xavier"
       - given-names: "David E."
         family-names: "Bernal Neira"
-    doi: "10.5281/zenodo.23757887"
-    url: "https://doi.org/10.5281/zenodo.23757887"
+    doi: "10.5281/zenodo.23839797"
+    url: "https://doi.org/10.5281/zenodo.23839797"
     year: 2026
 preferred-citation:
   type: article

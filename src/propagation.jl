@@ -4089,18 +4089,34 @@ function reductions(ws::Workspace; since=nothing)
     since === nothing || _validate_checkpoint(ws, since)
     start = since === nothing ? 1 : since._fix_depth + 1
     st = ws._state
-    return _ProofRecord[
-        deepcopy(st.trail[st.fixes[k]].proof)
-        for k in start:length(st.fixes)
-        if st.trail[st.fixes[k]].proof !== nothing
-    ]
+    dict = IdDict()
+    out = _ProofRecord[]
+    prev_raw = nothing
+    prev_copy = nothing
+    for k in start:length(st.fixes)
+        s = st.trail[st.fixes[k]].proof
+        s === nothing && continue
+        c = _copy_proof_step(s, dict, prev_raw, prev_copy)
+        push!(out, c)
+        prev_raw = s
+        prev_copy = c
+    end
+    return out
 end
 
 function _proof_steps(ws::Workspace; map::Union{Nothing,DomainGaugeMap}=nothing)
-    raw_vec = _ProofRecord[
-        deepcopy(ws._state.trail[p].proof) for p in ws._state.fixes
-        if ws._state.trail[p].proof !== nothing
-    ]
+    dict = IdDict()
+    raw_vec = _ProofRecord[]
+    prev_raw = nothing
+    prev_copy = nothing
+    for p in ws._state.fixes
+        s = ws._state.trail[p].proof
+        s === nothing && continue
+        c = _copy_proof_step(s, dict, prev_raw, prev_copy)
+        push!(raw_vec, c)
+        prev_raw = s
+        prev_copy = c
+    end
     raw = Tuple(raw_vec)
     map === nothing && return raw
     return _transport_steps(ws, _caller_scope(ws), raw, nothing, map)

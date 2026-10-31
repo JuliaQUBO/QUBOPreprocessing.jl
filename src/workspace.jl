@@ -168,10 +168,28 @@ function _incremental(s::_Snapshot;rules=:identity)
             (offset_ex - field_sum + quad_sum)
         lower,upper = nothing,nothing
         if need_bounds
-            lower,upper = copy(fields),copy(fields)
-            for i in 1:n, (_,q) in adjacency[i]
-                lower[i] += is_bool ? min(0,q) : -abs(q)
-                upper[i] += is_bool ? max(0,q) : abs(q)
+            lower = Vector{_Exact}(undef, n)
+            upper = Vector{_Exact}(undef, n)
+            for i in 1:n
+                lo = fields[i]
+                hi = fields[i]
+                if is_bool
+                    for (_, q) in adjacency[i]
+                        if signbit(q.num)
+                            lo += q
+                        elseif !iszero(q.num)
+                            hi += q
+                        end
+                    end
+                else
+                    for (_, q) in adjacency[i]
+                        aq = abs(q)
+                        lo -= aq
+                        hi += aq
+                    end
+                end
+                lower[i] = lo
+                upper[i] = hi
             end
         end
     end
@@ -988,6 +1006,11 @@ function index_map(ws::Workspace)
     return map
 end
 
+const _ConditionedCertNT = NamedTuple{
+    (:scope, :assumptions, :reduction_chain, :unchanged_representation, :proof),
+    Tuple{Symbol, Tuple, Tuple, Bool, Any},
+}
+
 """
     ConditionedExport
 
@@ -1002,7 +1025,7 @@ struct ConditionedExport{T}
     _snapshot::_Snapshot
     generation::Generation
     status::Symbol
-    certificate::NamedTuple
+    certificate::_ConditionedCertNT
     _fixed::Tuple
     _free::Tuple
     _linear::Tuple
@@ -1016,13 +1039,21 @@ original_variables(r::ConditionedExport) = _labels_vector(r._snapshot)
 
 function Base.deepcopy_internal(r::ConditionedExport{T}, dict::IdDict) where T
     haskey(dict, r) && return dict[r]::ConditionedExport{T}
-    cert_copy = (
-        scope=r.certificate.scope,
-        assumptions=_deepcopy_tuple(r.certificate.assumptions, dict),
-        reduction_chain=_deepcopy_tuple(r.certificate.reduction_chain, dict),
-        unchanged_representation=r.certificate.unchanged_representation,
-        proof=Base.deepcopy_internal(r.certificate.proof, dict),
-    )
+    proof_copy = Base.deepcopy_internal(r.certificate.proof, dict)
+    chain_copy = if proof_copy isa DominanceCertificate &&
+            r.certificate.proof isa DominanceCertificate &&
+            r.certificate.reduction_chain === r.certificate.proof.steps
+        proof_copy.steps
+    else
+        _deepcopy_steps(r.certificate.reduction_chain, dict)
+    end
+    cert_copy = _ConditionedCertNT((
+        r.certificate.scope,
+        _deepcopy_tuple(r.certificate.assumptions, dict),
+        chain_copy,
+        r.certificate.unchanged_representation,
+        proof_copy,
+    ))
     return ConditionedExport{T}(
         Base.deepcopy_internal(r._snapshot, dict),
         r.generation,
@@ -1040,7 +1071,7 @@ end
 
 function _fill_index_map!(map::Vector{Int}, @nospecialize(free::Tuple))
     for j in 1:length(free)
-        map[free[j]::Int] = j
+        map[_entry_at(free, j)::Int] = j
     end
     return map
 end
@@ -1067,18 +1098,36 @@ function _conditioned_export(ws::Workspace, ::Type{T}; map::Union{Nothing,Domain
     owned_map = map === nothing ? nothing : deepcopy(map)
     free = findall(==(2), st.fixed)
     idxmap = index_map(ws)
-    linear = Tuple(_transport(T, _mapped_field(ws, i, owned_map)) for i in free)
-    quadratic = Tuple((idxmap[i],idxmap[j],_transport(T,_mapped_coupling(ws,i,j,q,owned_map)))
-                      for i in free for (j,q) in st.adjacency[i] if i < j && st.fixed[j] == 2)
+    lin_vec = Vector{T}(undef, length(free))
+    for (idx_f, i) in enumerate(free)
+        lin_vec[idx_f] = _transport(T, _mapped_field(ws, i, owned_map))
+    end
+    linear = Tuple(lin_vec)
+    quad_vec = Tuple{Int,Int,T}[]
+    for i in free
+        ii = idxmap[i]
+        for (j, q) in st.adjacency[i]
+            if i < j && st.fixed[j] == 2
+                push!(quad_vec, (ii, idxmap[j], _transport(T, _mapped_coupling(ws, i, j, q, owned_map))))
+            end
+        end
+    end
+    quadratic = Tuple(quad_vec)
     scope = _caller_scope(ws)
     proof = _export_certificate(ws,snapshot;map=owned_map)
     steps = proof === nothing ? () : proof.steps
     unchanged = isempty(st.fixes) && (owned_map === nothing ||
         (owned_map.target_domain === owned_map.source_domain && owned_map._identity_gauge))
     c_export = _direct_mapped_constant(ws, owned_map)
+    cert = _ConditionedCertNT((
+        isempty(scope) ? :original : :assumptions,
+        scope,
+        steps,
+        unchanged,
+        proof,
+    ))
     return ConditionedExport{T}(snapshot, generation(ws), :certified,
-        (scope=isempty(scope) ? :original : :assumptions, assumptions=scope,
-         reduction_chain=steps, unchanged_representation=unchanged,proof=proof),
+        cert,
         Tuple(st.fixed), Tuple(free), linear, quadratic,
         _transport(T, c_export), _transport(T,_Exact(s.scale)), owned_map)
 end
@@ -1088,7 +1137,7 @@ function _build_export_linear(::Type{T}, @nospecialize(lin::Tuple)) where T
     d = Dict{Int,T}()
     sizehint!(d, n)
     for i in 1:n
-        d[i] = deepcopy(lin[i]::T)
+        d[i] = deepcopy(_entry_at(lin, i)::T)
     end
     return QT.DictLinearForm{T}(d)
 end
@@ -1098,7 +1147,7 @@ function _build_export_quadratic(::Type{T}, @nospecialize(quad::Tuple)) where T
     d = Dict{Tuple{Int,Int},T}()
     sizehint!(d, m)
     for k in 1:m
-        item = quad[k]::Tuple{Int,Int,T}
+        item = _entry_at(quad, k)::Tuple{Int,Int,T}
         d[(item[1], item[2])] = deepcopy(item[3])
     end
     return QT.DictQuadraticForm{T}(d)
@@ -1132,7 +1181,7 @@ function _lift_state_impl(
     low = target_dom === :bool ? 0 : -1
     state = _ints(r._fixed)
     for j in 1:n_free
-        i = free[j]::Int
+        i = _entry_at(free, j)::Int
         v = y[j]
         v isa Real && isfinite(v) && (v == low || v == 1) ||
             throw(ArgumentError("state value is outside the residual domain"))
@@ -1140,7 +1189,7 @@ function _lift_state_impl(
         state[i] = r._map === nothing ? iv : _lift_index_value(r._map, i, iv)
     end
     for k in length(steps):-1:1
-        step = steps[k]
+        step = _entry_at(steps, k)
         if step isa Union{DominanceStep,ProbingStep,RoofDualityStep,SubmodularCutStep}
             state[step.variable] = step.value
         elseif step isa MaxCutStep

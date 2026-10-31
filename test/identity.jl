@@ -352,4 +352,54 @@ end
     @test verify_certificate(ws, cert).valid
     @test QT.dimension(export_model(res)) == 0
     @test bmap.gauge == Tuple(ones(Int, n))
+
+    # Shared batch non-isbits tuples (e.g. roof-duality flow_edges) are deep-copied
+    # once per batch in _proof_steps / reductions / deepcopy(cert) rather than O(k * M)
+    # times, while remaining fully detached from workspace storage; isbits and Symbol
+    # tuples return in O(1).
+    t_bits = (1, 2, 3)
+    @test QUBOPreprocessing._deepcopy_tuple(t_bits) === t_bits
+    t_syms = (:a, :b, :c)
+    @test QUBOPreprocessing._deepcopy_tuple(t_syms) === t_syms
+    shared_flow = ((1, 2, Rational{BigInt}(3, 1)), (2, 3, Rational{BigInt}(5, 1)))
+    c1 = QUBOPreprocessing._deepcopy_tuple(shared_flow)
+    @test c1 !== shared_flow
+    @test c1[1][3].num !== shared_flow[1][3].num
+
+    m_roof = QT.Model{Int,Float64,Int}(
+        Dict(1 => 2.0, 2 => 0.0, 3 => 0.0, 4 => 0.0, 5 => 0.0, 6 => 0.0),
+        Dict(
+            (1, 2) => -2.0, (1, 3) => -2.0, (2, 3) => -2.0,
+            (3, 4) => 0.5,
+            (4, 5) => 1.0, (5, 6) => 1.0, (4, 6) => 1.0,
+        ); sense=:min, domain=:spin)
+    ws_roof = Workspace(m_roof; rules=:mixed)
+    rep_roof = apply_roof_duality!(ws_roof)
+    @test length(rep_roof.fixings) == 3
+    cert_roof = export_certificate(ws_roof)
+    @test length(cert_roof.steps) == 3
+    @test !isempty(cert_roof.steps[1].flow_edges)
+    @test cert_roof.steps[1].flow_edges === cert_roof.steps[2].flow_edges
+    @test cert_roof.steps[2].flow_edges === cert_roof.steps[3].flow_edges
+    cert_roof_copy = deepcopy(cert_roof)
+    @test cert_roof_copy.steps[1].flow_edges === cert_roof_copy.steps[2].flow_edges
+    @test cert_roof_copy.steps[1].flow_edges !== cert_roof.steps[1].flow_edges
+    res_roof = materialize(ws_roof)
+    res_roof_copy = deepcopy(res_roof)
+    @test res_roof_copy.certificate.reduction_chain === res_roof_copy.certificate.proof.steps
+    @test res_roof_copy.certificate.reduction_chain[1].flow_edges === res_roof_copy.certificate.reduction_chain[2].flow_edges
+    @test res_roof_copy.certificate.reduction_chain[1].flow_edges !== res_roof.certificate.reduction_chain[1].flow_edges
+    @test verify_certificate(ws_roof, cert_roof).valid
+
+    # Heterogeneous reduction chains (DominanceStep + EliminationStep + RelationStep)
+    # materialize via type-erased _ConditionedCertNT without specializing NamedTuple
+    # on a concrete K-element heterogeneous Tuple type.
+    m_het = QT.Model{Int,Float64,Int}(
+        Dict(1 => 5.0, 2 => 0.0, 3 => 0.0, 4 => 0.0),
+        Dict((2, 3) => -2.0, (3, 4) => -2.0); sense=:min, domain=:bool)
+    ws_het = Workspace(m_het; rules=:mixed)
+    schedule_reductions!(ws_het; allow_weak_dominance=true, allow_weak_relations=true)
+    res_het = materialize(ws_het)
+    @test res_het.certificate.reduction_chain isa Tuple
+    @test verify_certificate(ws_het, export_certificate(ws_het)).valid
 end

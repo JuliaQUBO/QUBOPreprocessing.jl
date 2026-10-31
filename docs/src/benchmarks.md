@@ -168,3 +168,43 @@ eliminating per-dimension `NTuple{N}` JIT specialization in `domain_map`,
 - First-call `domain_map` at $n = 4{,}000$ dropped from `46.0s` of `NTuple{4000}` JIT
   compilation to **`0.003s` (15,300x faster)**, and subsequent unseen sizes ($n = 4{,}001$)
   execute in `0.002s` with zero recompilation.
+- In `v0.1.5`, consecutive batch witness sharing (`_copy_proof_step` + `_deepcopy_tuple`)
+  reduces multi-thousand-variable `apply_roof_duality!` exports from
+  $O(k \cdot M)$ to $O(M + k)$ (`0.21s` vs. $>20\text{ min}$ on `MQLib` `g001571.txt`
+  with $k = 4{,}756, M = 16{,}900$), and type-erased `_ConditionedCertNT` in
+  `_conditioned_export` eliminates $O(K^2)$ LLVM `LocalScan` compilation on long
+  interleaved heterogeneous reduction chains (`0.42s` vs. $>10\text{ min}$ on `MQLib`
+  `g001587.txt` with $K = 2{,}965$ steps).
+
+## Full 9,294-instance `QUBOLib.jl` `v0.2.4-data+8` & `MQLib` expansion (`v0.1.5`)
+
+In `QUBOLib.jl` `v0.2.4-data+8` (`9,294` instances across `7` collections), the corpus expands
+with **`3,002` `MQLib` benchmark instances** (`231 / 231` = `100%` of `standard.csv`, including
+all `21` dense `Palubeckis` instances `p3000_1`–`p7000_3`, plus `2,771` Tier 2 instances across
+all `18` source families from Dunning, Gupta & Silberholz, *INFORMS J. Comput.* 2018,
+[`10.1287/ijoc.2017.0798`](https://doi.org/10.1287/ijoc.2017.0798)):
+
+| Collection | Instances | Reduced (Strong / Weak) | Solved to $n=0$ (Weak / Total) | Total Original $n$ | Strong $n$ Removed (%) | Weak $n$ Removed (%) | Total Original $m$ | Strong $m$ Removed (%) | Weak $m$ Removed (%) |
+|:--|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| `mqlib` (`18` families) | 3,002 | **1,521 / 1,547 (`51.5%`)** | **333 / 339** | 4,239,545 | **1,557,280 (`36.73%`)** | **1,573,638 (`37.12%`)** | 280,817,159 | **3,407,881 (`1.21%`)** | **3,520,175 (`1.25%`)** |
+| `minlplib` (`BQP`/`MBQCP`) | 29 | **25 / 25 (`86.2%`)** | **3 / 3** | 26,573 | **7,930 (`29.84%`)** | **9,435 (`35.51%`)** | 74,352 | **10,697 (`14.39%`)** | **14,625 (`19.67%`)** |
+| `qplib` (`QBB`) | 23 | **18 / 18 (`78.3%`)** | **1 / 2** | 12,273 | **1,004 (`8.18%`)** | **1,004 (`8.18%`)** | 97,863 | **35,340 (`36.11%`)** | **35,340 (`36.11%`)** |
+| `qoblib` (`4` classes) | 433 | **239 / 239 (`55.2%`)** | **6 / 6** | 524,781 | **3,901 (`0.74%`)** | **4,935 (`0.94%`)** | 61,294,620 | **402,837 (`0.66%`)** | **462,553 (`0.75%`)** |
+| `arXiv-*` (`3` XORSAT sets) | 5,807 | 0 / 0 (`0%`) | 0 / 0 | 3,470,192 | 0 (`0.00%`) | 0 (`0.00%`) | 14,001,228 | 0 (`0.00%`) | 0 (`0.00%`) |
+| **Total (`All 9,294`)** | **9,294** | **1,803 / 1,829 (`19.7%`)** | **343 / 350** | **8,273,364** | **1,570,115 (`18.98%`)** | **1,589,012 (`19.21%`)** | **356,285,222** | **3,856,755 (`1.08%`)** | **4,032,693 (`1.13%`)** |
+
+- Across `mqlib` (`3,002` instances), `QUBOPreprocessing.jl` `v0.1.5` removes **`1,557,280`
+  variables (`36.73%`) in strong mode** and **`1,573,638` variables (`37.12%`) in weak mode**,
+  solving **`339` MQLib instances (`245` `SteinLib`, `43` `Rudy`, `20` `BiqMac`, `10` `Beasley`,
+  `5` `GKA`, `5` `ImageSegmentation`, `3` `Dharwadker`, `2` `GlasgowIsomorphism`) completely to
+  $n = 0$ residual variables** and repairing **`16` heuristic solution records across `14`
+  MQLib instances** (`G70.txt`, `g000087.txt`, `g000677.txt`, `g000921.txt`, `g001075.txt`,
+  `g002328.txt`, `g002877.txt`, `g003091.txt`, `g003208.txt`, `g003234.txt`, `imgseg_147062.txt`,
+  `imgseg_26031.txt`, `imgseg_309004.txt`, `imgseg_365073.txt`).
+- Across the `394` remaining ultra-dense/huge Tier 2 MQLib instances ($m > 2\times 10^6$ or
+  $n > 35{,}000$, totaling $4.89\times 10^6$ variables and $1.399\times 10^9$ edges), an
+  out-of-corpus benchmark reduced `169 / 394` (`42.89%`) instances, removing **`813,907`
+  variables (`16.66%`)** and **`25,677,090` edges**, solving **`5` instances completely to
+  $n = 0$** (`g001345` $n=5{,}525 \to 0$, `g000503` $n=5{,}002 \to 0$, `g000988`
+  $n=2{,}312 \to 0$, `g001327` $n=2{,}149 \to 0$, `g001883` $n=2{,}116 \to 0$), and reducing
+  `9` social-network Max-Cut graphs ($n = 28{,}000\text{–}66{,}000$) by `91%–98%`.

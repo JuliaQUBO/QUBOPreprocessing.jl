@@ -27,12 +27,12 @@ _freeze(x::Dict{Tuple{Int,Int},Float64}) =
     _Storage(:dict_quadratic, (), collect(Float64, values(x)), Int[], collect(Tuple{Int,Int}, keys(x)), Int[])
 _freeze(x) = throw(ArgumentError("unsupported objective storage $(typeof(x))"))
 
-function _deepcopy_tuple(@nospecialize(t::Tuple), dict::IdDict)
+function _deepcopy_tuple(@nospecialize(t::Tuple), dict::IdDict=IdDict())
     n = length(t)
-    n == 0 && return ()
+    (n == 0 || isbitstype(eltype(typeof(t))) || eltype(typeof(t)) === Symbol) && return t
     out = Vector{Any}(undef, n)
     for i in 1:n
-        out[i] = Base.deepcopy_internal(t[i], dict)
+        out[i] = Base.deepcopy_internal(getfield(t, i), dict)
     end
     return Tuple(out)
 end
