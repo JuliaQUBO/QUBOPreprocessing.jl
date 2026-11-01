@@ -642,6 +642,72 @@
         @test_throws ArgumentError coercive_field_witness(ws_b; max_flips=true)
         @test_throws ArgumentError coercive_field_witness(ws_b; tie_break=:middle)
         @test_throws ArgumentError probe_variables!(ws_b; order=:random)
+
+        # 5. Zero-field (h_i = 0) symmetry breaking and l1-coupling tie-breaking (#86)
+        # Two ferromagnetic triangles {1,2,3} (weight -4) and {4,5,6} (weight -8, larger l1)
+        # coupled by antiferromagnetic edges (3,4) => +2 and (2,5) => +2, with L chosen so h_i = 0
+        # identically for all 6 variables:
+        # At x = (0,0,0,0,0,0), every 1-flip delta is L_i > 0 (strict 1-flip local minimum, F = 0).
+        # With l1 secondary ordering + zero-field anchor symmetry breaking, sequential conditioning
+        # starts at hub cluster {4,5,6} with s_4 = +1 (x_4 = 1), propagates x_5 = x_6 = 1, and
+        # global optimum F = -2.0!
+        Q_zf = Dict(
+            (1, 2) => -4.0, (1, 3) => -4.0, (2, 3) => -4.0,
+            (4, 5) => -8.0, (4, 6) => -8.0, (5, 6) => -8.0,
+            (3, 4) => 2.0,  (2, 5) => 2.0,
+        )
+        L_zf = Dict(i => 0.0 for i in 1:6)
+        for ((u, v), w) in Q_zf
+            L_zf[u] -= 0.5 * w
+            L_zf[v] -= 0.5 * w
+        end
+        m_zf = QT.Model{Int,Float64,Int}(L_zf, Q_zf; domain=:bool, sense=:min)
+        ws_zf = Workspace(m_zf; rules=:identity)
+        @test is_gauge_invariant(ws_zf)
+        @test all(iszero, coercive_fields(ws_zf))
+        cand_zf = collect(1:6)
+        QUBOPreprocessing._order_probing_candidates!(ws_zf, cand_zf, zeros(Int, 6), :coercive)
+        # Variables 4, 5 have the largest coupling l1 norm ((8+8+2)/4 = 4.5), followed by 6 (4.0)
+        @test cand_zf[1:3] == [4, 5, 6]
+        w_zf = coercive_field_witness(ws_zf)
+        @test w_zf == [0, 0, 0, 1, 1, 1]
+        @test reconstruct(materialize(ws_zf), w_zf).energy.value == -2.0
+
+        # 6. Float64 fast path on dense distinct-denominator rational models (#86)
+        n_dense = 60
+        L_rat = Dict{Int,Float64}(i => (isodd(i) ? 1.0 : -1.0) / (100.0 + 3.0 * i) for i in 1:n_dense)
+        Q_rat = Dict{Tuple{Int,Int},Float64}()
+        for i in 1:n_dense, j in (i + 1):n_dense
+            p = 1000.0 + 7.0 * i * n_dense + 13.0 * j
+            Q_rat[(i, j)] = ((i + j) % 3 == 0 ? 1.0 : -1.0) / p
+        end
+        m_rat = QT.Model{Int,Float64,Int}(L_rat, Q_rat; domain=:bool, sense=:min)
+        ws_rat = Workspace(m_rat; rules=:identity, integerize_scale=false)
+        @test QUBOPreprocessing._can_use_float_spin_heuristic(ws_rat, collect(1:n_dense))
+        t_wit = @elapsed w_rat = coercive_field_witness(ws_rat; max_flips=200)
+        @test length(w_rat) == n_dense
+        @test all(v -> v in (0, 1), w_rat)
+        @test t_wit < 2.0
+        cand_rat = collect(1:n_dense)
+        t_ord = @elapsed QUBOPreprocessing._order_probing_candidates!(ws_rat, cand_rat, w_rat, :coercive)
+        @test length(cand_rat) == n_dense
+        @test t_ord < 1.0
+
+        # 7. Exact fallback when internal _Exact coefficients overflow Float64 (#86)
+        m_big = QT.Model{Int,Float64,Int}(
+            Dict(1 => 0.0, 2 => 0.0, 3 => 0.0),
+            Dict((1, 2) => -4.0, (2, 3) => 2.0);
+            domain=:spin, sense=:min,
+        )
+        ws_big = Workspace(m_big; rules=:identity, integerize_scale=false)
+        ws_big._state.fields[1] = (BigInt(10)^310) // 1
+        @test !QUBOPreprocessing._can_use_float_spin_heuristic(ws_big, [1, 2, 3])
+        w_big = coercive_field_witness(ws_big)
+        @test length(w_big) == 3
+        @test all(v -> v in (-1, 1), w_big)
+        cand_big = [1, 2, 3]
+        QUBOPreprocessing._order_probing_candidates!(ws_big, cand_big, w_big, :coercive)
+        @test cand_big[1] == 1
     end
 
     @testset "two-branch common-implication double probing (:double_probe) and pair contractions (#60)" begin

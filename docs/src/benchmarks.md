@@ -208,3 +208,46 @@ all `18` source families from Dunning, Gupta & Silberholz, *INFORMS J. Comput.* 
   $n = 0$** (`g001345` $n=5{,}525 \to 0$, `g000503` $n=5{,}002 \to 0$, `g000988`
   $n=2{,}312 \to 0$, `g001327` $n=2{,}149 \to 0$, `g001883` $n=2{,}116 \to 0$), and reducing
   `9` social-network Max-Cut graphs ($n = 28{,}000\text{–}66{,}000$) by `91%–98%`.
+
+## Coercive local fields, spin-field alignment ($m \approx 0.62$), and `coercive_field_witness` across `MQLib`, `QPLIB`, `MINLPLib`, and `QOBLIB`
+
+Transforming a binary QUBO $F(x) = \sum_i L_i x_i + \sum_{i < j} \tilde{Q}_{ij} x_i x_j$ into Ising spin coordinates $s_i = 2 x_i - 1 \in \{-1, +1\}$ induces local coercive fields
+$$h_i = \frac{1}{2} L_i + \frac{1}{4} \sum_{j \ne i} \tilde{Q}_{ij}, \qquad J_{ij} = \frac{1}{4}\tilde{Q}_{ij}.$$
+For zero-mean, finite-variance random QUBO matrices with symmetric off-diagonal signs ($\sim 50\%$ $\tilde{Q}_{ij} > 0$), replica-symmetric theory (Boettcher, *Phys. Rev. E* 2019; *Z. Naturforsch. A* 2024) predicts ground-state magnetization $m = \frac{1}{n}\sum_i s_i^* \operatorname{sgn}(-h_i) \approx 0.62$, corresponding to **$81.0\%$ spin-field alignment** ($s_i^* h_i < 0$).
+
+Evaluating both parallel field alignment + 1-flip steepest descent and full [`coercive_field_witness`](@ref) (which selects the lower-energy polished state between parallel field alignment and sequential `:coercive`-ordered conditioned field alignment with $\ell_1$-coupling tie-breaking and $\mathbb{Z}_2$ zero-field anchor symmetry breaking) across all **611** instances in `MQLib` OR random families (`Beasley`, `GKA`, `Palubeckis`), `QPLIB`, `MINLPLib`, and `QOBLIB` reveals four distinct structural regimes:
+
+| Collection / Cohort | Instances (`h != 0`) | `% Q_ij > 0` | Ref. Alignment `s*_i h_i < 0` (Inst Mean ± SD) | Spin-Wtd Alignment | `CFW` Alignment `s^CFW_i h_i < 0` | Parallel 1-Flip Med. Gap | `coercive_field_witness` Med. Gap | `CFW` Spin Overlap w/ `s*` |
+|:--|--:|--:|--:|--:|--:|--:|--:|--:|
+| **`mqlib` / Beasley (`OR-Library`)** | `60` (`60`) | `49.7%` | **`79.51% ± 3.58%`** | **`79.11%`** | **`80.98%`** | `0.99%` | **`0.74%`** | **`91.88%`** |
+| **`mqlib` / GKA (`Glover–Kochenberger–Alidaee`)** | `45` (`45`) | `60.8%` | **`83.58% ± 7.03%`** | **`80.94%`** | **`84.67%`** | `0.88%` | **`0.55%`** | **`93.78%`** |
+| **`mqlib` / Palubeckis (`p3000`–`p7000`)** | `21` (`21`) | `50.0%` | **`77.72% ± 0.59%`** | **`77.73%`** | **`78.88%`** | `0.71%` | **`0.66%`** | **`89.93%`** |
+| **`qplib` (`h != 0`, BiqMac OR `bqp`/`be`)** | `5` (`5`) | `52.3%` | **`76.17% ± 3.22%`** | **`76.70%`** | **`78.85%`** | `1.44%` | **`0.96%`** | **`91.67%`** |
+| **`qplib` (`h = 0`, Max-Cut / Ising Spin Glass)** | `18` (`0`) | `61.8%` | *`h = 0` ($\mathbb{Z}_2$ symm.)* | *`h = 0`* | *`h = 0` ($\mathbb{Z}_2$ symm.)* | `19.01%` | **`16.70%`** | `53.31%` |
+| **`minlplib` (`h = 0`, All `29` Binary QUBOs)** | `29` (`0`) | `56.6%` | *`h = 0` ($\mathbb{Z}_2$ symm.)* | *`h = 0`* | *`h = 0` ($\mathbb{Z}_2$ symm.)* | `16.25%` | **`11.46%`** | **`65.94%`** |
+| **`qoblib` / Maximum Independent Set** | `50` (`50`) | `100.0%` | **`84.00% ± 15.71%`** | **`93.25%`** | **`85.80%`** | `30.38%` | **`17.67%`** | **`88.10%`** |
+| **`qoblib` / Portfolio Optimization** | `128` (`128`) | `67.6%` | **`93.23% ± 1.49%`** | **`93.65%`** | **`94.26%`** | `99.36%` | **`80.03%`** | **`92.58%`** |
+| **`qoblib` / Market Split** | `156` (`152`) | `100.0%` | **`50.04% ± 1.94%`** | **`50.03%`** | **`55.33%`** | `0.02%` | **`0.02%`** | `49.96%` |
+| **`qoblib` / LABS (Rosenberg Gadgets)** | `99` (`99`) | `27.5%` | **`74.12% ± 6.34%`** | **`73.21%`** | **`93.51%`** | `18973.49%*` | `18973.49%*` | **`74.11%`** |
+
+*\*On `qoblib` `LABS`, positive Rosenberg quadratization penalty terms dominate the raw penalized objective gap relative to the small autocorrelation optimum, while spin overlap with the ground state reaches `74.11%`.*
+
+### Four-regime structural interpretation
+
+1. **Regime I — Unconstrained OR Random QUBOs (`mqlib` Beasley, GKA, Palubeckis & `qplib` BiqMac OR `bqp`/`be`)**:
+   - Across all four families (`131` instances with $h_i \ne 0$ and $49.7\%\text{–}60.8\%$ positive off-diagonal entries), reference ground-state spin-field alignment is **`76.17%–83.58%`** ($m \in [0.523, 0.672]$) and `coercive_field_witness` spin-field alignment is **`78.85%–84.67%`**, closely matching the $81.0\%$ ($m \approx 0.62$) replica-symmetric prediction.
+   - Sequential conditioned field alignment + 1-flip polish in `coercive_field_witness` lowers the median relative optimality gap to **`0.55%–0.96%`** across all four families (`91.88%`, `93.78%`, `89.93%`, and `91.67%` spin overlap with the reference optima).
+2. **Regime II — $\mathbb{Z}_2$ Gauge-Invariant Zero-Field Max-Cut / Ising Encodings (`qplib` `h = 0` & `minlplib` `h = 0`)**:
+   - After applying the exact $\frac{1}{2} x^\top Q^0 x$ `.qplib` scaling, **`18 / 23` `qplib` instances** (`15` `sporttournament22..50` + `3` Ising spin glasses) and **all `29 / 29` `minlplib` binary QUBO instances** satisfy $L_i + \frac{1}{2}\sum_{j \ne i}\tilde{Q}_{ij} = 0$, i.e. $h_i = 0$ identically (`is_gauge_invariant(ws) == true`).
+   - Separating `qplib` into the `5` non-zero-field BiqMac OR instances (`0.96%` median gap, `91.67%` overlap) vs. the `18` zero-field Max-Cut/Ising instances (`16.70%` median gap) resolves why pooled `qplib` previously appeared to have an `18.41%` gap.
+   - Within `minlplib` (`29` zero-field instances), `coercive_field_witness` with $\ell_1$-coupling secondary ordering and zero-field anchor symmetry breaking reduces the overall median gap from `16.25%` (parallel 1-flip) to **`11.46%`** (`65.94%` $\mathbb{Z}_2$-invariant overlap):
+     - `Bernasconi Autocorrelation` (`2` instances): **`0.00%` gap** (`100.00%` overlap).
+     - `D-Wave Chimera MIS` (`2` instances): **`9.62% -> 6.42%` median gap** (`62.52%` overlap).
+     - `Sports Tournament 06..20` (`7` instances): **`16.67% -> 9.23%` median gap**.
+     - `D-Wave Chimera Spin Glass` (`16` Selby/MGW/RFR instances): **`15.68% -> 14.46%` median gap**.
+3. **Regime III — Asymmetric Penalty-Dominated Combinatorial QUBOs (`qoblib` MIS & Portfolio Optimization)**:
+   - When quadratic penalty terms have predominantly positive signs (`100.0%` $Q_{ij} > 0$ in `Maximum Independent Set`; `67.6%` $Q_{ij} > 0$ in `Portfolio Optimization`), the induced local fields $h_i = \frac{1}{2}L_i + \frac{1}{4}\sum_{j \ne i}\tilde{Q}_{ij} > 0$ push most variables to $x_i = 0$ ($s_i = -1$), driving ground-state spin-field alignment **above** $81\%$ to **`84.00%`** (`93.25%` spin-weighted) on `MIS` and **`93.23%`** (`93.65%` spin-weighted) on `Portfolio Optimization`.
+   - On `Maximum Independent Set`, sequential conditioned field alignment in `coercive_field_witness` **cuts the median optimality gap nearly in half** compared to parallel field alignment (**`30.38% -> 17.67%`**, `88.10%` spin overlap), because assigning $x_u = 1$ sequentially updates adjacent vertices' conditioned fields $\tilde{h}_v \leftarrow \tilde{h}_v + J_{uv}$ and prevents simultaneously selecting adjacent vertices.
+4. **Regime IV — Balanced Demand Cancellation (`qoblib` Market Split)**:
+   - In `Market Split` ($\|Ax - b\|^2$ with $b = \lfloor \frac{1}{2} A\mathbf{1}\rfloor$), the linear and quadratic penalty contributions to $h_i = \frac{1}{2} A_i^\top (A\mathbf{1} - 2b)$ cancel to near zero ($\rho_1 \approx 10^{-4}$), yielding **`50.04% ± 1.94%`** ground-state spin-field alignment ($m \approx 0.001$), while 1-flip local search reaches within **`0.02%`** of the reference objective.
+
