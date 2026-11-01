@@ -1,10 +1,10 @@
 # Cross-corpus coercive local-field alignment and coercive_field_witness benchmark.
 # Reproduces the 611-instance OR/spin-glass alignment and witness quality table in
 # docs/src/benchmarks.md from QUBOLib.jl (v0.2.4-data+8) using the production
-# QUBOPreprocessing._coercive_field_witness_float_spin! kernel.
+# QUBOPreprocessing.Workspace + coercive_field_witness path.
 #
 # Usage (from an environment with QUBOLib, QUBOTools, SQLite, and HDF5):
-#   julia --startup-file=no --threads=1 scripts/coercive_alignment_pilot.jl
+#   julia --startup-file=no --threads=1 --project=/path/to/qubo-preprocessing-benchmarks scripts/coercive_alignment_pilot.jl
 pushfirst!(LOAD_PATH, joinpath(@__DIR__, ".."))
 using QUBOPreprocessing
 import QUBOTools as QT
@@ -124,35 +124,26 @@ function spin_field_alignment_counts(h_f::Vector{Float64}, l1_f::Vector{Float64}
     return aligned, active
 end
 
-# Calls the production QUBOPreprocessing._coercive_field_witness_float_spin! kernel.
-function run_coercive_field_witness(raw, sp; max_flips::Int = max(500, raw.n), tie_break::Symbol = :low)
-    n = raw.n
-    free_vars = collect(1:n)
-    tie_spin = tie_break === :low ? -1 : 1
-    spin_s = Vector{Int}(undef, n)
-    all_zero_h = true
-    @inbounds for i in 1:n
-        h_i = sp.h_f[i]
-        if sp.direction == 0 || abs(h_i) <= 1e-12 * sp.l1_f[i]
-            spin_s[i] = tie_spin
-        else
-            all_zero_h = false
-            spin_s[i] = (sp.direction * h_i > 0.0) ? -1 : 1
-        end
-    end
-    spin_par, spin_best = QUBOPreprocessing._coercive_field_witness_float_spin!(
-        spin_s,
-        free_vars,
-        sp.h_f,
-        sp.adj_f,
-        sp.l1_f,
-        sp.direction,
-        max_flips,
-        tie_break;
-        all_zero_h = all_zero_h,
+function build_identity_workspace(raw)
+    model = QT.Model{Int,Float64,Int}(
+        Dict(i => raw.L[i] for i in 1:raw.n),
+        raw.Q;
+        scale = raw.scale,
+        offset = raw.offset,
+        sense = raw.sense,
+        domain = raw.domain,
     )
-    x_par = [(s + 1) ÷ 2 for s in spin_par]
-    x_cfw = [(s + 1) ÷ 2 for s in spin_best]
+    return Workspace(model; rules = :identity, integerize_scale = false)
+end
+
+# Calls the production QUBOPreprocessing.Workspace + _coercive_field_witness_pair path.
+function run_coercive_field_witness(raw; max_flips::Int = max(500, raw.n), tie_break::Symbol = :low)
+    ws = build_identity_workspace(raw)
+    x_par, x_cfw = QUBOPreprocessing._coercive_field_witness_pair(
+        ws;
+        max_flips = max_flips,
+        tie_break = tie_break,
+    )
     v_par = eval_bool_tuple(raw.L, raw.Q, raw.scale, raw.offset, x_par)
     v_cfw = eval_bool_tuple(raw.L, raw.Q, raw.scale, raw.offset, x_cfw)
     return x_par, v_par, x_cfw, v_cfw
@@ -172,35 +163,41 @@ function verify_production_equivalence!(h5::HDF5.File)
         L_zf[v] -= 0.5 * w
     end
     raw_zf = (n = 6, L = L_zf, Q = Q_zf, scale = 1.0, offset = 0.0, sense = :min, domain = :bool)
-    sp_zf = build_spin_subproblem(raw_zf)
-    _, _, x_cfw_zf, _ = run_coercive_field_witness(raw_zf, sp_zf)
-    ws_zf = Workspace(
-        QT.Model{Int,Float64,Int}(Dict(i => L_zf[i] for i in 1:6), Q_zf; domain = :bool, sense = :min);
-        rules = :identity,
-        integerize_scale = false,
-    )
-    w_prod_zf = coercive_field_witness(ws_zf; max_flips = max(500, 6), tie_break = :low)
-    x_cfw_zf == w_prod_zf == [0, 0, 0, 1, 1, 1] ||
+    x_par_zf, _, x_cfw_zf, _ = run_coercive_field_witness(raw_zf)
+    ws_zf = build_identity_workspace(raw_zf)
+    w_par_zf = coercive_field_witness(ws_zf; sequential = false, max_flips = max(500, 6), tie_break = :low)
+    w_prod_zf = coercive_field_witness(ws_zf; sequential = true, max_flips = max(500, 6), tie_break = :low)
+    (x_par_zf == w_par_zf && x_cfw_zf == w_prod_zf == [0, 0, 0, 1, 1, 1]) ||
         error("Pilot/production mismatch on 2^-50 fixture: $(x_cfw_zf) vs $(w_prod_zf)")
 
-    # 2. Verify exact equivalence on archived instance 6233 (farm.qs.xz):
-    raw_6233 = read_qubin_tuple(h5, 6233)
-    sp_6233 = build_spin_subproblem(raw_6233)
-    _, _, x_cfw_6233, _ = run_coercive_field_witness(raw_6233, sp_6233)
-    ws_6233 = Workspace(
-        QT.Model{Int,Float64,Int}(
-            Dict(i => raw_6233.L[i] for i in 1:raw_6233.n if raw_6233.L[i] != 0.0),
-            raw_6233.Q;
-            scale = raw_6233.scale,
-            offset = raw_6233.offset,
-            sense = raw_6233.sense,
-            domain = raw_6233.domain,
-        );
-        rules = :identity,
-        integerize_scale = false,
+    # 2. Verify exact equivalence on the unscaled 6-variable fixture with L[1] -= 2^-40
+    #    (non-zero exact field below 1e-12 * l1_f[1] plus near-tied sequential vs parallel energy):
+    Q_nt = Dict(
+        (1, 2) => -4.0, (1, 3) => -4.0, (2, 3) => -4.0,
+        (4, 5) => -8.0, (4, 6) => -8.0, (5, 6) => -8.0,
+        (3, 4) => 2.0,  (2, 5) => 2.0,
     )
-    w_prod_6233 = coercive_field_witness(ws_6233; max_flips = max(500, raw_6233.n), tie_break = :low)
-    x_cfw_6233 == w_prod_6233 ||
+    L_nt = zeros(Float64, 6)
+    for ((u, v), w) in Q_nt
+        L_nt[u] -= 0.5 * w
+        L_nt[v] -= 0.5 * w
+    end
+    L_nt[1] -= 2.0^-40
+    raw_nt = (n = 6, L = L_nt, Q = Q_nt, scale = 1.0, offset = 0.0, sense = :min, domain = :bool)
+    x_par_nt, _, x_cfw_nt, _ = run_coercive_field_witness(raw_nt)
+    ws_nt = build_identity_workspace(raw_nt)
+    w_par_nt = coercive_field_witness(ws_nt; sequential = false, max_flips = max(500, 6), tie_break = :low)
+    w_prod_nt = coercive_field_witness(ws_nt; sequential = true, max_flips = max(500, 6), tie_break = :low)
+    (x_par_nt == w_par_nt && x_cfw_nt == w_prod_nt == [1, 1, 1, 0, 0, 0]) ||
+        error("Pilot/production mismatch on L[1] -= 2^-40 fixture: $(x_cfw_nt) vs $(w_prod_nt)")
+
+    # 3. Verify exact equivalence on archived instance 6233 (farm.qs.xz):
+    raw_6233 = read_qubin_tuple(h5, 6233)
+    x_par_6233, _, x_cfw_6233, _ = run_coercive_field_witness(raw_6233)
+    ws_6233 = build_identity_workspace(raw_6233)
+    w_par_6233 = coercive_field_witness(ws_6233; sequential = false, max_flips = max(500, raw_6233.n), tie_break = :low)
+    w_prod_6233 = coercive_field_witness(ws_6233; sequential = true, max_flips = max(500, raw_6233.n), tie_break = :low)
+    (x_par_6233 == w_par_6233 && x_cfw_6233 == w_prod_6233) ||
         error("Pilot/production mismatch on instance 6233: $(x_cfw_6233) vs $(w_prod_6233)")
     return nothing
 end
@@ -283,7 +280,7 @@ function main()
             push!(st.pos_q, 100.0 * sp.frac_pos_off)
             act_cnt > 0 && (st.n_nz_h[] += 1)
 
-            x_gr, v_gr, x_cfw, v_cfw = run_coercive_field_witness(raw, sp; max_flips = max(500, raw.n))
+            x_gr, v_gr, x_cfw, v_cfw = run_coercive_field_witness(raw; max_flips = max(500, raw.n))
 
             al_w, act_w = spin_field_alignment_counts(sp.h_f, sp.l1_f, sp.direction, x_cfw)
             act_w > 0 && push!(st.wit_align, 100.0 * al_w / act_w)

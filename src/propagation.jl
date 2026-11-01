@@ -429,6 +429,9 @@ end
 
 const _MIN_FLOAT_SPIN_COEFF = floatmin(Float64) * 1e16
 
+@inline _float_spin_coupling(ws::Workspace, q::_Exact) =
+    ws._snapshot.domain === QT.SpinDomain ? Float64(q) : 0.25 * Float64(q)
+
 function _can_use_float_spin_heuristic(ws::Workspace, indices::Vector{Int})
     st = ws._state
     total_abs = 0.0
@@ -441,12 +444,45 @@ function _can_use_float_spin_heuristic(ws::Workspace, indices::Vector{Int})
         end
         for (j, q) in st.adjacency[i]
             (st.fixed[j] == 2 && !iszero(q)) || continue
-            jf = Float64(_spin_coupling(ws, q))
+            jf = _float_spin_coupling(ws, q)
             (isfinite(jf) && abs(jf) >= _MIN_FLOAT_SPIN_COEFF) || return false
             total_abs += abs(jf)
         end
     end
     return isfinite(total_abs) && total_abs < 1e290
+end
+
+function _try_build_float_spin_subproblem(ws::Workspace, free_vars::Vector{Int})
+    st = ws._state
+    n = length(ws._snapshot.labels)
+    h_f = zeros(Float64, n)
+    l1_f = zeros(Float64, n)
+    adj_f = [Tuple{Int,Float64}[] for _ in 1:n]
+    total_abs = 0.0
+    @inbounds for i in free_vars
+        h_ex = _spin_field(ws, i)
+        if !iszero(h_ex)
+            hf = Float64(h_ex)
+            (isfinite(hf) && abs(hf) >= _MIN_FLOAT_SPIN_COEFF) || return nothing
+            h_f[i] = hf
+            total_abs += abs(hf)
+        end
+        ai = adj_f[i]
+        sizehint!(ai, length(st.adjacency[i]))
+        l1 = 0.0
+        for (j, q) in st.adjacency[i]
+            (st.fixed[j] == 2 && !iszero(q)) || continue
+            jf = _float_spin_coupling(ws, q)
+            (isfinite(jf) && abs(jf) >= _MIN_FLOAT_SPIN_COEFF) || return nothing
+            push!(ai, (j, jf))
+            abs_jf = abs(jf)
+            l1 += abs_jf
+            total_abs += abs_jf
+        end
+        l1_f[i] = l1
+    end
+    (isfinite(total_abs) && total_abs < 1e290) || return nothing
+    return h_f, adj_f, l1_f
 end
 
 function _build_float_spin_subproblem(ws::Workspace, free_vars::Vector{Int})
@@ -458,10 +494,11 @@ function _build_float_spin_subproblem(ws::Workspace, free_vars::Vector{Int})
     @inbounds for i in free_vars
         h_f[i] = Float64(_spin_field(ws, i))
         ai = adj_f[i]
+        sizehint!(ai, length(st.adjacency[i]))
         l1 = 0.0
         for (j, q) in st.adjacency[i]
             (st.fixed[j] == 2 && !iszero(q)) || continue
-            jf = Float64(_spin_coupling(ws, q))
+            jf = _float_spin_coupling(ws, q)
             push!(ai, (j, jf))
             l1 += abs(jf)
         end
@@ -564,7 +601,7 @@ end
     abs(x) <= tol ? 0.0 : (x == 0.0 ? 0.0 : x)
 
 function _spin_seq_strictly_better(
-    ws::Union{Nothing,Workspace},
+    ws::Workspace,
     free_vars::Vector{Int},
     spin_seq::Vector{Int},
     spin_par::Vector{Int},
@@ -595,7 +632,6 @@ function _spin_seq_strictly_better(
     tol = 1e-11 * bound_f
     delta_f < -tol && return true
     delta_f > tol && return false
-    ws === nothing && return delta_f < 0.0
     st = ws._state
     delta_ex = _Exact(0)
     @inbounds for i in free_vars
@@ -612,6 +648,7 @@ function _spin_seq_strictly_better(
 end
 
 function _coercive_field_witness_float_spin!(
+    ws::Workspace,
     spin_s::Vector{Int},
     free_vars::Vector{Int},
     h_f::Vector{Float64},
@@ -619,15 +656,15 @@ function _coercive_field_witness_float_spin!(
     l1_f::Vector{Float64},
     direction::Int,
     mf::Int,
-    tie_break::Symbol;
+    tie_break::Symbol,
+    all_zero_h::Bool;
+    sequential::Bool=true,
     map::Union{Nothing,DomainGaugeMap}=nothing,
-    ws::Union{Nothing,Workspace}=nothing,
-    all_zero_h::Bool=all(i -> abs(h_f[i]) <= 1e-12 * l1_f[i], free_vars),
 )
     n = length(spin_s)
     _polish_spin_state_float!(spin_s, free_vars, h_f, adj_f, l1_f, direction, mf)
     spin_best = spin_s
-    if length(free_vars) > 1
+    if sequential && length(free_vars) > 1
         seq_order = copy(free_vars)
         tiers = zeros(Int, n)
         ratios_f = zeros(Float64, n)
@@ -681,86 +718,10 @@ function _coercive_field_witness_float_spin!(
     return spin_s, spin_best
 end
 
-function _coercive_field_witness_orig(
-    ws::Workspace;
-    polish::Bool=true,
-    max_flips=1000,
-    tie_break::Symbol=:low,
-    map::Union{Nothing,DomainGaugeMap}=nothing,
-)
-    max_flips isa Integer && !(max_flips isa Bool) && 0 <= max_flips <= typemax(Int) ||
-        throw(ArgumentError("max_flips must be a nonnegative machine-sized integer"))
-    tie_break in (:low, :high) ||
-        throw(ArgumentError("tie_break must be :low or :high"))
-    map === nothing || _validate_domain_map(ws, map)
+function _lift_spin_witness(ws::Workspace, spin_s::Vector{Int})
     s, st = ws._snapshot, ws._state
     n = length(s.labels)
     is_bool = s.domain === QT.BoolDomain
-    direction = _direction(s)
-    spin_s = zeros(Int, n)
-    free_vars = Int[]
-    all_zero_h = true
-    @inbounds for i in 1:n
-        st.fixed[i] == 2 || continue
-        push!(free_vars, i)
-        h_i = _spin_field(ws, i)
-        g_i = map === nothing ? 1 : map.gauge[i]
-        tie_spin = tie_break === :low ? -g_i : g_i
-        if direction == 0 || iszero(h_i)
-            spin_s[i] = tie_spin
-        else
-            all_zero_h = false
-            spin_s[i] = (direction * h_i > 0) ? -1 : 1
-        end
-    end
-    mf = Int(max_flips)
-    if polish && direction != 0 && !isempty(free_vars)
-        if _can_use_float_spin_heuristic(ws, free_vars)
-            h_f, adj_f, l1_f = _build_float_spin_subproblem(ws, free_vars)
-            _, spin_s = _coercive_field_witness_float_spin!(
-                spin_s, free_vars, h_f, adj_f, l1_f, direction, mf, tie_break;
-                map=map, ws=ws, all_zero_h=all_zero_h,
-            )
-        else
-            e_par = _polish_spin_state!(spin_s, ws, free_vars, direction, mf)
-            if length(free_vars) > 1
-                seq_order = copy(free_vars)
-                _order_probing_candidates!(ws, seq_order, spin_s, :coercive)
-                spin_seq = zeros(Int, n)
-                cond_h = Vector{_Exact}(undef, n)
-                assigned = falses(n)
-                anchor_seeded = false
-                @inbounds for i in free_vars
-                    cond_h[i] = _spin_field(ws, i)
-                end
-                @inbounds for i in seq_order
-                    h_i = cond_h[i]
-                    g_i = map === nothing ? 1 : map.gauge[i]
-                    tie_spin = tie_break === :low ? -g_i : g_i
-                    if iszero(h_i)
-                        if all_zero_h && !anchor_seeded && st.degrees[i] > 0
-                            s_i = -tie_spin
-                            anchor_seeded = true
-                        else
-                            s_i = tie_spin
-                        end
-                    else
-                        s_i = (direction * h_i > 0) ? -1 : 1
-                    end
-                    spin_seq[i] = s_i
-                    assigned[i] = true
-                    for (j, q) in st.adjacency[i]
-                        (st.fixed[j] == 2 && !assigned[j] && !iszero(q)) || continue
-                        cond_h[j] += _spin_coupling(ws, q) * s_i
-                    end
-                end
-                e_seq = _polish_spin_state!(spin_seq, ws, free_vars, direction, mf)
-                if e_seq < e_par
-                    spin_s = spin_seq
-                end
-            end
-        end
-    end
     w = Vector{Int}(undef, n)
     low_orig = is_bool ? 0 : -1
     @inbounds for i in 1:n
@@ -810,29 +771,159 @@ function _coercive_field_witness_orig(
     return w
 end
 
-"""
-    coercive_field_witness(ws::Workspace; polish=true, max_flips=1000,
-                           tie_break=:low, map=nothing) -> Vector{Int}
+function _coercive_field_witness_spins(
+    ws::Workspace;
+    polish::Bool=true,
+    sequential::Bool=true,
+    max_flips=1000,
+    tie_break::Symbol=:low,
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+)
+    max_flips isa Integer && !(max_flips isa Bool) && 0 <= max_flips <= typemax(Int) ||
+        throw(ArgumentError("max_flips must be a nonnegative machine-sized integer"))
+    tie_break in (:low, :high) ||
+        throw(ArgumentError("tie_break must be :low or :high"))
+    map === nothing || _validate_domain_map(ws, map)
+    s, st = ws._snapshot, ws._state
+    n = length(s.labels)
+    direction = _direction(s)
+    spin_s = zeros(Int, n)
+    free_vars = Int[]
+    all_zero_h = true
+    @inbounds for i in 1:n
+        st.fixed[i] == 2 || continue
+        push!(free_vars, i)
+        h_i = _spin_field(ws, i)
+        g_i = map === nothing ? 1 : map.gauge[i]
+        tie_spin = tie_break === :low ? -g_i : g_i
+        if direction == 0 || iszero(h_i)
+            spin_s[i] = tie_spin
+        else
+            all_zero_h = false
+            spin_s[i] = (direction * h_i > 0) ? -1 : 1
+        end
+    end
+    mf = Int(max_flips)
+    spin_best = spin_s
+    if polish && direction != 0 && !isempty(free_vars)
+        float_sub = _try_build_float_spin_subproblem(ws, free_vars)
+        if float_sub !== nothing
+            h_f, adj_f, l1_f = float_sub
+            spin_s, spin_best = _coercive_field_witness_float_spin!(
+                ws, spin_s, free_vars, h_f, adj_f, l1_f, direction, mf, tie_break, all_zero_h;
+                sequential=sequential, map=map,
+            )
+        else
+            e_par = _polish_spin_state!(spin_s, ws, free_vars, direction, mf)
+            spin_best = spin_s
+            if sequential && length(free_vars) > 1
+                seq_order = copy(free_vars)
+                _order_probing_candidates!(ws, seq_order, spin_s, :coercive)
+                spin_seq = zeros(Int, n)
+                cond_h = Vector{_Exact}(undef, n)
+                assigned = falses(n)
+                anchor_seeded = false
+                @inbounds for i in free_vars
+                    cond_h[i] = _spin_field(ws, i)
+                end
+                @inbounds for i in seq_order
+                    h_i = cond_h[i]
+                    g_i = map === nothing ? 1 : map.gauge[i]
+                    tie_spin = tie_break === :low ? -g_i : g_i
+                    if iszero(h_i)
+                        if all_zero_h && !anchor_seeded && st.degrees[i] > 0
+                            s_i = -tie_spin
+                            anchor_seeded = true
+                        else
+                            s_i = tie_spin
+                        end
+                    else
+                        s_i = (direction * h_i > 0) ? -1 : 1
+                    end
+                    spin_seq[i] = s_i
+                    assigned[i] = true
+                    for (j, q) in st.adjacency[i]
+                        (st.fixed[j] == 2 && !assigned[j] && !iszero(q)) || continue
+                        cond_h[j] += _spin_coupling(ws, q) * s_i
+                    end
+                end
+                e_seq = _polish_spin_state!(spin_seq, ws, free_vars, direction, mf)
+                if e_seq < e_par
+                    spin_best = spin_seq
+                end
+            end
+        end
+    end
+    return spin_s, spin_best
+end
 
-Construct a deterministic parent-scope feasible witness vector for `ws` by
-aligning each currently free variable with its conditioned Ising coercive field
-``h_i`` under `sense(ws)` (`tie_break in (:low, :high)` for ``h_i = 0``),
-comparing parallel field alignment against sequential `:coercive`-ordered
-conditioned field alignment (breaking ``\\mathbb{Z}_2`` zero-field tie-break
-symmetry at the highest-``\\ell_1``-coupling anchor when all free fields vanish)
-with up to `max_flips` steps of steepest 1-flip local descent on the residual
-Ising Hamiltonian (`polish=true`), and lifting the assignment in reverse trail
-order through all caller assumptions and committed workspace reductions (and
-through `map` when provided).
-"""
-function coercive_field_witness(
+function _coercive_field_witness_orig(
+    ws::Workspace;
+    polish::Bool=true,
+    sequential::Bool=true,
+    max_flips=1000,
+    tie_break::Symbol=:low,
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+)
+    _, spin_best = _coercive_field_witness_spins(
+        ws;
+        polish=polish,
+        sequential=sequential,
+        max_flips=max_flips,
+        tie_break=tie_break,
+        map=map,
+    )
+    return _lift_spin_witness(ws, spin_best)
+end
+
+function _coercive_field_witness_pair(
     ws::Workspace;
     polish::Bool=true,
     max_flips=1000,
     tie_break::Symbol=:low,
     map::Union{Nothing,DomainGaugeMap}=nothing,
 )
-    w = _coercive_field_witness_orig(ws; polish, max_flips, tie_break, map)
+    spin_par, spin_best = _coercive_field_witness_spins(
+        ws;
+        polish=polish,
+        sequential=true,
+        max_flips=max_flips,
+        tie_break=tie_break,
+        map=map,
+    )
+    w_par = _lift_spin_witness(ws, spin_par)
+    w_best = spin_best === spin_par ? copy(w_par) : _lift_spin_witness(ws, spin_best)
+    if map !== nothing
+        w_par = _orig_witness_to_domain_witness(w_par, map)
+        w_best = _orig_witness_to_domain_witness(w_best, map)
+    end
+    return w_par, w_best
+end
+
+"""
+    coercive_field_witness(ws::Workspace; polish=true, sequential=true,
+                           max_flips=1000, tie_break=:low, map=nothing) -> Vector{Int}
+
+Construct a deterministic parent-scope feasible witness vector for `ws` by
+aligning each currently free variable with its conditioned Ising coercive field
+``h_i`` under `sense(ws)` (`tie_break in (:low, :high)` for ``h_i = 0``),
+comparing parallel field alignment against sequential `:coercive`-ordered
+conditioned field alignment when `sequential=true` (breaking ``\\mathbb{Z}_2``
+zero-field tie-break symmetry at the highest-``\\ell_1``-coupling anchor when
+all free fields vanish) with up to `max_flips` steps of steepest 1-flip local
+descent on the residual Ising Hamiltonian (`polish=true`), and lifting the
+assignment in reverse trail order through all caller assumptions and committed
+workspace reductions (and through `map` when provided).
+"""
+function coercive_field_witness(
+    ws::Workspace;
+    polish::Bool=true,
+    sequential::Bool=true,
+    max_flips=1000,
+    tie_break::Symbol=:low,
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+)
+    w = _coercive_field_witness_orig(ws; polish, sequential, max_flips, tie_break, map)
     map === nothing && return w
     return Int[_map_index_value(map, i, w[i]) for i in eachindex(w)]
 end
@@ -861,7 +952,7 @@ function _order_probing_candidates!(
                 l1 = 0.0
                 for (j, q) in st.adjacency[i]
                     (st.fixed[j] == 2 && !iszero(q)) || continue
-                    l1 += abs(Float64(_spin_coupling(ws, q)))
+                    l1 += abs(_float_spin_coupling(ws, q))
                 end
                 l1 = _canon_zero(l1)
                 if l1 == 0.0
@@ -883,7 +974,7 @@ function _order_probing_candidates!(
                 eff_h = h_i
                 for (j, q) in st.adjacency[i]
                     (st.fixed[j] == 2 && !iszero(q)) || continue
-                    c_ij = Float64(_spin_coupling(ws, q))
+                    c_ij = _float_spin_coupling(ws, q)
                     l1 += abs(c_ij)
                     s_j = is_bool ? (2 * w_vec[j] - 1) : w_vec[j]
                     eff_h += c_ij * s_j

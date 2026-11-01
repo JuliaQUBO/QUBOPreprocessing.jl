@@ -783,6 +783,30 @@
         w_sub = coercive_field_witness(ws_sub; max_flips=500)
         @test w_sub == [0, 0, 0, 0, 0, 0]
         @test reconstruct(materialize(ws_sub), w_sub).energy.value == 0.0
+
+        # 9. Tiny non-zero field L[1] -= 2^-40 below 1e-12 * l1_f[1] with near-tied energy (#86)
+        Q_nt = Dict(
+            (1, 2) => -4.0, (1, 3) => -4.0, (2, 3) => -4.0,
+            (4, 5) => -8.0, (4, 6) => -8.0, (5, 6) => -8.0,
+            (3, 4) => 2.0,  (2, 5) => 2.0,
+        )
+        L_nt = zeros(Float64, 6)
+        for ((u, v), w) in Q_nt
+            L_nt[u] -= 0.5 * w
+            L_nt[v] -= 0.5 * w
+        end
+        L_nt[1] -= 2.0^-40
+        ws_nt = Workspace(
+            QT.Model{Int,Float64,Int}(Dict(i => L_nt[i] for i in 1:6), Q_nt; domain=:bool, sense=:min);
+            rules=:identity, integerize_scale=false,
+        )
+        w_par_nt = coercive_field_witness(ws_nt; sequential=false, max_flips=500, tie_break=:low)
+        w_seq_nt = coercive_field_witness(ws_nt; sequential=true, max_flips=500, tie_break=:low)
+        w_pair_par, w_pair_seq = QUBOPreprocessing._coercive_field_witness_pair(ws_nt; max_flips=500, tie_break=:low)
+        @test w_par_nt == w_pair_par == [0, 0, 0, 0, 0, 0]
+        @test w_seq_nt == w_pair_seq == [1, 1, 1, 0, 0, 0]
+        @test reconstruct(materialize(ws_nt), w_seq_nt).energy.value <
+              reconstruct(materialize(ws_nt), w_par_nt).energy.value
     end
 
     @testset "two-branch common-implication double probing (:double_probe) and pair contractions (#60)" begin
