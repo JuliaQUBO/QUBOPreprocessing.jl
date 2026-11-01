@@ -1,11 +1,14 @@
 # Cross-corpus coercive local-field alignment and coercive_field_witness benchmark.
 # Reproduces the 611-instance OR/spin-glass alignment and witness quality table in
-# docs/src/benchmarks.md from QUBOLib.jl (v0.2.4-data+8).
+# docs/src/benchmarks.md from QUBOLib.jl (v0.2.4-data+8) using the production
+# QUBOPreprocessing._coercive_field_witness_float_spin! kernel.
 #
-# Usage (from an environment with QUBOPreprocessing, QUBOLib, SQLite, HDF5, and MQLib):
+# Usage (from an environment with QUBOLib, QUBOTools, SQLite, and HDF5):
 #   julia --startup-file=no --threads=1 scripts/coercive_alignment_pilot.jl
+pushfirst!(LOAD_PATH, joinpath(@__DIR__, ".."))
+using QUBOPreprocessing
+import QUBOTools as QT
 using QUBOLib
-using MQLib
 using SQLite
 using HDF5
 using Statistics
@@ -62,152 +65,144 @@ function eval_bool_tuple(
     return scale * acc
 end
 
-function compute_ising_fields_and_bond_signs(raw)
-    # Normalize to equivalent minimization spin Hamiltonian H(s) = const + sum_i h_i s_i + sum_{i<j} J_{ij} s_i s_j
-    sign_mult = (raw.sense == :max) ? -1.0 : 1.0
-    h = zeros(Float64, raw.n)
-    @inbounds for i in 1:raw.n
-        h[i] = 0.5 * sign_mult * raw.L[i]
+function build_spin_subproblem(raw)
+    n = raw.n
+    direction = if raw.scale == 0.0
+        0
+    elseif (raw.sense === :min) == (raw.scale > 0.0)
+        1
+    else
+        -1
+    end
+    h_f = zeros(Float64, n)
+    l1_f = zeros(Float64, n)
+    adj_f = [Tuple{Int,Float64}[] for _ in 1:n]
+    @inbounds for i in 1:n
+        h_f[i] = 0.5 * raw.L[i]
     end
     n_pos_q = 0
     n_neg_q = 0
     for ((u, v), w) in raw.Q
-        w_min = sign_mult * w
+        iszero(w) && continue
+        w_min = direction * w
         if w_min > ACTIVE_FIELD_TOL
             n_pos_q += 1
         elseif w_min < -ACTIVE_FIELD_TOL
             n_neg_q += 1
         end
-        h[u] += 0.25 * w_min
-        h[v] += 0.25 * w_min
+        j_ij = 0.25 * w
+        h_f[u] += j_ij
+        h_f[v] += j_ij
+        push!(adj_f[u], (v, j_ij))
+        push!(adj_f[v], (u, j_ij))
+        l1_f[u] += abs(j_ij)
+        l1_f[v] += abs(j_ij)
+    end
+    for i in 1:n
+        sort!(adj_f[i]; by = first)
     end
     n_tot_q = max(1, n_pos_q + n_neg_q)
-    return (h = h, frac_pos_off = n_pos_q / n_tot_q)
+    return (
+        h_f = h_f,
+        adj_f = adj_f,
+        l1_f = l1_f,
+        direction = direction,
+        frac_pos_off = n_pos_q / n_tot_q,
+    )
 end
 
-function spin_field_alignment_counts(h::Vector{Float64}, x_bool::Vector{Int})
+function spin_field_alignment_counts(h_f::Vector{Float64}, l1_f::Vector{Float64}, direction::Int, x_bool::Vector{Int})
     aligned = 0
     active = 0
-    @inbounds for i in eachindex(h)
-        abs(h[i]) <= ACTIVE_FIELD_TOL && continue
+    @inbounds for i in eachindex(h_f)
+        tol_i = max(ACTIVE_FIELD_TOL, 1e-12 * l1_f[i])
+        abs(h_f[i]) <= tol_i && continue
         active += 1
         s_i = (x_bool[i] == 1) ? 1 : -1
-        s_i * h[i] < 0.0 && (aligned += 1)
+        direction * s_i * h_f[i] < 0.0 && (aligned += 1)
     end
     return aligned, active
 end
 
-# Float64 implementation matching QUBOPreprocessing.coercive_field_witness
-# (with tie_break = :low, max_flips = max(500, n), l1_J tie-breaking, and
-# zero-field anchor symmetry breaking s_u = +1 on the first h_u == 0 variable).
-function run_coercive_field_witness(raw, h::Vector{Float64}; max_flips::Int = max(500, raw.n))
+# Calls the production QUBOPreprocessing._coercive_field_witness_float_spin! kernel.
+function run_coercive_field_witness(raw, sp; max_flips::Int = max(500, raw.n), tie_break::Symbol = :low)
     n = raw.n
-    sign_mult = (raw.sense == :max) ? -1.0 : 1.0
-    adj = [Tuple{Int,Float64}[] for _ in 1:n]
-    l1_J = zeros(Float64, n)
-    for ((u, v), w) in raw.Q
-        w_min = sign_mult * w
-        push!(adj[u], (v, w_min))
-        push!(adj[v], (u, w_min))
-        j_abs = 0.25 * abs(w_min)
-        l1_J[u] += j_abs
-        l1_J[v] += j_abs
-    end
-
-    function polish_1flip!(x::Vector{Int})
-        grad = Vector{Float64}(undef, n)
-        @inbounds for i in 1:n
-            g = sign_mult * raw.L[i]
-            for (j, w_min) in adj[i]
-                x[j] == 1 && (g += w_min)
-            end
-            grad[i] = g
-        end
-        for _ in 1:max_flips
-            best_i = 0
-            best_delta = -1e-12
-            @inbounds for i in 1:n
-                delta = (x[i] == 0) ? grad[i] : -grad[i]
-                if delta < best_delta
-                    best_delta = delta
-                    best_i = i
-                end
-            end
-            best_i == 0 && break
-            new_x = 1 - x[best_i]
-            x[best_i] = new_x
-            step_dir = (new_x == 1) ? 1.0 : -1.0
-            @inbounds for (j, w_min) in adj[best_i]
-                grad[j] += step_dir * w_min
-            end
-        end
-        return x
-    end
-
-    # Candidate 1 (Gr1F): Parallel field alignment + 1-flip polish
-    x_par = [(h[i] < 0.0) ? 1 : 0 for i in 1:n]
-    polish_1flip!(x_par)
-
-    # Candidate 2 (CFW): Sequential coercive-ordered conditioned field alignment + 1-flip polish
-    order = sortperm(
-        1:n;
-        by = i -> (
-            l1_J[i] == 0.0 ? (abs(h[i]) == 0.0 ? 0 : 2) : 1,
-            l1_J[i] == 0.0 ? abs(h[i]) : abs(h[i]) / l1_J[i],
-            abs(h[i]),
-            l1_J[i],
-            -i,
-        ),
-        rev = true,
-    )
-    h_cond = copy(h)
-    fixed = falses(n)
-    x_seq = zeros(Int, n)
-    broke_zero_symmetry = false
-    @inbounds for u in order
-        s_u = if h_cond[u] < -ACTIVE_FIELD_TOL
-            1
-        elseif h_cond[u] > ACTIVE_FIELD_TOL
-            -1
-        elseif !broke_zero_symmetry
-            broke_zero_symmetry = true
-            1
+    free_vars = collect(1:n)
+    tie_spin = tie_break === :low ? -1 : 1
+    spin_s = Vector{Int}(undef, n)
+    all_zero_h = true
+    @inbounds for i in 1:n
+        h_i = sp.h_f[i]
+        if sp.direction == 0 || abs(h_i) <= 1e-12 * sp.l1_f[i]
+            spin_s[i] = tie_spin
         else
-            -1
-        end
-        x_seq[u] = (s_u == 1) ? 1 : 0
-        fixed[u] = true
-        for (v, w_min) in adj[u]
-            !fixed[v] && (h_cond[v] += 0.25 * w_min * s_u)
+            all_zero_h = false
+            spin_s[i] = (sp.direction * h_i > 0.0) ? -1 : 1
         end
     end
-    polish_1flip!(x_seq)
-
+    spin_par, spin_best = QUBOPreprocessing._coercive_field_witness_float_spin!(
+        spin_s,
+        free_vars,
+        sp.h_f,
+        sp.adj_f,
+        sp.l1_f,
+        sp.direction,
+        max_flips,
+        tie_break;
+        all_zero_h = all_zero_h,
+    )
+    x_par = [(s + 1) ÷ 2 for s in spin_par]
+    x_cfw = [(s + 1) ÷ 2 for s in spin_best]
     v_par = eval_bool_tuple(raw.L, raw.Q, raw.scale, raw.offset, x_par)
-    v_seq = eval_bool_tuple(raw.L, raw.Q, raw.scale, raw.offset, x_seq)
-    better_seq = (raw.sense == :max) ? (v_seq > v_par) : (v_seq < v_par)
-    return x_par, v_par, (better_seq ? x_seq : x_par), (better_seq ? v_seq : v_par)
+    v_cfw = eval_bool_tuple(raw.L, raw.Q, raw.scale, raw.offset, x_cfw)
+    return x_par, v_par, x_cfw, v_cfw
 end
 
-function solve_mqlib_quick(raw, time_limit::Float64 = 0.2)
-    sign_mult = (raw.sense == :max) ? 1.0 : -1.0
-    linear = Cdouble.(sign_mult .* raw.L)
-    m = length(raw.Q)
-    qi = Vector{Int32}(undef, m)
-    qj = Vector{Int32}(undef, m)
-    qv = Vector{Cdouble}(undef, m)
-    idx = 0
-    for ((u, v), w) in raw.Q
-        idx += 1
-        qi[idx] = Int32(u)
-        qj[idx] = Int32(v)
-        qv[idx] = Cdouble(0.5 * sign_mult * w)
-    end
-    res = MQLib._mqlib_solve_qubo(
-        raw.n, linear, qi, qj, qv;
-        heuristic = "BURER2002", random_seed = Int32(1001), run_time_limit = time_limit,
+function verify_production_equivalence!(h5::HDF5.File)
+    # 1. Verify exact equivalence on the 2^-50 scaled 6-variable zero-field fixture:
+    scale_tiny = 2.0^-50
+    Q_zf = Dict(
+        (1, 2) => -4.0 * scale_tiny, (1, 3) => -4.0 * scale_tiny, (2, 3) => -4.0 * scale_tiny,
+        (4, 5) => -8.0 * scale_tiny, (4, 6) => -8.0 * scale_tiny, (5, 6) => -8.0 * scale_tiny,
+        (3, 4) => 2.0 * scale_tiny,  (2, 5) => 2.0 * scale_tiny,
     )
-    return Int.(res.solution)
+    L_zf = zeros(Float64, 6)
+    for ((u, v), w) in Q_zf
+        L_zf[u] -= 0.5 * w
+        L_zf[v] -= 0.5 * w
+    end
+    raw_zf = (n = 6, L = L_zf, Q = Q_zf, scale = 1.0, offset = 0.0, sense = :min, domain = :bool)
+    sp_zf = build_spin_subproblem(raw_zf)
+    _, _, x_cfw_zf, _ = run_coercive_field_witness(raw_zf, sp_zf)
+    ws_zf = Workspace(
+        QT.Model{Int,Float64,Int}(Dict(i => L_zf[i] for i in 1:6), Q_zf; domain = :bool, sense = :min);
+        rules = :identity,
+        integerize_scale = false,
+    )
+    w_prod_zf = coercive_field_witness(ws_zf; max_flips = max(500, 6), tie_break = :low)
+    x_cfw_zf == w_prod_zf == [0, 0, 0, 1, 1, 1] ||
+        error("Pilot/production mismatch on 2^-50 fixture: $(x_cfw_zf) vs $(w_prod_zf)")
+
+    # 2. Verify exact equivalence on archived instance 6233 (farm.qs.xz):
+    raw_6233 = read_qubin_tuple(h5, 6233)
+    sp_6233 = build_spin_subproblem(raw_6233)
+    _, _, x_cfw_6233, _ = run_coercive_field_witness(raw_6233, sp_6233)
+    ws_6233 = Workspace(
+        QT.Model{Int,Float64,Int}(
+            Dict(i => raw_6233.L[i] for i in 1:raw_6233.n if raw_6233.L[i] != 0.0),
+            raw_6233.Q;
+            scale = raw_6233.scale,
+            offset = raw_6233.offset,
+            sense = raw_6233.sense,
+            domain = raw_6233.domain,
+        );
+        rules = :identity,
+        integerize_scale = false,
+    )
+    w_prod_6233 = coercive_field_witness(ws_6233; max_flips = max(500, raw_6233.n), tie_break = :low)
+    x_cfw_6233 == w_prod_6233 ||
+        error("Pilot/production mismatch on instance 6233: $(x_cfw_6233) vs $(w_prod_6233)")
+    return nothing
 end
 
 function subfam(col, fam, act_cnt)
@@ -259,11 +254,12 @@ function main()
 
     stats = Dict{Tuple{String,String},Any}()
     h5open(QUBOLib.archive_path(), "r") do h5
+        verify_production_equivalence!(h5)
         for r in rows
             id = r.instance_id
             raw = read_qubin_tuple(h5, id)
-            info = compute_ising_fields_and_bond_signs(raw)
-            act_cnt = count(x -> abs(x) > ACTIVE_FIELD_TOL, info.h)
+            sp = build_spin_subproblem(raw)
+            act_cnt = count(i -> abs(sp.h_f[i]) > max(ACTIVE_FIELD_TOL, 1e-12 * sp.l1_f[i]), 1:raw.n)
             key = subfam(r.collection, r.family, act_cnt)
             st = get!(stats, key) do
                 (
@@ -284,18 +280,16 @@ function main()
             end
             st.n_inst[] += 1
             r.proven_opt != 0 && (st.n_prov[] += 1)
-            push!(st.pos_q, 100.0 * info.frac_pos_off)
+            push!(st.pos_q, 100.0 * sp.frac_pos_off)
             act_cnt > 0 && (st.n_nz_h[] += 1)
 
-            x_gr, v_gr, x_cfw, v_cfw = run_coercive_field_witness(raw, info.h; max_flips = max(500, raw.n))
+            x_gr, v_gr, x_cfw, v_cfw = run_coercive_field_witness(raw, sp; max_flips = max(500, raw.n))
 
-            al_w, act_w = spin_field_alignment_counts(info.h, x_cfw)
+            al_w, act_w = spin_field_alignment_counts(sp.h_f, sp.l1_f, sp.direction, x_cfw)
             act_w > 0 && push!(st.wit_align, 100.0 * al_w / act_w)
 
             x_opt = if r.bitstring !== nothing && ncodeunits(r.bitstring) == raw.n
                 [codeunit(r.bitstring, i) == UInt8('1') ? 1 : 0 for i in 1:raw.n]
-            elseif r.collection == "minlplib"
-                solve_mqlib_quick(raw, 0.2)
             else
                 nothing
             end
@@ -303,7 +297,7 @@ function main()
             if x_opt !== nothing
                 v_opt = eval_bool_tuple(raw.L, raw.Q, raw.scale, raw.offset, x_opt)
                 st.n_sol[] += 1
-                al_o, act_o = spin_field_alignment_counts(info.h, x_opt)
+                al_o, act_o = spin_field_alignment_counts(sp.h_f, sp.l1_f, sp.direction, x_opt)
                 if act_o > 0
                     push!(st.opt_align, 100.0 * al_o / act_o)
                     st.spin_al[] += al_o
@@ -322,11 +316,11 @@ function main()
     end
 
     @printf(
-        "%-14s | %-34s | %4s | %4s | %4s | %-15s | %-8s | %-10s | %-10s | %-10s | %-8s | %-8s | %-7s\n",
-        "Collection", "Sub-Family", "Inst", "Prov", "h!=0", "Ref Align±SD", "SpinWtd",
+        "%-17s | %-34s | %4s | %4s | %4s | %4s | %-15s | %-8s | %-10s | %-10s | %-10s | %-8s | %-8s | %-7s\n",
+        "Collection", "Sub-Family", "Inst", "Ref", "Prov", "h!=0", "Ref Align±SD", "SpinWtd",
         "CFW Align", "Gr1F Gap", "CFW Gap", "CFW Ovlp", "Z2 Ovlp", "Q>0(%)",
     )
-    println(repeat("-", 172))
+    println(repeat("-", 182))
     for k in sort(collect(keys(stats)))
         s = stats[k]
         ra = isempty(s.opt_align) ? "h=0 (symm)" : @sprintf("%.2f±%.2f%%", mean(s.opt_align), length(s.opt_align) > 1 ? std(s.opt_align) : 0.0)
@@ -338,11 +332,10 @@ function main()
         oz = isempty(s.ov_z2) ? "n/a" : @sprintf("%.2f%%", mean(s.ov_z2))
         pq = @sprintf("%.1f%%", mean(s.pos_q))
         @printf(
-            "%-14s | %-34s | %4d | %4d | %4d | %-15s | %-8s | %-10s | %-10s | %-10s | %-8s | %-8s | %-7s\n",
-            k[1], k[2], s.n_inst[], s.n_prov[], s.n_nz_h[], ra, sw, wa, gg, gc, ov, oz, pq,
+            "%-17s | %-34s | %4d | %4d | %4d | %4d | %-15s | %-8s | %-10s | %-10s | %-10s | %-8s | %-8s | %-7s\n",
+            k[1], k[2], s.n_inst[], s.n_sol[], s.n_prov[], s.n_nz_h[], ra, sw, wa, gg, gc, ov, oz, pq,
         )
     end
 end
 
 main()
-

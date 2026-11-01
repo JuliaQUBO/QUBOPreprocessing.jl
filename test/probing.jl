@@ -770,6 +770,19 @@
         cand_big = [1, 2, 3]
         QUBOPreprocessing._order_probing_candidates!(ws_big, cand_big, w_big, :coercive)
         @test cand_big[1] == 1
+
+        # 8. Exact fallback when subnormal Float64 coefficients would lose precision or underflow (#86)
+        c_sub = nextfloat(0.0)
+        L_sub = Dict(i => (i == 1 ? c_sub : 0.0) for i in 1:6)
+        Q_sub = Dict((1, j) => 3.0 * c_sub for j in 2:6)
+        ws_sub = Workspace(
+            QT.Model{Int,Float64,Int}(L_sub, Q_sub; domain=:bool, sense=:min);
+            rules=:identity, integerize_scale=false,
+        )
+        @test !QUBOPreprocessing._can_use_float_spin_heuristic(ws_sub, collect(1:6))
+        w_sub = coercive_field_witness(ws_sub; max_flips=500)
+        @test w_sub == [0, 0, 0, 0, 0, 0]
+        @test reconstruct(materialize(ws_sub), w_sub).energy.value == 0.0
     end
 
     @testset "two-branch common-implication double probing (:double_probe) and pair contractions (#60)" begin

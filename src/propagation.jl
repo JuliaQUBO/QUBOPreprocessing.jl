@@ -427,6 +427,8 @@ function _probing_report!(ws::Workspace, reason::Symbol, candidates::Int, edges:
     )
 end
 
+const _MIN_FLOAT_SPIN_COEFF = floatmin(Float64) * 1e16
+
 function _can_use_float_spin_heuristic(ws::Workspace, indices::Vector{Int})
     st = ws._state
     total_abs = 0.0
@@ -434,13 +436,13 @@ function _can_use_float_spin_heuristic(ws::Workspace, indices::Vector{Int})
         h_ex = _spin_field(ws, i)
         if !iszero(h_ex)
             hf = Float64(h_ex)
-            (isfinite(hf) && hf != 0.0) || return false
+            (isfinite(hf) && abs(hf) >= _MIN_FLOAT_SPIN_COEFF) || return false
             total_abs += abs(hf)
         end
         for (j, q) in st.adjacency[i]
             (st.fixed[j] == 2 && !iszero(q)) || continue
             jf = Float64(_spin_coupling(ws, q))
-            (isfinite(jf) && jf != 0.0) || return false
+            (isfinite(jf) && abs(jf) >= _MIN_FLOAT_SPIN_COEFF) || return false
             total_abs += abs(jf)
         end
     end
@@ -562,7 +564,7 @@ end
     abs(x) <= tol ? 0.0 : (x == 0.0 ? 0.0 : x)
 
 function _spin_seq_strictly_better(
-    ws::Workspace,
+    ws::Union{Nothing,Workspace},
     free_vars::Vector{Int},
     spin_seq::Vector{Int},
     spin_par::Vector{Int},
@@ -593,6 +595,7 @@ function _spin_seq_strictly_better(
     tol = 1e-11 * bound_f
     delta_f < -tol && return true
     delta_f > tol && return false
+    ws === nothing && return delta_f < 0.0
     st = ws._state
     delta_ex = _Exact(0)
     @inbounds for i in free_vars
@@ -606,6 +609,76 @@ function _spin_seq_strictly_better(
         delta_ex += s_seq * cut_ex
     end
     return direction * delta_ex < 0
+end
+
+function _coercive_field_witness_float_spin!(
+    spin_s::Vector{Int},
+    free_vars::Vector{Int},
+    h_f::Vector{Float64},
+    adj_f::Vector{Vector{Tuple{Int,Float64}}},
+    l1_f::Vector{Float64},
+    direction::Int,
+    mf::Int,
+    tie_break::Symbol;
+    map::Union{Nothing,DomainGaugeMap}=nothing,
+    ws::Union{Nothing,Workspace}=nothing,
+    all_zero_h::Bool=all(i -> abs(h_f[i]) <= 1e-12 * l1_f[i], free_vars),
+)
+    n = length(spin_s)
+    _polish_spin_state_float!(spin_s, free_vars, h_f, adj_f, l1_f, direction, mf)
+    spin_best = spin_s
+    if length(free_vars) > 1
+        seq_order = copy(free_vars)
+        tiers = zeros(Int, n)
+        ratios_f = zeros(Float64, n)
+        secondary_f = zeros(Float64, n)
+        @inbounds for i in seq_order
+            abs_h = _canon_zero(abs(h_f[i]))
+            l1 = _canon_zero(l1_f[i])
+            if l1 == 0.0
+                tiers[i] = abs_h == 0.0 ? 0 : 2
+                ratios_f[i] = abs_h
+            else
+                tiers[i] = 1
+                ratios_f[i] = _canon_zero(abs_h / l1)
+            end
+            secondary_f[i] = abs_h
+        end
+        sort!(seq_order; by = i -> (tiers[i], ratios_f[i], secondary_f[i], _canon_zero(l1_f[i]), -i), rev = true)
+        spin_seq = zeros(Int, n)
+        cond_h_f = copy(h_f)
+        accum_l1_f = zeros(Float64, n)
+        assigned = falses(n)
+        anchor_seeded = false
+        @inbounds for i in seq_order
+            h_i = cond_h_f[i]
+            g_i = map === nothing ? 1 : map.gauge[i]
+            tie_spin = tie_break === :low ? -g_i : g_i
+            if abs(h_i) <= 1e-12 * accum_l1_f[i]
+                if all_zero_h && !anchor_seeded && !isempty(adj_f[i])
+                    s_i = -tie_spin
+                    anchor_seeded = true
+                else
+                    s_i = tie_spin
+                end
+            else
+                s_i = (direction * h_i > 0.0) ? -1 : 1
+            end
+            spin_seq[i] = s_i
+            assigned[i] = true
+            for (j, j_ij) in adj_f[i]
+                if !assigned[j]
+                    cond_h_f[j] += j_ij * s_i
+                    accum_l1_f[j] += abs(j_ij)
+                end
+            end
+        end
+        _polish_spin_state_float!(spin_seq, free_vars, h_f, adj_f, l1_f, direction, mf)
+        if _spin_seq_strictly_better(ws, free_vars, spin_seq, spin_s, h_f, adj_f, direction)
+            spin_best = spin_seq
+        end
+    end
+    return spin_s, spin_best
 end
 
 function _coercive_field_witness_orig(
@@ -644,58 +717,10 @@ function _coercive_field_witness_orig(
     if polish && direction != 0 && !isempty(free_vars)
         if _can_use_float_spin_heuristic(ws, free_vars)
             h_f, adj_f, l1_f = _build_float_spin_subproblem(ws, free_vars)
-            _polish_spin_state_float!(spin_s, free_vars, h_f, adj_f, l1_f, direction, mf)
-            if length(free_vars) > 1
-                seq_order = copy(free_vars)
-                tiers = zeros(Int, n)
-                ratios_f = zeros(Float64, n)
-                secondary_f = zeros(Float64, n)
-                @inbounds for i in seq_order
-                    abs_h = _canon_zero(abs(h_f[i]))
-                    l1 = _canon_zero(l1_f[i])
-                    if l1 == 0.0
-                        tiers[i] = abs_h == 0.0 ? 0 : 2
-                        ratios_f[i] = abs_h
-                    else
-                        tiers[i] = 1
-                        ratios_f[i] = _canon_zero(abs_h / l1)
-                    end
-                    secondary_f[i] = abs_h
-                end
-                sort!(seq_order; by = i -> (tiers[i], ratios_f[i], secondary_f[i], _canon_zero(l1_f[i]), -i), rev = true)
-                spin_seq = zeros(Int, n)
-                cond_h_f = copy(h_f)
-                accum_l1_f = zeros(Float64, n)
-                assigned = falses(n)
-                anchor_seeded = false
-                @inbounds for i in seq_order
-                    h_i = cond_h_f[i]
-                    g_i = map === nothing ? 1 : map.gauge[i]
-                    tie_spin = tie_break === :low ? -g_i : g_i
-                    if abs(h_i) <= 1e-12 * accum_l1_f[i]
-                        if all_zero_h && !anchor_seeded && !isempty(adj_f[i])
-                            s_i = -tie_spin
-                            anchor_seeded = true
-                        else
-                            s_i = tie_spin
-                        end
-                    else
-                        s_i = (direction * h_i > 0.0) ? -1 : 1
-                    end
-                    spin_seq[i] = s_i
-                    assigned[i] = true
-                    for (j, j_ij) in adj_f[i]
-                        if !assigned[j]
-                            cond_h_f[j] += j_ij * s_i
-                            accum_l1_f[j] += abs(j_ij)
-                        end
-                    end
-                end
-                _polish_spin_state_float!(spin_seq, free_vars, h_f, adj_f, l1_f, direction, mf)
-                if _spin_seq_strictly_better(ws, free_vars, spin_seq, spin_s, h_f, adj_f, direction)
-                    spin_s = spin_seq
-                end
-            end
+            _, spin_s = _coercive_field_witness_float_spin!(
+                spin_s, free_vars, h_f, adj_f, l1_f, direction, mf, tie_break;
+                map=map, ws=ws, all_zero_h=all_zero_h,
+            )
         else
             e_par = _polish_spin_state!(spin_s, ws, free_vars, direction, mf)
             if length(free_vars) > 1
