@@ -558,6 +558,56 @@ function _polish_spin_state!(
     return direction * (energy // 2)
 end
 
+@inline _canon_zero(x::Float64, tol::Float64=0.0) =
+    abs(x) <= tol ? 0.0 : (x == 0.0 ? 0.0 : x)
+
+function _spin_seq_strictly_better(
+    ws::Workspace,
+    free_vars::Vector{Int},
+    spin_seq::Vector{Int},
+    spin_par::Vector{Int},
+    h_f::Vector{Float64},
+    adj_f::Vector{Vector{Tuple{Int,Float64}}},
+    direction::Int,
+)
+    dir_f = Float64(direction)
+    delta_f = 0.0
+    bound_f = 0.0
+    any_diff = false
+    @inbounds for i in free_vars
+        s_seq = spin_seq[i]
+        s_seq == spin_par[i] && continue
+        any_diff = true
+        hi = h_f[i]
+        cut_sum = hi
+        cut_abs = abs(hi)
+        for (j, j_ij) in adj_f[i]
+            spin_seq[j] == spin_par[j] || continue
+            cut_sum += j_ij * spin_par[j]
+            cut_abs += abs(j_ij)
+        end
+        delta_f += (2.0 * dir_f * s_seq) * cut_sum
+        bound_f += 2.0 * cut_abs
+    end
+    any_diff || return false
+    tol = 1e-11 * bound_f
+    delta_f < -tol && return true
+    delta_f > tol && return false
+    st = ws._state
+    delta_ex = _Exact(0)
+    @inbounds for i in free_vars
+        s_seq = spin_seq[i]
+        s_seq == spin_par[i] && continue
+        cut_ex = _spin_field(ws, i)
+        for (j, q) in st.adjacency[i]
+            (st.fixed[j] == 2 && spin_seq[j] == spin_par[j] && !iszero(q)) || continue
+            cut_ex += _spin_coupling(ws, q) * spin_par[j]
+        end
+        delta_ex += s_seq * cut_ex
+    end
+    return direction * delta_ex < 0
+end
+
 function _coercive_field_witness_orig(
     ws::Workspace;
     polish::Bool=true,
@@ -594,25 +644,25 @@ function _coercive_field_witness_orig(
     if polish && direction != 0 && !isempty(free_vars)
         if _can_use_float_spin_heuristic(ws, free_vars)
             h_f, adj_f, l1_f = _build_float_spin_subproblem(ws, free_vars)
-            e_par_f = _polish_spin_state_float!(spin_s, free_vars, h_f, adj_f, l1_f, direction, mf)
+            _polish_spin_state_float!(spin_s, free_vars, h_f, adj_f, l1_f, direction, mf)
             if length(free_vars) > 1
                 seq_order = copy(free_vars)
                 tiers = zeros(Int, n)
                 ratios_f = zeros(Float64, n)
                 secondary_f = zeros(Float64, n)
                 @inbounds for i in seq_order
-                    abs_h = abs(h_f[i])
-                    l1 = l1_f[i]
+                    abs_h = _canon_zero(abs(h_f[i]))
+                    l1 = _canon_zero(l1_f[i])
                     if l1 == 0.0
                         tiers[i] = abs_h == 0.0 ? 0 : 2
                         ratios_f[i] = abs_h
                     else
                         tiers[i] = 1
-                        ratios_f[i] = abs_h / l1
+                        ratios_f[i] = _canon_zero(abs_h / l1)
                     end
                     secondary_f[i] = abs_h
                 end
-                sort!(seq_order; by = i -> (tiers[i], ratios_f[i], secondary_f[i], l1_f[i], -i), rev = true)
+                sort!(seq_order; by = i -> (tiers[i], ratios_f[i], secondary_f[i], _canon_zero(l1_f[i]), -i), rev = true)
                 spin_seq = zeros(Int, n)
                 cond_h_f = copy(h_f)
                 accum_l1_f = zeros(Float64, n)
@@ -641,8 +691,8 @@ function _coercive_field_witness_orig(
                         end
                     end
                 end
-                e_seq_f = _polish_spin_state_float!(spin_seq, free_vars, h_f, adj_f, l1_f, direction, mf)
-                if e_seq_f < e_par_f - 1e-12 * max(1.0, abs(e_par_f))
+                _polish_spin_state_float!(spin_seq, free_vars, h_f, adj_f, l1_f, direction, mf)
+                if _spin_seq_strictly_better(ws, free_vars, spin_seq, spin_s, h_f, adj_f, direction)
                     spin_s = spin_seq
                 end
             end
@@ -782,27 +832,28 @@ function _order_probing_candidates!(
         l1_f = zeros(Float64, n)
         if order === :coercive
             @inbounds for i in cand_indices
-                abs_h = abs(Float64(_spin_field(ws, i)))
+                abs_h = _canon_zero(abs(Float64(_spin_field(ws, i))))
                 l1 = 0.0
                 for (j, q) in st.adjacency[i]
                     (st.fixed[j] == 2 && !iszero(q)) || continue
                     l1 += abs(Float64(_spin_coupling(ws, q)))
                 end
+                l1 = _canon_zero(l1)
                 if l1 == 0.0
                     tiers[i] = abs_h == 0.0 ? 0 : 2
                     ratios_f[i] = abs_h
                 else
                     tiers[i] = 1
-                    ratios_f[i] = abs_h / l1
+                    ratios_f[i] = _canon_zero(abs_h / l1)
                 end
                 secondary_f[i] = abs_h
                 l1_f[i] = l1
             end
         else # :extremal
             @inbounds for i in cand_indices
-                h_i = Float64(_spin_field(ws, i))
+                h_i = _canon_zero(Float64(_spin_field(ws, i)))
                 s_i = is_bool ? (2 * w_vec[i] - 1) : w_vec[i]
-                fav_h = (-direction * s_i) * h_i
+                fav_h = _canon_zero((-direction * s_i) * h_i)
                 l1 = 0.0
                 eff_h = h_i
                 for (j, q) in st.adjacency[i]
@@ -812,16 +863,18 @@ function _order_probing_candidates!(
                     s_j = is_bool ? (2 * w_vec[j] - 1) : w_vec[j]
                     eff_h += c_ij * s_j
                 end
-                fav_eff = (-direction * s_i) * eff_h
+                l1 = _canon_zero(l1)
+                fav_eff =
+                    abs(eff_h) <= 1e-12 * (abs(h_i) + l1) ? 0.0 :
+                    _canon_zero((-direction * s_i) * eff_h)
                 if l1 == 0.0
                     tiers[i] = fav_h > 0.0 ? 2 : (fav_h == 0.0 ? 0 : -1)
                     ratios_f[i] = fav_h
                 else
                     tiers[i] = 1
-                    ratios_f[i] = fav_h / l1
+                    ratios_f[i] = _canon_zero(fav_h / l1)
                 end
                 secondary_f[i] = fav_eff
-                l1_f[i] = l1
             end
         end
         sort!(cand_indices; by = i -> (tiers[i], ratios_f[i], secondary_f[i], l1_f[i], -i), rev = true)
@@ -871,7 +924,6 @@ function _order_probing_candidates!(
                 ratios[i] = fav_h / l1
             end
             secondary[i] = fav_eff
-            l1_ex[i] = l1
         end
     end
     sort!(cand_indices; by = i -> (tiers[i], ratios[i], secondary[i], l1_ex[i], -i), rev = true)

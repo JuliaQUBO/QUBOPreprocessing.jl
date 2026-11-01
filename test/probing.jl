@@ -673,6 +673,68 @@
         @test w_zf == [0, 0, 0, 1, 1, 1]
         @test reconstruct(materialize(ws_zf), w_zf).energy.value == -2.0
 
+        # 5b. Scale-invariant witness selection on sub-1e-12 scaled models and near-tie exact fallback (#86)
+        scale_tiny = 2.0^-50
+        L_zf_tiny = Dict(i => v * scale_tiny for (i, v) in L_zf)
+        Q_zf_tiny = Dict(k => v * scale_tiny for (k, v) in Q_zf)
+        ws_zf_tiny_min = Workspace(
+            QT.Model{Int,Float64,Int}(L_zf_tiny, Q_zf_tiny; domain=:bool, sense=:min);
+            rules=:identity, integerize_scale=false,
+        )
+        w_zf_tiny_min = coercive_field_witness(ws_zf_tiny_min)
+        @test w_zf_tiny_min == [0, 0, 0, 1, 1, 1]
+        @test reconstruct(materialize(ws_zf_tiny_min), w_zf_tiny_min).energy.value == -2.0 * scale_tiny
+
+        L_zf_tiny_max = Dict(i => -v * scale_tiny for (i, v) in L_zf)
+        Q_zf_tiny_max = Dict(k => -v * scale_tiny for (k, v) in Q_zf)
+        ws_zf_tiny_max = Workspace(
+            QT.Model{Int,Float64,Int}(L_zf_tiny_max, Q_zf_tiny_max; domain=:bool, sense=:max);
+            rules=:identity, integerize_scale=false,
+        )
+        w_zf_tiny_max = coercive_field_witness(ws_zf_tiny_max)
+        @test w_zf_tiny_max == [0, 0, 0, 1, 1, 1]
+        @test reconstruct(materialize(ws_zf_tiny_max), w_zf_tiny_max).energy.value == 2.0 * scale_tiny
+
+        # Near-tie exact fallback in _spin_seq_strictly_better when |delta_f| <= 1e-11 * bound_f:
+        ws_near_tie = Workspace(
+            QT.Model{Int,Float64,Int}(
+                Dict(1 => 0.0, 2 => 0.0, 3 => 0.0),
+                Dict((1, 2) => 1.0, (1, 3) => -(1.0 + 2.0^-42));
+                domain=:spin, sense=:min,
+            );
+            rules=:identity, integerize_scale=false,
+        )
+        h_nt = [0.0, 0.0, 0.0]
+        adj_nt = [
+            [(2, 1.0), (3, -(1.0 + 2.0^-42))],
+            [(1, 1.0)],
+            [(1, -(1.0 + 2.0^-42))],
+        ]
+        @test QUBOPreprocessing._spin_seq_strictly_better(
+            ws_near_tie, [1, 2, 3], [1, 1, 1], [-1, 1, 1], h_nt, adj_nt, 1,
+        )
+        @test !QUBOPreprocessing._spin_seq_strictly_better(
+            ws_near_tie, [1, 2, 3], [-1, 1, 1], [1, 1, 1], h_nt, adj_nt, 1,
+        )
+
+        # 5c. Signed-zero canonicalization in :extremal candidate ordering on zero-field models (#86)
+        for sense in (:min, :max)
+            sgn = sense === :min ? 1.0 : -1.0
+            ws_ext_zf = Workspace(
+                QT.Model{Int,Float64,Int}(
+                    Dict(1 => 0.0, 2 => 0.0, 3 => 0.0),
+                    Dict((1, 2) => 1.0 * sgn, (2, 3) => 2.0 * sgn);
+                    domain=:spin, sense=sense,
+                );
+                rules=:identity, integerize_scale=false,
+            )
+            for w_ext in ([-1, 1, -1], [1, -1, 1])
+                c_float = [1, 2, 3]
+                QUBOPreprocessing._order_probing_candidates!(ws_ext_zf, c_float, w_ext, :extremal)
+                @test c_float == [2, 3, 1]
+            end
+        end
+
         # 6. Float64 fast path on dense distinct-denominator rational models (#86)
         n_dense = 60
         L_rat = Dict{Int,Float64}(i => (isodd(i) ? 1.0 : -1.0) / (100.0 + 3.0 * i) for i in 1:n_dense)
