@@ -49,7 +49,10 @@ that scope, which need not contain any original global optimum. The residual
 export has `certificate.scope == :assumptions`; an empty reduction chain makes
 no inference claim when only callers are present. With deductions, a separate
 ordered strong proof is included. Source fields/scale/offset are exact binary values of the
-accepted finite Float64 input. Conditioning uses `Rational{BigInt}` internally
+accepted finite Float64 input (unless the caller explicitly opts in to tolerance-based
+decimal rounding with `integerize_scale=true` and `atol > 0`, which sets
+`ws.perturbed == true` and records the largest absolute coefficient change in
+`ws.max_perturbation`). Conditioning uses `Rational{BigInt}` internally
 to prevent cancellation drift and overflow in reversible algebra. This is
 algebraic storage; inference additionally records independently verifiable proof evidence.
 

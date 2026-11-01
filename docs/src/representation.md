@@ -49,7 +49,16 @@ E(x)=\alpha\left(\beta+\sum_i L_i x_i+\sum_{i<j}Q_{ij}x_i x_j\right).
 
 Identity export preserves coefficients, signed stored zeros, label/index order,
 scale, offset, sense, domain and every variable. No arithmetic, normalization,
-zero dropping or scale folding occurs. Exact representation identity proves
+zero dropping or scale folding occurs. When `integerize_scale=true` is passed to
+`Workspace`, `reset!` or `preprocess`, default `atol=0.0` performs **exact**
+integerization only: a multiplier ``m = 2^a \cdot 5^b`` is accepted only when
+`Rational{BigInt}(v) * m` is an exact integer for every coefficient and `offset`
+(with no `Float64` product), which only factors out exact dyadic powers (``b = 0``)
+and leaves non-dyadic decimal coefficients unchanged (`ws.perturbed == false`,
+`ws.max_perturbation == 0 // 1`). Passing `atol > 0` explicitly opts in to
+tolerance-based decimal rounding (``b \ge 1``), in which case `ws.perturbed == true`
+and `ws.max_perturbation` records the largest absolute coefficient change
+``\max_v |r / m - \operatorname{Rational\{BigInt\}}(v)| > 0``. Exact representation identity proves
 that source and export represent the same problem, with an empty reduction
 chain and original scope. **It does not prove that a supplied state is optimal.**
 

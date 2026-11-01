@@ -1037,6 +1037,15 @@ end
 generation(r::ConditionedExport) = r.generation
 original_variables(r::ConditionedExport) = _labels_vector(r._snapshot)
 
+@inline function Base.getproperty(r::ConditionedExport, name::Symbol)
+    name === :perturbed && return getfield(r, :_snapshot).perturbed
+    name === :max_perturbation && return getfield(r, :_snapshot).max_perturbation
+    return getfield(r, name)
+end
+Base.propertynames(::ConditionedExport, private::Bool=false) =
+    private ? (:_snapshot, :generation, :status, :certificate, :_fixed, :_free, :_linear, :_quadratic, :_constant, :_scale, :_map, :perturbed, :max_perturbation) :
+              (:generation, :status, :certificate, :perturbed, :max_perturbation)
+
 function Base.deepcopy_internal(r::ConditionedExport{T}, dict::IdDict) where T
     haskey(dict, r) && return dict[r]::ConditionedExport{T}
     proof_copy = Base.deepcopy_internal(r.certificate.proof, dict)
@@ -1116,7 +1125,7 @@ function _conditioned_export(ws::Workspace, ::Type{T}; map::Union{Nothing,Domain
     scope = _caller_scope(ws)
     proof = _export_certificate(ws,snapshot;map=owned_map)
     steps = proof === nothing ? () : proof.steps
-    unchanged = isempty(st.fixes) && (owned_map === nothing ||
+    unchanged = isempty(st.fixes) && !s.perturbed && (owned_map === nothing ||
         (owned_map.target_domain === owned_map.source_domain && owned_map._identity_gauge))
     c_export = _direct_mapped_constant(ws, owned_map)
     cert = _ConditionedCertNT((

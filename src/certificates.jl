@@ -273,7 +273,11 @@ Owned source/generation, explicit caller scope and ordered reduction steps
 [`ProbingStep`](@ref), [`RoofDualityStep`](@ref), [`SubmodularCutStep`](@ref),
 [`MaxCutStep`](@ref)).
 Every step retains all scoped optima (`:strong`) or at least one scoped optimum
-of the evolving residual (`:weak` / non-unique argmin). Also aliased as
+of the evolving residual (`:weak` / non-unique argmin). `perturbed::Bool`
+indicates whether the workspace source snapshot differed from the caller's input
+model via opt-in tolerance-based [`integerize_scale`](@ref) (`max_perturbation > 0`),
+and `max_perturbation::Rational{BigInt}` records the largest absolute coefficient
+change (`0 // 1` when the snapshot is exact). Also aliased as
 [`ReductionCertificate`](@ref).
 """
 struct DominanceCertificate
@@ -283,8 +287,11 @@ struct DominanceCertificate
     steps::Tuple
     _source::_Snapshot
     _map::Union{Nothing,DomainGaugeMap}
+    perturbed::Bool
+    max_perturbation::_Exact
 end
-DominanceCertificate(g,cp,a,s,src) = DominanceCertificate(g,cp,a,s,src,nothing)
+DominanceCertificate(g, cp, a, s, src::_Snapshot, map=nothing) =
+    DominanceCertificate(g, cp, a, s, src, map, src.perturbed, src.max_perturbation)
 generation(c::DominanceCertificate) = c.generation
 
 function Base.deepcopy_internal(w::_ProbingPairWitness, dict::IdDict)
@@ -552,6 +559,8 @@ function Base.deepcopy_internal(c::DominanceCertificate, dict::IdDict)
         _deepcopy_steps(c.steps, dict),
         Base.deepcopy_internal(c._source, dict),
         Base.deepcopy_internal(c._map, dict),
+        c.perturbed,
+        Base.deepcopy_internal(c.max_perturbation, dict),
     )
 end
 
@@ -4727,7 +4736,11 @@ or stale branch scopes with `ArgumentError`.
 function transport_certificate(ws::Workspace, cert::DominanceCertificate, map::DomainGaugeMap)
     _validate_domain_map(ws, map; full=true)
     generation(ws) == generation(cert) || throw(ArgumentError("certificate belongs to a stale generation"))
-    _same_source(ws._snapshot, cert._source) || throw(ArgumentError("certificate source does not match workspace"))
+    (_same_source(ws._snapshot, cert._source) &&
+     cert.perturbed === ws._snapshot.perturbed &&
+     cert.max_perturbation == ws._snapshot.max_perturbation &&
+     cert.perturbed === (!iszero(cert.max_perturbation))) ||
+        throw(ArgumentError("certificate source does not match workspace"))
     cert.assumptions == _caller_scope(ws) && cert._scope_checkpoint._depth == length(ws._state.trail) ||
         throw(ArgumentError("certificate scope does not match current workspace trail"))
     _validate_checkpoint(ws, cert._scope_checkpoint)
@@ -5830,7 +5843,11 @@ function verify_certificate(ws::Workspace, cert::DominanceCertificate;
     s = ws._snapshot
     cost = length(s.labels) + length(s.linear.values) + length(s.quadratic.values)
     cost <= max_work || return VerificationResult(false,:work_limit,0)
-    _same_source(s,cert._source) || return VerificationResult(false,:different_source,cost)
+    (_same_source(s,cert._source) &&
+     cert.perturbed === s.perturbed &&
+     cert.max_perturbation == s.max_perturbation &&
+     cert.perturbed === (!iszero(cert.max_perturbation))) ||
+        return VerificationResult(false,:different_source,cost)
     if cert._map !== nothing
         ok, reason = _check_domain_map(ws, cert._map)
         ok || return VerificationResult(false, reason, cost)

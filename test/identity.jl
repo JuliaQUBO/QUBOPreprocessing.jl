@@ -225,59 +225,209 @@ end
     @test_throws ArgumentError Workspace(m)
 end
 
-@testset "integerize_scale and is_integer_scaled (#51)" begin
-    # 1. Decimal Float64 noise (-1.7999999999999998 = -0.9 - 0.9) is cleaned up into exact integers
-    #    with scale = 0.1, restoring 100% Z2 gauge invariance and clean Float64 materialization!
+@testset "integerize_scale and is_integer_scaled (#51, #87)" begin
+    # 1. Issue #87 reproducer: f(x) = 0.3*x1 + 0.6*x2 - 0.9*x1*x2 has unique exact binary64
+    #    minimizer x = (1, 1) with f(1, 1) = -2^-54 < 0. Default integerize_scale (atol = 0.0)
+    #    must be exact (no Float64 product 0.9 * 10 == 9.0, no tolerance), leaving non-dyadic
+    #    decimal coefficients unchanged so preprocess returns x = [1, 1] with a valid certificate.
+    f_87 = QT.Form{Float64}(
+        2,
+        QT.DenseLinearForm{Float64}([0.3, 0.6]),
+        QT.DictQuadraticForm{Float64}(Dict((1, 2) => -0.9)),
+        1.0,
+        0.0;
+        sense = :min,
+        domain = :bool,
+    )
+    m_87 = QT.Model{Int,Float64,Int}(QT.VariableMap{Int}(Dict(1 => 1, 2 => 2), [1, 2]), f_87)
+    for m_unpert in (integerize_scale(m_87), integerize_scale(m_87; atol = 0.0), integerize_scale(m_87; atol = 1e-20))
+        @test !is_integer_scaled(m_unpert)
+        @test QT.scale(m_unpert) == 1.0
+        @test Dict(QT.linear_terms(m_unpert)) == Dict(1 => 0.3, 2 => 0.6)
+        @test Dict(QT.quadratic_terms(m_unpert)) == Dict((1, 2) => -0.9)
+    end
+    for kw in ((;), (integerize_scale = true,), (atol = 0.0,), (atol = 1e-20,), (integerize_scale = false,))
+        ws_87, _ = preprocess(m_87; rules = :mixed, kw...)
+        @test !ws_87.perturbed
+        @test iszero(ws_87.max_perturbation)
+        mat_87 = materialize(ws_87; coefficient_type = Rational{BigInt})
+        @test !mat_87.perturbed
+        @test iszero(mat_87.max_perturbation)
+        n_res = QT.dimension(export_model(mat_87))
+        @test n_res == 0
+        x_87 = Int.(reconstruct(mat_87, zeros(Int, n_res)).state)
+        @test x_87 == [1, 1]
+        cert_87 = export_certificate(ws_87)
+        @test cert_87 !== nothing
+        @test !cert_87.perturbed
+        @test iszero(cert_87.max_perturbation)
+        @test verify_certificate(ws_87, cert_87).valid
+    end
+
+    # Explicit opt-in tolerance-based rounding (atol = 1e-12) on the #87 reproducer:
+    # records perturbed = true and the exact largest absolute coefficient change on
+    # Workspace, ExportResult/ConditionedExport, and DominanceCertificate.
+    expected_pert_87 = max(
+        abs(3 // 10 - Rational{BigInt}(0.3)),
+        abs(6 // 10 - Rational{BigInt}(0.6)),
+        abs(-9 // 10 - Rational{BigInt}(-0.9)),
+    )
+    @test expected_pert_87 == 1 // 45035996273704960
+    ws_87_opt, _ = preprocess(m_87; rules = :mixed, atol = 1e-12)
+    @test ws_87_opt.perturbed
+    @test ws_87_opt.max_perturbation == expected_pert_87
+    cert_87_opt = export_certificate(ws_87_opt)
+    @test cert_87_opt !== nothing
+    @test cert_87_opt.perturbed
+    @test cert_87_opt.max_perturbation == expected_pert_87
+    @test verify_certificate(ws_87_opt, cert_87_opt).valid
+    mat_87_opt = materialize(ws_87_opt; coefficient_type = Rational{BigInt})
+    @test mat_87_opt.perturbed
+    @test mat_87_opt.max_perturbation == expected_pert_87
+    @test !mat_87_opt.certificate.unchanged_representation
+    @test mat_87_opt.certificate.proof.perturbed
+    @test mat_87_opt.certificate.proof.max_perturbation == expected_pert_87
+
+    # Tampering with perturbed / max_perturbation on a certificate is rejected by verify_certificate
+    # and transport_certificate.
+    forged_unpert = DominanceCertificate(
+        cert_87_opt.generation,
+        cert_87_opt._scope_checkpoint,
+        cert_87_opt.assumptions,
+        cert_87_opt.steps,
+        cert_87_opt._source,
+        cert_87_opt._map,
+        false,
+        zero(Rational{BigInt}),
+    )
+    @test verify_certificate(ws_87_opt, forged_unpert).stop_reason === :different_source
+    forged_wrong_mag = DominanceCertificate(
+        cert_87_opt.generation,
+        cert_87_opt._scope_checkpoint,
+        cert_87_opt.assumptions,
+        cert_87_opt.steps,
+        cert_87_opt._source,
+        cert_87_opt._map,
+        true,
+        expected_pert_87 + (1 // 100),
+    )
+    @test verify_certificate(ws_87_opt, forged_wrong_mag).stop_reason === :different_source
+    dmap_87 = domain_map(ws_87_opt; domain = :spin)
+    @test_throws ArgumentError transport_certificate(ws_87_opt, forged_unpert, dmap_87)
+    tcert_87_opt = transport_certificate(ws_87_opt, cert_87_opt, dmap_87)
+    @test tcert_87_opt.perturbed
+    @test tcert_87_opt.max_perturbation == expected_pert_87
+    @test verify_certificate(ws_87_opt, tcert_87_opt; map = dmap_87).valid
+
+    # 2. Coefficient within atol of a decimal (0.3 + 1e-13 and L_chimera = [-0.9, -1.7999999999999998, -0.9]):
+    #    - Default (atol = 0.0) leaves the snapshot unchanged and unperturbed.
+    #    - Explicit opt-in (atol = 1e-12) rounds into exact integers with scale = 0.1 and records perturbation.
+    v_near_dec = 0.3 + 1e-13
+    m_near_dec = fixture([:x1, :x2], [v_near_dec, 0.6], [0.0 -0.9; 0.0 0.0]; domain = :bool, sense = :min)
+    @test !is_integer_scaled(integerize_scale(m_near_dec))
+    ws_nd_exact = Workspace(m_near_dec; integerize_scale = true)
+    @test !is_integer_scaled(ws_nd_exact)
+    @test !ws_nd_exact.perturbed
+    @test iszero(ws_nd_exact.max_perturbation)
+    @test materialize(ws_nd_exact).certificate.unchanged_representation
+    ws_nd_opt = Workspace(m_near_dec; integerize_scale = true, atol = 1e-12)
+    @test is_integer_scaled(ws_nd_opt)
+    @test ws_nd_opt.perturbed
+    @test ws_nd_opt.max_perturbation == abs(3 // 10 - Rational{BigInt}(v_near_dec))
+    mat_nd_opt = materialize(ws_nd_opt)
+    @test mat_nd_opt.perturbed
+    @test mat_nd_opt.max_perturbation == ws_nd_opt.max_perturbation
+    @test !mat_nd_opt.certificate.unchanged_representation
+
     L_chimera = [-0.9, -1.7999999999999998, -0.9]
     Q_chimera = [0.0 1.8 0.0; 0.0 0.0 1.8; 0.0 0.0 0.0]
+    expected_pert_ch = max(
+        abs(-9 // 10 - Rational{BigInt}(-0.9)),
+        abs(-18 // 10 - Rational{BigInt}(-1.7999999999999998)),
+        abs(18 // 10 - Rational{BigInt}(1.8)),
+    )
     for kind in (:sparse, :dense, :dict)
         m_ch = fixture([:x1, :x2, :x3], L_chimera, Q_chimera; kind, domain=:bool, sense=:min)
         @test !is_integer_scaled(m_ch)
         ws_raw = Workspace(m_ch)
         @test !is_integer_scaled(ws_raw)
         @test !is_gauge_invariant(ws_raw)
+        @test !ws_raw.perturbed
+        @test iszero(ws_raw.max_perturbation)
 
-        m_ch_int = integerize_scale(m_ch)
+        # Default integerize_scale (atol = 0.0) leaves non-dyadic decimals unchanged
+        m_ch_default = integerize_scale(m_ch)
+        @test !is_integer_scaled(m_ch_default)
+        @test QT.scale(m_ch_default) == 1.0
+        ws_int_default = Workspace(m_ch; integerize_scale=true)
+        @test !is_integer_scaled(ws_int_default)
+        @test !ws_int_default.perturbed
+        @test iszero(ws_int_default.max_perturbation)
+
+        # Opt-in tolerance-based decimal rounding (atol = 1e-12)
+        m_ch_int = integerize_scale(m_ch; atol=1e-12)
         @test is_integer_scaled(m_ch_int)
         @test QT.scale(m_ch_int) == 0.1
         @test Dict(QT.linear_terms(m_ch_int)) == Dict(1 => -9.0, 2 => -18.0, 3 => -9.0)
         @test Dict(ij => v for (ij, v) in QT.quadratic_terms(m_ch_int) if !iszero(v)) == Dict((1, 2) => 18.0, (2, 3) => 18.0)
 
-        # Workspace(...; integerize_scale=true) and reset!(...; integerize_scale=true)
-        ws_int = Workspace(m_ch; integerize_scale=true)
+        # Workspace(...; integerize_scale=true, atol=1e-12) and reset!(...; integerize_scale=true, atol=1e-12)
+        ws_int = Workspace(m_ch; integerize_scale=true, atol=1e-12)
         @test is_integer_scaled(ws_int)
         @test is_gauge_invariant(ws_int)
         @test zero_field_fraction(ws_int) == 1.0
         @test ws_int._snapshot.scale == 0.1
+        @test ws_int.perturbed
+        @test ws_int.max_perturbation == expected_pert_ch
 
-        reset!(ws_raw, m_ch; integerize_scale=true)
+        reset!(ws_raw, m_ch; integerize_scale=true, atol=1e-12)
         @test is_integer_scaled(ws_raw)
         @test is_gauge_invariant(ws_raw)
+        @test ws_raw.perturbed
+        @test ws_raw.max_perturbation == expected_pert_ch
 
-        # preprocess(m_ch; rules=:identity) preserves raw Float64 by default,
-        # while preprocess(m_ch; rules=:mixed) integerizes by default!
+        reset!(ws_raw, m_ch; integerize_scale=true)
+        @test !is_integer_scaled(ws_raw)
+        @test !ws_raw.perturbed
+        @test iszero(ws_raw.max_perturbation)
+
+        # preprocess(m_ch; rules=:identity) and default preprocess(m_ch; rules=:mixed) preserve exact binary64,
+        # while preprocess(m_ch; rules=:mixed, atol=1e-12) opts into decimal rounding and records perturbation
         ws_id, _ = preprocess(m_ch; rules=:identity)
         @test !is_integer_scaled(ws_id)
-        ws_mix, rep_mix = preprocess(m_ch; rules=:mixed)
+        @test !ws_id.perturbed
+        ws_mix_exact, _ = preprocess(m_ch; rules=:mixed)
+        @test !is_integer_scaled(ws_mix_exact)
+        @test !ws_mix_exact.perturbed
+        @test iszero(ws_mix_exact.max_perturbation)
+
+        ws_mix, rep_mix = preprocess(m_ch; rules=:mixed, atol=1e-12)
         @test is_integer_scaled(ws_mix)
         @test ws_mix._snapshot.scale == 0.1
+        @test ws_mix.perturbed
+        @test ws_mix.max_perturbation == expected_pert_ch
         mat_mix = materialize(ws_mix)
         @test QT.scale(export_model(mat_mix)) == 0.1
+        @test mat_mix.perturbed
+        @test mat_mix.max_perturbation == expected_pert_ch
 
-        # Explicit override integerize_scale=false on rules=:mixed
-        ws_mix_raw, _ = preprocess(m_ch; rules=:mixed, integerize_scale=false)
+        # Explicit override integerize_scale=false on rules=:mixed even when atol=1e-12 is passed
+        ws_mix_raw, _ = preprocess(m_ch; rules=:mixed, integerize_scale=false, atol=1e-12)
         @test !is_integer_scaled(ws_mix_raw)
+        @test !ws_mix_raw.perturbed
+        @test iszero(ws_mix_raw.max_perturbation)
     end
 
-    # 2. Sub-ulp near-tie perturbations on dyadic values must never be rounded away
+    # 3. Sub-ulp near-tie perturbations on dyadic values must never be rounded away
     m_near = fixture([:x1, :x2, :x3], [-0.75 + 2.0^-53, -prevfloat(0.5), 0.0], [0.0 1.0 0.5; 0.0 0.0 0.0; 0.0 0.0 0.0])
     @test !is_integer_scaled(m_near)
-    m_near_out = integerize_scale(m_near)
-    @test !is_integer_scaled(m_near_out)
-    @test QT.scale(m_near_out) == 1.0
-    @test Dict(QT.linear_terms(m_near_out)) == Dict(QT.linear_terms(m_near))
+    for m_near_out in (integerize_scale(m_near), integerize_scale(m_near; atol=1e-12))
+        @test !is_integer_scaled(m_near_out)
+        @test QT.scale(m_near_out) == 1.0
+        @test Dict(QT.linear_terms(m_near_out)) == Dict(QT.linear_terms(m_near))
+    end
 
-    # 3. DenseQuadraticForm with non-integer entries in the masked lower triangle of UpperTriangular(A)
+    # 4. DenseQuadraticForm with non-integer entries in the masked lower triangle of UpperTriangular(A)
     A_int_upper = [0.0 2.0; 1.0 / 3.0 0.0]
     m_masked_int = fixture([:x1, :x2], [1.0, -3.0], A_int_upper; kind=:dense)
     @test is_integer_scaled(m_masked_int)
@@ -289,12 +439,20 @@ end
     m_masked_dyadic_int = integerize_scale(m_masked_dyadic)
     @test is_integer_scaled(m_masked_dyadic_int)
     @test QT.scale(m_masked_dyadic_int) == 0.25
-    @test is_integer_scaled(Workspace(m_masked_dyadic; integerize_scale=true))
+    ws_masked_dyadic = Workspace(m_masked_dyadic; integerize_scale=true)
+    @test is_integer_scaled(ws_masked_dyadic)
+    @test !ws_masked_dyadic.perturbed
+    @test iszero(ws_masked_dyadic.max_perturbation)
 
-    # 4. Validation of kwargs and unsupported inputs
+    # 5. Validation of kwargs and unsupported inputs
     m_ok = fixture([:x, :y], [0.5, -0.25], [0.0 0.75; 0.0 0.0]; offset=0.5, scale=2.0)
     @test is_integer_scaled(integerize_scale(m_ok))
     @test QT.scale(integerize_scale(m_ok)) == 0.5
+    ws_ok = Workspace(m_ok; integerize_scale=true)
+    @test is_integer_scaled(ws_ok)
+    @test !ws_ok.perturbed
+    @test iszero(ws_ok.max_perturbation)
+    @test propertynames(ws_ok) == (:perturbed, :max_perturbation)
     @test_throws ArgumentError is_integer_scaled(nothing)
     @test_throws ArgumentError integerize_scale(nothing)
     @test_throws ArgumentError integerize_scale(m_ok; max_decimals=-1)
