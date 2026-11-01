@@ -273,12 +273,12 @@ Owned source/generation, explicit caller scope and ordered reduction steps
 [`ProbingStep`](@ref), [`RoofDualityStep`](@ref), [`SubmodularCutStep`](@ref),
 [`MaxCutStep`](@ref)).
 Every step retains all scoped optima (`:strong`) or at least one scoped optimum
-of the evolving residual (`:weak` / non-unique argmin). `perturbed::Bool`
-indicates whether the workspace source snapshot differed from the caller's input
-model via opt-in tolerance-based [`integerize_scale`](@ref) (`max_perturbation > 0`),
-and `max_perturbation::Rational{BigInt}` records the largest absolute coefficient
-change (`0 // 1` when the snapshot is exact). Also aliased as
-[`ReductionCertificate`](@ref).
+of the evolving residual (`:weak` / non-unique argmin).
+`max_perturbation::Rational{BigInt}` records the largest absolute change in any
+effective objective coefficient or scaled offset (including `scale` and `offset`:
+``\\max_v |\\operatorname{Rational\\{BigInt\\}}(\\alpha_{\\text{new}}) \\cdot \\operatorname{Rational\\{BigInt\\}}(v_{\\text{new}}) - \\operatorname{Rational\\{BigInt\\}}(\\alpha) \\cdot \\operatorname{Rational\\{BigInt\\}}(v)|``;
+`0 // 1` when the source snapshot is exact), and `perturbed::Bool` is `true` iff
+`max_perturbation > 0 // 1`. Also aliased as [`ReductionCertificate`](@ref).
 """
 struct DominanceCertificate
     generation::Generation

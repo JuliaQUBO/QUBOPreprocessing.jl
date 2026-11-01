@@ -264,15 +264,39 @@ end
         @test verify_certificate(ws_87, cert_87).valid
     end
 
+    function effective_perturbation(m_in, m_out)
+        R = Rational{BigInt}
+        s_in = R(QT.scale(m_in))
+        s_out = R(QT.scale(m_out))
+        max_err = abs(s_out * R(QT.offset(m_out)) - s_in * R(QT.offset(m_in)))
+        lin_in = Dict{Int,Float64}(QT.linear_terms(m_in))
+        lin_out = Dict{Int,Float64}(QT.linear_terms(m_out))
+        for i in 1:QT.dimension(m_in)
+            err = abs(s_out * R(get(lin_out, i, 0.0)) - s_in * R(get(lin_in, i, 0.0)))
+            err > max_err && (max_err = err)
+        end
+        quad_in = Dict{Tuple{Int,Int},Float64}(QT.quadratic_terms(m_in))
+        quad_out = Dict{Tuple{Int,Int},Float64}(QT.quadratic_terms(m_out))
+        for ij in union(keys(quad_in), keys(quad_out))
+            err = abs(s_out * R(get(quad_out, ij, 0.0)) - s_in * R(get(quad_in, ij, 0.0)))
+            err > max_err && (max_err = err)
+        end
+        return max_err
+    end
+
     # Explicit opt-in tolerance-based rounding (atol = 1e-12) on the #87 reproducer:
-    # records perturbed = true and the exact largest absolute coefficient change on
-    # Workspace, ExportResult/ConditionedExport, and DominanceCertificate.
+    # records perturbed = true and the exact largest absolute effective-coefficient change
+    # (including stored scale) on Workspace, ExportResult/ConditionedExport, and DominanceCertificate.
     expected_pert_87 = max(
-        abs(3 // 10 - Rational{BigInt}(0.3)),
-        abs(6 // 10 - Rational{BigInt}(0.6)),
-        abs(-9 // 10 - Rational{BigInt}(-0.9)),
+        abs(Rational{BigInt}(0.1) * 3 - Rational{BigInt}(1.0) * Rational{BigInt}(0.3)),
+        abs(Rational{BigInt}(0.1) * 6 - Rational{BigInt}(1.0) * Rational{BigInt}(0.6)),
+        abs(Rational{BigInt}(0.1) * (-9) - Rational{BigInt}(1.0) * Rational{BigInt}(-0.9)),
     )
-    @test expected_pert_87 == 1 // 45035996273704960
+    @test expected_pert_87 == 1 // 18014398509481984
+    ws_87_id = Workspace(m_87; integerize_scale = true, atol = 1e-12)
+    @test ws_87_id.perturbed
+    @test ws_87_id.max_perturbation == expected_pert_87
+    @test effective_perturbation(m_87, export_model(materialize(ws_87_id))) == expected_pert_87
     ws_87_opt, _ = preprocess(m_87; rules = :mixed, atol = 1e-12)
     @test ws_87_opt.perturbed
     @test ws_87_opt.max_perturbation == expected_pert_87
@@ -287,6 +311,50 @@ end
     @test !mat_87_opt.certificate.unchanged_representation
     @test mat_87_opt.certificate.proof.perturbed
     @test mat_87_opt.certificate.proof.max_perturbation == expected_pert_87
+
+    # Stored-scale rounding in opt-in decimal path:
+    # - [0.1, 1e12] at scale 1.0 -> stored [1.0, 1e13] at scale 0.1; effective change on 1e12 is ~5.55e-5.
+    # - Single coefficient [0.2] at scale 1.0 -> stored [1.0] at scale 0.2; exact objective is preserved
+    #   (max_perturbation == 0 // 1, perturbed == false).
+    # - Non-zero offset and non-unit scale included in effective perturbation.
+    # - [0.9] with max_decimals = 53 integerizes exactly with m = 2^53 under default atol = 0.0.
+    m_scale_amp = fixture([:x1, :x2], [0.1, 1e12], zeros(2, 2); domain = :bool, sense = :min, scale = 1.0, offset = 0.0)
+    ws_scale_amp = Workspace(m_scale_amp; integerize_scale = true, atol = 1e-12)
+    out_scale_amp = export_model(materialize(ws_scale_amp))
+    @test QT.scale(out_scale_amp) == 0.1
+    @test Dict(QT.linear_terms(out_scale_amp)) == Dict(1 => 1.0, 2 => 1e13)
+    @test ws_scale_amp.perturbed
+    @test ws_scale_amp.max_perturbation == 244140625 // 4398046511104
+    @test ws_scale_amp.max_perturbation == effective_perturbation(m_scale_amp, out_scale_amp)
+
+    m_offset_amp = fixture([:x1], [0.1], zeros(1, 1); domain = :bool, sense = :min, scale = -2.5, offset = 1e12)
+    ws_offset_amp = Workspace(m_offset_amp; integerize_scale = true, atol = 1e-12)
+    out_offset_amp = export_model(materialize(ws_offset_amp))
+    @test ws_offset_amp.perturbed
+    @test ws_offset_amp.max_perturbation == effective_perturbation(m_offset_amp, out_offset_amp)
+
+    m_exact_02 = fixture([:x1], [0.2], zeros(1, 1); domain = :bool, sense = :min, scale = 1.0, offset = 0.0)
+    ws_exact_02 = Workspace(m_exact_02; integerize_scale = true, atol = 1e-12)
+    mat_exact_02 = materialize(ws_exact_02)
+    out_exact_02 = export_model(mat_exact_02)
+    @test is_integer_scaled(ws_exact_02)
+    @test QT.scale(out_exact_02) == 0.2
+    @test Dict(QT.linear_terms(out_exact_02)) == Dict(1 => 1.0)
+    @test iszero(effective_perturbation(m_exact_02, out_exact_02))
+    @test !ws_exact_02.perturbed
+    @test iszero(ws_exact_02.max_perturbation)
+    @test !mat_exact_02.perturbed
+    @test iszero(mat_exact_02.max_perturbation)
+    @test mat_exact_02.certificate.unchanged_representation
+
+    m_dyadic_53 = fixture([:x1], [0.9], zeros(1, 1); domain = :bool, sense = :min)
+    ws_dyadic_53 = Workspace(m_dyadic_53; integerize_scale = true, max_decimals = 53)
+    out_dyadic_53 = export_model(materialize(ws_dyadic_53))
+    @test is_integer_scaled(ws_dyadic_53)
+    @test QT.scale(out_dyadic_53) == 2.0^-53
+    @test iszero(effective_perturbation(m_dyadic_53, out_dyadic_53))
+    @test !ws_dyadic_53.perturbed
+    @test iszero(ws_dyadic_53.max_perturbation)
 
     # Tampering with perturbed / max_perturbation on a certificate is rejected by verify_certificate
     # and transport_certificate.
@@ -333,8 +401,8 @@ end
     ws_nd_opt = Workspace(m_near_dec; integerize_scale = true, atol = 1e-12)
     @test is_integer_scaled(ws_nd_opt)
     @test ws_nd_opt.perturbed
-    @test ws_nd_opt.max_perturbation == abs(3 // 10 - Rational{BigInt}(v_near_dec))
     mat_nd_opt = materialize(ws_nd_opt)
+    @test ws_nd_opt.max_perturbation == effective_perturbation(m_near_dec, export_model(mat_nd_opt))
     @test mat_nd_opt.perturbed
     @test mat_nd_opt.max_perturbation == ws_nd_opt.max_perturbation
     @test !mat_nd_opt.certificate.unchanged_representation
@@ -342,9 +410,9 @@ end
     L_chimera = [-0.9, -1.7999999999999998, -0.9]
     Q_chimera = [0.0 1.8 0.0; 0.0 0.0 1.8; 0.0 0.0 0.0]
     expected_pert_ch = max(
-        abs(-9 // 10 - Rational{BigInt}(-0.9)),
-        abs(-18 // 10 - Rational{BigInt}(-1.7999999999999998)),
-        abs(18 // 10 - Rational{BigInt}(1.8)),
+        abs(Rational{BigInt}(0.1) * (-9) - Rational{BigInt}(1.0) * Rational{BigInt}(-0.9)),
+        abs(Rational{BigInt}(0.1) * (-18) - Rational{BigInt}(1.0) * Rational{BigInt}(-1.7999999999999998)),
+        abs(Rational{BigInt}(0.1) * 18 - Rational{BigInt}(1.0) * Rational{BigInt}(1.8)),
     )
     for kind in (:sparse, :dense, :dict)
         m_ch = fixture([:x1, :x2, :x3], L_chimera, Q_chimera; kind, domain=:bool, sense=:min)
@@ -370,6 +438,7 @@ end
         @test QT.scale(m_ch_int) == 0.1
         @test Dict(QT.linear_terms(m_ch_int)) == Dict(1 => -9.0, 2 => -18.0, 3 => -9.0)
         @test Dict(ij => v for (ij, v) in QT.quadratic_terms(m_ch_int) if !iszero(v)) == Dict((1, 2) => 18.0, (2, 3) => 18.0)
+        @test effective_perturbation(m_ch, m_ch_int) == expected_pert_ch
 
         # Workspace(...; integerize_scale=true, atol=1e-12) and reset!(...; integerize_scale=true, atol=1e-12)
         ws_int = Workspace(m_ch; integerize_scale=true, atol=1e-12)

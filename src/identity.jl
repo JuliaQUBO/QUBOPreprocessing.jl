@@ -347,8 +347,9 @@ function _integerize_snapshot(s::_Snapshot; max_decimals::Integer=9, atol::Real=
     for (m_big, a, b) in candidates
         α_new = s.scale / Float64(m_big)
         (!isfinite(α_new) || iszero(α_new) || issubnormal(α_new)) && continue
+        α_new_rat = Rational{BigInt}(α_new)
         if exact_only || b == 0
-            Rational{BigInt}(α_new) * m_big == scale_rat || continue
+            α_new_rat * m_big == scale_rat || continue
         end
 
         ok = true
@@ -385,7 +386,7 @@ function _integerize_snapshot(s::_Snapshot; max_decimals::Integer=9, atol::Real=
                     ok = false
                     break
                 end
-                coeff_err = err_rat // m_big
+                coeff_err = abs(α_new_rat * r_big - scale_rat * v_rat)
                 coeff_err > max_coeff_err && (max_coeff_err = coeff_err)
                 has_odd |= isodd(r_big)
                 has_non5 |= !iszero(rem(r_big, 5))
@@ -399,7 +400,7 @@ function _integerize_snapshot(s::_Snapshot; max_decimals::Integer=9, atol::Real=
             total_pert = max(s.max_perturbation, max_coeff_err)
             return _Snapshot(s.labels, s.label_type, s.state_type, l_new, q_new,
                              α_new, offset_new, s.sense, s.domain,
-                             s.perturbed || !iszero(total_pert), total_pert)
+                             !iszero(total_pert), total_pert)
         end
     end
 
@@ -424,21 +425,26 @@ is_integer_scaled(model) = throw(ArgumentError("expected a QUBOTools.Model with 
     integerize_scale(model; max_decimals::Integer=9, atol::Real=0.0)
 
 Return an owned copy of `model` where the smallest multiplier ``m = 2^a \\cdot 5^b``
-(with ``0 \\le a, b \\le \\text{max\\_decimals}``) that scales all linear coefficients,
-quadratic coefficients, and `offset` to integers is factored into `scale(model) / m`.
+in the bounded search range ``0 \\le a, b \\le \\min(\\text{max\\_decimals}, 300)``
+(with ``m \\le 2^{53}`` and all scaled integers ``|r| \\le 2^{53}``) that scales
+all linear coefficients, quadratic coefficients, and `offset` to integers is
+factored into `scale(model) / m`.
 
 By default (`atol=0.0`), the rescaled snapshot is **exact**: a multiplier ``m`` is
 accepted only when `Rational{BigInt}(v) * m` is an exact integer for every
-coefficient and `offset` (and `Rational{BigInt}(scale(model) / m) * m == Rational{BigInt}(scale(model))`),
-using no tolerance and no `Float64` product. Because finite binary64 numbers are
-dyadic rationals, `atol=0.0` only factors out exact dyadic denominators (``b = 0``)
-and leaves non-dyadic decimal coefficients unchanged.
+coefficient and `offset` and `Rational{BigInt}(scale(model) / m) * m == Rational{BigInt}(scale(model))`,
+using no tolerance and no `Float64` product. Only exact dyadic powers (``b = 0``,
+``0 \\le a \\le \\text{max\\_decimals}``) are considered under `atol=0.0`; coefficients
+whose binary64 denominator exceeds ``2^{\\text{max\\_decimals}}`` (such as binary64
+approximations of `0.1`, `0.3`, `0.9` under the default `max_decimals=9`) remain
+unchanged.
 
-Passing `atol > 0` explicitly opts in to tolerance-based decimal rounding (``b \\ge 1``),
+Passing `atol > 0` explicitly opts in to tolerance-based decimal multipliers (``b \\ge 1``),
 accepting irreducible ``(a, b)`` when every non-zero coefficient and `offset` satisfies
 `abs(Rational{BigInt}(v) * m - r) <= Rational{BigInt}(Float64(atol)) * abs(r)` in exact
-rational arithmetic. When `atol > 0` rounds any coefficient, the rescaled model is a
-perturbed approximation of `model`.
+rational arithmetic. When the accepted multiplier changes any effective objective term
+``\\operatorname{Rational\\{BigInt\\}}(\\alpha_{\\text{new}}) \\cdot r \\ne \\operatorname{Rational\\{BigInt\\}}(\\alpha) \\cdot \\operatorname{Rational\\{BigInt\\}}(v)``,
+the rescaled model is a perturbed approximation of `model`.
 """
 function integerize_scale(
     model::QT.Model{V,Float64,U};
@@ -478,17 +484,22 @@ end
 Privately snapshot a finite Float64 QUBOTools model and its ordered labels.
 `:identity` performs no inference; `:dominance` prepares exact bound caches and
 a deterministic queue for [`propagate!`](@ref). When `integerize_scale=true`,
-the snapshot factors any common denominator ``m = 2^a \\cdot 5^b`` into
-`scale(model) / m` via [`integerize_scale`](@ref) before building exact rational
-state. With the default `atol=0.0`, this rescaling is **exact** (`Rational{BigInt}(v) * m`
-must be an integer for every coefficient and `offset` with no `Float64` product);
-passing `atol > 0` opts in to tolerance-based decimal rounding.
+the snapshot searches ``0 \\le a, b \\le \\min(\\text{max\\_decimals}, 300)`` for the
+smallest common denominator ``m = 2^a \\cdot 5^b`` to factor into `scale(model) / m`
+via [`integerize_scale`](@ref) before building exact rational state. With the
+default `atol=0.0`, this rescaling is **exact** (`Rational{BigInt}(v) * m` must be
+an integer for every coefficient and `offset` and `Rational{BigInt}(scale(model) / m) * m == Rational{BigInt}(scale(model))`,
+with no `Float64` product); passing `atol > 0` opts in to tolerance-based decimal
+rounding.
 
-`ws.perturbed::Bool` records whether tolerance-based integerization modified any
-coefficient (`ws.max_perturbation > 0`), and `ws.max_perturbation::Rational{BigInt}`
-records the largest absolute coefficient change ``\\max_v |r / m - \\operatorname{Rational\\{BigInt\\}}(v)|``
-(`0 // 1` when the snapshot is exact). Both fields are also recorded on exported
-certificates ([`DominanceCertificate`](@ref) / [`ReductionCertificate`](@ref)).
+`ws.max_perturbation::Rational{BigInt}` records the largest absolute change in any
+effective objective coefficient or scaled offset (in objective units, including
+`scale` and `offset`) between the stored snapshot and the input model:
+``\\max_v |\\operatorname{Rational\\{BigInt\\}}(\\alpha_{\\text{new}}) \\cdot \\operatorname{Rational\\{BigInt\\}}(v_{\\text{new}}) - \\operatorname{Rational\\{BigInt\\}}(\\alpha) \\cdot \\operatorname{Rational\\{BigInt\\}}(v)|``
+(`0 // 1` when the snapshot is exact), and `ws.perturbed::Bool` is `true` iff
+`ws.max_perturbation > 0 // 1`. Both fields are also recorded on exported
+certificates ([`DominanceCertificate`](@ref) / [`ReductionCertificate`](@ref))
+and exports ([`ExportResult`](@ref) / [`ConditionedExport`](@ref)).
 
 Explicit caller assumptions and certified deductions have separate provenance and
 can be rolled back. Source edits never change the snapshot; use [`reset!`](@ref)
@@ -551,8 +562,10 @@ end
 Validate a fresh snapshot before committing it. Failed validation preserves the
 old workspace. Success creates a fresh generation, including for an identical
 source. Owned exports remain evidence for their historical generation. With default
-`atol=0.0`, `integerize_scale=true` is exact; passing `atol > 0` opts in to
-tolerance-based rounding and updates `ws.perturbed` and `ws.max_perturbation`.
+`atol=0.0`, `integerize_scale=true` is exact (`ws.perturbed == false`,
+`ws.max_perturbation == 0 // 1`); passing `atol > 0` opts in to tolerance-based
+decimal rounding and updates `ws.perturbed` and `ws.max_perturbation` from the
+stored scale and coefficients/offset.
 """
 function reset!(
     ws::Workspace,
@@ -719,11 +732,12 @@ Return `(workspace, report)` using the same snapshot path as [`Workspace`](@ref)
 `:identity` returns a no-inference `IdentityReport`; `:dominance` runs
 [`propagate!`](@ref) with forwarded keyword limits and returns its report.
 When `rules !== :identity`, `integerize_scale` defaults to `true` with `atol=0.0`,
-so exact dyadic denominators are factored into `scale` before reduction while
-non-dyadic decimal coefficients are left unchanged (`ws.perturbed == false`,
+so only exact dyadic denominators ``2^a`` within `0 <= a <= max_decimals` are
+factored into `scale` before reduction (`ws.perturbed == false`,
 `ws.max_perturbation == 0 // 1`). Passing `atol > 0` explicitly opts in to
-tolerance-based decimal rounding and records the perturbation on `ws` and its
-exported certificates. No model is materialized implicitly.
+tolerance-based decimal rounding and records any resulting effective-coefficient
+or scaled-offset perturbation on `ws` and its exported certificates. No model is
+materialized implicitly.
 """
 function preprocess(
     model;

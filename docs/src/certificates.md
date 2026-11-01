@@ -140,8 +140,9 @@ Each `DominanceCertificate` (aliased as `ReductionCertificate`) owns a source
 snapshot, generation, branch-specific checkpoint, explicit caller assumptions,
 ordered `steps` (`DominanceStep`, `RelationStep`, `EliminationStep`, etc.), and
 perturbation metadata (`perturbed::Bool` and `max_perturbation::Rational{BigInt}`,
-indicating whether opt-in tolerance-based `integerize_scale` with `atol > 0`
-modified the source snapshot relative to the caller's input model). Because steps are composed sequentially:
+recording the largest absolute change in any effective objective coefficient or
+scaled offset between the stored source snapshot and the caller's input model,
+with `perturbed == (max_perturbation > 0 // 1)`). Because steps are composed sequentially:
 
 1. If ``F_k`` preserves all (or at least one) optima of ``F_{k-1}`` and step ``k``
    is certified on the evolved residual ``F_k``, then ``F_{k+1}`` preserves all
