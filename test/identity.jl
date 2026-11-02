@@ -311,6 +311,15 @@ end
     @test !mat_87_opt.certificate.unchanged_representation
     @test mat_87_opt.certificate.proof.perturbed
     @test mat_87_opt.certificate.proof.max_perturbation == expected_pert_87
+    exp_87_id = materialize(ws_87_id)
+    @test exp_87_id isa ExportResult
+    @test mat_87_opt isa ConditionedExport
+    for x in (ws_87_opt, exp_87_id, mat_87_opt)
+        @test :perturbed in propertynames(x) && :max_perturbation in propertynames(x)
+        @test :_snapshot ∉ propertynames(x)
+        @test :_snapshot in propertynames(x, true)
+        @test all(p -> (getproperty(x, p); true), propertynames(x, true))
+    end
 
     # Stored-scale rounding in opt-in decimal path:
     # - [0.1, 1e12] at scale 1.0 -> stored [1.0, 1e13] at scale 0.1; effective change on 1e12 is ~5.55e-5.

@@ -55,7 +55,7 @@ integerization only over the bounded search range
 ``0 \le a, b \le \min(\text{max\_decimals}, 300)``: a multiplier ``m = 2^a \cdot 5^b``
 is accepted only when `Rational{BigInt}(v) * m` is an exact integer for every
 coefficient and `offset` and `Rational{BigInt}(scale / m) * m == Rational{BigInt}(scale)`
-(with no `Float64` product), which only accepts exact dyadic powers ``2^a``
+(with no rounding), which only accepts exact dyadic powers ``2^a``
 (``b = 0``) within `0 <= a <= max_decimals` and leaves coefficients whose binary64
 denominator exceeds ``2^{\text{max\_decimals}}`` (such as `0.1`, `0.3`, `0.9`
 under the default `max_decimals=9`) unchanged (`ws.perturbed == false`,

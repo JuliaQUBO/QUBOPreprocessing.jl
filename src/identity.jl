@@ -280,6 +280,11 @@ function _is_integer_snapshot(s::_Snapshot)::Bool
     return true
 end
 
+# Scaling by m = 2^a is exact in Float64 for every multiplier the search accepts,
+# so rational rounding is needed only for decimal multipliers.
+_scale_value(v::Float64, m_big::BigInt) =
+    iszero(v) ? v : ispow2(m_big) ? v * Float64(m_big) : Float64(round(BigInt, Rational{BigInt}(v) * m_big))
+
 function _scale_storage(st::_Storage, m_big::BigInt)::_Storage
     len = length(st.values)
     len == 0 && return st
@@ -289,14 +294,14 @@ function _scale_storage(st::_Storage, m_big::BigInt)::_Storage
         for col in 1:n, row in 1:(col - 1)
             idx = (col - 1) * n + row
             v = st.values[idx]
-            scaled[idx] = iszero(v) ? v : Float64(round(BigInt, Rational{BigInt}(v) * m_big))
+            scaled[idx] = _scale_value(v, m_big)
         end
         return _Storage(st.kind, st.shape, scaled, st.indices, st.pair_indices, st.pointers)
     else
         scaled = Vector{Float64}(undef, len)
         for i in 1:len
             v = st.values[i]
-            scaled[i] = iszero(v) ? v : Float64(round(BigInt, Rational{BigInt}(v) * m_big))
+            scaled[i] = _scale_value(v, m_big)
         end
         return _Storage(st.kind, st.shape, scaled, st.indices, st.pair_indices, st.pointers)
     end
@@ -327,7 +332,8 @@ function _integerize_snapshot(s::_Snapshot; max_decimals::Integer=9, atol::Real=
     isempty(vals) && return s
 
     max_d = min(Int(max_decimals), 300)
-    max_int_big = BigInt(maxintfloat(Float64))
+    max_int = maxintfloat(Float64)
+    max_int_big = BigInt(max_int)
     exact_only = iszero(atol)
     atol_rat = exact_only ? zero(Rational{BigInt}) : Rational{BigInt}(Float64(atol))
     scale_rat = Rational{BigInt}(s.scale)
@@ -356,26 +362,27 @@ function _integerize_snapshot(s::_Snapshot; max_decimals::Integer=9, atol::Real=
         has_odd = false
         has_non5 = false
         max_coeff_err = zero(Rational{BigInt})
-        for k in eachindex(vals)
-            if k > populated
-                populated = k
-                rat_vals[k] = Rational{BigInt}(vals[k])
+        if b == 0
+            # Multiplying binary64 by 2^a is exact unless it overflows, so the
+            # Float64 product decides integrality without rational arithmetic.
+            m_f = Float64(m_big)
+            for v in vals
+                y = v * m_f
+                if !(isfinite(y) && isinteger(y) && abs(y) <= max_int)
+                    ok = false
+                    break
+                end
+                has_odd |= !iszero(rem(y, 2.0))
             end
-            v_rat = rat_vals[k]
-            y_rat = v_rat * m_big
-            if exact_only || b == 0
-                if denominator(y_rat) != 1
-                    ok = false
-                    break
+        else
+            # Decimal multipliers are searched only when atol > 0.
+            for k in eachindex(vals)
+                if k > populated
+                    populated = k
+                    rat_vals[k] = Rational{BigInt}(vals[k])
                 end
-                r_big = numerator(y_rat)
-                if iszero(r_big) || abs(r_big) > max_int_big
-                    ok = false
-                    break
-                end
-                has_odd |= isodd(r_big)
-                has_non5 |= !iszero(rem(r_big, 5))
-            else
+                v_rat = rat_vals[k]
+                y_rat = v_rat * m_big
                 r_big = round(BigInt, y_rat)
                 if iszero(r_big) || abs(r_big) > max_int_big
                     ok = false
@@ -396,7 +403,7 @@ function _integerize_snapshot(s::_Snapshot; max_decimals::Integer=9, atol::Real=
         if ok && (a == 0 || has_odd) && (b == 0 || has_non5)
             l_new = _scale_storage(s.linear, m_big)
             q_new = _scale_storage(s.quadratic, m_big)
-            offset_new = iszero(s.offset) ? s.offset : Float64(round(BigInt, Rational{BigInt}(s.offset) * m_big))
+            offset_new = _scale_value(s.offset, m_big)
             total_pert = max(s.max_perturbation, max_coeff_err)
             return _Snapshot(s.labels, s.label_type, s.state_type, l_new, q_new,
                              α_new, offset_new, s.sense, s.domain,
@@ -433,7 +440,7 @@ factored into `scale(model) / m`.
 By default (`atol=0.0`), the rescaled snapshot is **exact**: a multiplier ``m`` is
 accepted only when `Rational{BigInt}(v) * m` is an exact integer for every
 coefficient and `offset` and `Rational{BigInt}(scale(model) / m) * m == Rational{BigInt}(scale(model))`,
-using no tolerance and no `Float64` product. Only exact dyadic powers (``b = 0``,
+using no tolerance and no rounding (multiplying binary64 by ``2^a`` is exact). Only exact dyadic powers (``b = 0``,
 ``0 \\le a \\le \\text{max\\_decimals}``) are considered under `atol=0.0`; coefficients
 whose binary64 denominator exceeds ``2^{\\text{max\\_decimals}}`` (such as binary64
 approximations of `0.1`, `0.3`, `0.9` under the default `max_decimals=9`) remain
@@ -489,7 +496,7 @@ smallest common denominator ``m = 2^a \\cdot 5^b`` to factor into `scale(model) 
 via [`integerize_scale`](@ref) before building exact rational state. With the
 default `atol=0.0`, this rescaling is **exact** (`Rational{BigInt}(v) * m` must be
 an integer for every coefficient and `offset` and `Rational{BigInt}(scale(model) / m) * m == Rational{BigInt}(scale(model))`,
-with no `Float64` product); passing `atol > 0` opts in to tolerance-based decimal
+with no rounding); passing `atol > 0` opts in to tolerance-based decimal
 rounding.
 
 `ws.max_perturbation::Rational{BigInt}` records the largest absolute change in any
