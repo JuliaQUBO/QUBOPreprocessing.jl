@@ -18,6 +18,7 @@ function _same_source(a::_Snapshot, b::_Snapshot)
     return a.label_type === b.label_type && a.state_type === b.state_type &&
            isequal(a.labels, b.labels) && isequal(a.scale, b.scale) && isequal(a.offset, b.offset) &&
            a.sense === b.sense && a.domain === b.domain &&
+           a.perturbed === b.perturbed && a.max_perturbation == b.max_perturbation &&
            _same_storage(a.linear, b.linear) && _same_storage(a.quadratic, b.quadratic)
 end
 

@@ -148,7 +148,33 @@ struct _Snapshot
     offset::Float64
     sense::QT.Sense
     domain::QT.Domain
+    perturbed::Bool
+    max_perturbation::Rational{BigInt}
 end
+
+_Snapshot(
+    labels::Tuple,
+    label_type::Type,
+    state_type::Type,
+    linear::_Storage,
+    quadratic::_Storage,
+    scale::Float64,
+    offset::Float64,
+    sense::QT.Sense,
+    domain::QT.Domain,
+) = _Snapshot(
+    labels,
+    label_type,
+    state_type,
+    linear,
+    quadratic,
+    scale,
+    offset,
+    sense,
+    domain,
+    false,
+    zero(Rational{BigInt}),
+)
 
 function Base.deepcopy_internal(s::_Snapshot, dict::IdDict)
     haskey(dict, s) && return dict[s]::_Snapshot
@@ -162,6 +188,8 @@ function Base.deepcopy_internal(s::_Snapshot, dict::IdDict)
         s.offset,
         s.sense,
         s.domain,
+        s.perturbed,
+        Base.deepcopy_internal(s.max_perturbation, dict),
     )
 end
 
@@ -252,7 +280,12 @@ function _is_integer_snapshot(s::_Snapshot)::Bool
     return true
 end
 
-function _scale_storage(st::_Storage, m::Float64)::_Storage
+# Scaling by m = 2^a is exact in Float64 for every multiplier the search accepts,
+# so rational rounding is needed only for decimal multipliers.
+_scale_value(v::Float64, m_big::BigInt) =
+    iszero(v) ? v : ispow2(m_big) ? v * Float64(m_big) : Float64(round(BigInt, Rational{BigInt}(v) * m_big))
+
+function _scale_storage(st::_Storage, m_big::BigInt)::_Storage
     len = length(st.values)
     len == 0 && return st
     if st.kind === :dense_quadratic
@@ -261,20 +294,20 @@ function _scale_storage(st::_Storage, m::Float64)::_Storage
         for col in 1:n, row in 1:(col - 1)
             idx = (col - 1) * n + row
             v = st.values[idx]
-            scaled[idx] = iszero(v) ? 0.0 : Float64(round(v * m))
+            scaled[idx] = _scale_value(v, m_big)
         end
         return _Storage(st.kind, st.shape, scaled, st.indices, st.pair_indices, st.pointers)
     else
         scaled = Vector{Float64}(undef, len)
         for i in 1:len
             v = st.values[i]
-            scaled[i] = iszero(v) ? 0.0 : Float64(round(v * m))
+            scaled[i] = _scale_value(v, m_big)
         end
         return _Storage(st.kind, st.shape, scaled, st.indices, st.pair_indices, st.pointers)
     end
 end
 
-function _integerize_snapshot(s::_Snapshot; max_decimals::Integer=9, atol::Real=1e-12)::_Snapshot
+function _integerize_snapshot(s::_Snapshot; max_decimals::Integer=9, atol::Real=0.0)::_Snapshot
     _check_integerize_kwargs(max_decimals, atol)
     (_is_integer_snapshot(s) || !isfinite(s.scale) || iszero(s.scale) || !isfinite(s.offset)) && return s
 
@@ -299,57 +332,82 @@ function _integerize_snapshot(s::_Snapshot; max_decimals::Integer=9, atol::Real=
     isempty(vals) && return s
 
     max_d = min(Int(max_decimals), 300)
-    max_int = Float64(maxintfloat(Float64))
-    atol_f = Float64(atol)
+    max_int = maxintfloat(Float64)
+    max_int_big = BigInt(max_int)
+    exact_only = iszero(atol)
+    atol_rat = exact_only ? zero(Rational{BigInt}) : Rational{BigInt}(Float64(atol))
+    scale_rat = Rational{BigInt}(s.scale)
 
-    candidates = Tuple{Float64,Int,Int}[]
+    candidates = Tuple{BigInt,Int,Int}[]
     for a in 0:max_d, b in 0:max_d
         (a == 0 && b == 0) && continue
-        m = (2.0^a) * (5.0^b)
-        (isfinite(m) && m <= max_int) && push!(candidates, (m, a, b))
+        (exact_only && b > 0) && continue
+        m_big = (BigInt(2)^a) * (BigInt(5)^b)
+        m_big <= max_int_big && push!(candidates, (m_big, a, b))
     end
     sort!(candidates; by = x -> (x[1], x[3], x[2]))
 
-    for (m, a, b) in candidates
-        α_new = s.scale / m
+    rat_vals = Vector{Rational{BigInt}}(undef, length(vals))
+    populated = 0
+
+    for (m_big, a, b) in candidates
+        α_new = s.scale / Float64(m_big)
         (!isfinite(α_new) || iszero(α_new) || issubnormal(α_new)) && continue
+        α_new_rat = Rational{BigInt}(α_new)
+        if exact_only || b == 0
+            α_new_rat * m_big == scale_rat || continue
+        end
 
         ok = true
         has_odd = false
         has_non5 = false
-        for v in vals
-            y = v * m
-            if !isfinite(y)
-                ok = false
-                break
-            end
-            r = round(y)
-            if iszero(r) || abs(r) > max_int
-                ok = false
-                break
-            end
-            if b == 0
-                if r != y
+        max_coeff_err = zero(Rational{BigInt})
+        if b == 0
+            # Multiplying binary64 by 2^a is exact unless it overflows, so the
+            # Float64 product decides integrality without rational arithmetic.
+            m_f = Float64(m_big)
+            for v in vals
+                y = v * m_f
+                if !(isfinite(y) && isinteger(y) && abs(y) <= max_int)
                     ok = false
                     break
                 end
-            else
-                err = abs(y - r)
-                if !(err < 0.5 && err <= atol_f * abs(r))
+                has_odd |= !iszero(rem(y, 2.0))
+            end
+        else
+            # Decimal multipliers are searched only when atol > 0.
+            for k in eachindex(vals)
+                if k > populated
+                    populated = k
+                    rat_vals[k] = Rational{BigInt}(vals[k])
+                end
+                v_rat = rat_vals[k]
+                y_rat = v_rat * m_big
+                r_big = round(BigInt, y_rat)
+                if iszero(r_big) || abs(r_big) > max_int_big
                     ok = false
                     break
                 end
+                err_rat = abs(y_rat - r_big)
+                if !(err_rat < 1 // 2 && err_rat <= atol_rat * abs(r_big))
+                    ok = false
+                    break
+                end
+                coeff_err = abs(α_new_rat * r_big - scale_rat * v_rat)
+                coeff_err > max_coeff_err && (max_coeff_err = coeff_err)
+                has_odd |= isodd(r_big)
+                has_non5 |= !iszero(rem(r_big, 5))
             end
-            has_odd |= !iszero(rem(r, 2))
-            has_non5 |= !iszero(rem(r, 5))
         end
 
         if ok && (a == 0 || has_odd) && (b == 0 || has_non5)
-            l_new = _scale_storage(s.linear, m)
-            q_new = _scale_storage(s.quadratic, m)
-            offset_new = iszero(s.offset) ? 0.0 : Float64(round(s.offset * m))
+            l_new = _scale_storage(s.linear, m_big)
+            q_new = _scale_storage(s.quadratic, m_big)
+            offset_new = _scale_value(s.offset, m_big)
+            total_pert = max(s.max_perturbation, max_coeff_err)
             return _Snapshot(s.labels, s.label_type, s.state_type, l_new, q_new,
-                             α_new, offset_new, s.sense, s.domain)
+                             α_new, offset_new, s.sense, s.domain,
+                             !iszero(total_pert), total_pert)
         end
     end
 
@@ -371,20 +429,34 @@ end
 is_integer_scaled(model) = throw(ArgumentError("expected a QUBOTools.Model with Float64 objective data or a Workspace"))
 
 """
-    integerize_scale(model; max_decimals::Integer=9, atol::Real=1e-12)
+    integerize_scale(model; max_decimals::Integer=9, atol::Real=0.0)
 
 Return an owned copy of `model` where the smallest multiplier ``m = 2^a \\cdot 5^b``
-(with ``0 \\le a, b \\le \\text{max\\_decimals}``) that scales all linear coefficients,
-quadratic coefficients, and `offset` to exact integers is factored into
-`scale(model) / m`. Pure dyadic multipliers (``b = 0``) require exact binary
-products (`v * m == round(v * m)`), preserving sub-ulp near-tie perturbations;
-decimal multipliers (``b \\ge 1``) accept non-zero products within relative
-tolerance `atol * abs(round(v * m))` provided ``(a, b)`` is irreducible.
+in the bounded search range ``0 \\le a, b \\le \\min(\\text{max\\_decimals}, 300)``
+(with ``m \\le 2^{53}`` and all scaled integers ``|r| \\le 2^{53}``) that scales
+all linear coefficients, quadratic coefficients, and `offset` to integers is
+factored into `scale(model) / m`.
+
+By default (`atol=0.0`), the rescaled snapshot is **exact**: a multiplier ``m`` is
+accepted only when `Rational{BigInt}(v) * m` is an exact integer for every
+coefficient and `offset` and `Rational{BigInt}(scale(model) / m) * m == Rational{BigInt}(scale(model))`,
+using no tolerance and no rounding (multiplying binary64 by ``2^a`` is exact). Only exact dyadic powers (``b = 0``,
+``0 \\le a \\le \\text{max\\_decimals}``) are considered under `atol=0.0`; coefficients
+whose binary64 denominator exceeds ``2^{\\text{max\\_decimals}}`` (such as binary64
+approximations of `0.1`, `0.3`, `0.9` under the default `max_decimals=9`) remain
+unchanged.
+
+Passing `atol > 0` explicitly opts in to tolerance-based decimal multipliers (``b \\ge 1``),
+accepting irreducible ``(a, b)`` when every non-zero coefficient and `offset` satisfies
+`abs(Rational{BigInt}(v) * m - r) <= Rational{BigInt}(Float64(atol)) * abs(r)` in exact
+rational arithmetic. When the accepted multiplier changes any effective objective term
+``\\operatorname{Rational\\{BigInt\\}}(\\alpha_{\\text{new}}) \\cdot r \\ne \\operatorname{Rational\\{BigInt\\}}(\\alpha) \\cdot \\operatorname{Rational\\{BigInt\\}}(v)``,
+the rescaled model is a perturbed approximation of `model`.
 """
 function integerize_scale(
     model::QT.Model{V,Float64,U};
     max_decimals::Integer=9,
-    atol::Real=1e-12,
+    atol::Real=0.0,
 ) where {V,U}
     s = _integerize_snapshot(_snapshot(model); max_decimals, atol)
     labels = _labels_vector(s)
@@ -399,7 +471,7 @@ function integerize_scale(
         deepcopy(model.start),
     )
 end
-integerize_scale(model; max_decimals::Integer=9, atol::Real=1e-12) =
+integerize_scale(model; max_decimals::Integer=9, atol::Real=0.0) =
     throw(ArgumentError("expected a QUBOTools.Model with Float64 objective data"))
 
 """
@@ -414,18 +486,33 @@ struct Generation
 end
 
 """
-    Workspace(model; rules=:identity, integerize_scale::Bool=false, max_decimals::Integer=9, atol::Real=1e-12)
+    Workspace(model; rules=:identity, integerize_scale::Bool=false, max_decimals::Integer=9, atol::Real=0.0)
 
 Privately snapshot a finite Float64 QUBOTools model and its ordered labels.
 `:identity` performs no inference; `:dominance` prepares exact bound caches and
 a deterministic queue for [`propagate!`](@ref). When `integerize_scale=true`,
-the snapshot factors any common decimal/dyadic denominator ``m = 2^a \\cdot 5^b``
-into `scale(model) / m` via [`integerize_scale`](@ref) before building exact
-rational state. Explicit caller assumptions and
-certified deductions have separate provenance and can be rolled back. Source edits never change the snapshot; use
-[`reset!`](@ref) to accept a new source. Labels must have stable equality/hash
-semantics and preserve equality/hash under owned deep copies. Use each workspace
-serially. Model metadata, solutions and warm starts are outside the objective snapshot.
+the snapshot searches ``0 \\le a, b \\le \\min(\\text{max\\_decimals}, 300)`` for the
+smallest common denominator ``m = 2^a \\cdot 5^b`` to factor into `scale(model) / m`
+via [`integerize_scale`](@ref) before building exact rational state. With the
+default `atol=0.0`, this rescaling is **exact** (`Rational{BigInt}(v) * m` must be
+an integer for every coefficient and `offset` and `Rational{BigInt}(scale(model) / m) * m == Rational{BigInt}(scale(model))`,
+with no rounding); passing `atol > 0` opts in to tolerance-based decimal
+rounding.
+
+`ws.max_perturbation::Rational{BigInt}` records the largest absolute change in any
+effective objective coefficient or scaled offset (in objective units, including
+`scale` and `offset`) between the stored snapshot and the input model:
+``\\max_v |\\operatorname{Rational\\{BigInt\\}}(\\alpha_{\\text{new}}) \\cdot \\operatorname{Rational\\{BigInt\\}}(v_{\\text{new}}) - \\operatorname{Rational\\{BigInt\\}}(\\alpha) \\cdot \\operatorname{Rational\\{BigInt\\}}(v)|``
+(`0 // 1` when the snapshot is exact), and `ws.perturbed::Bool` is `true` iff
+`ws.max_perturbation > 0 // 1`. Both fields are also recorded on exported
+certificates ([`DominanceCertificate`](@ref) / [`ReductionCertificate`](@ref))
+and exports ([`ExportResult`](@ref) / [`ConditionedExport`](@ref)).
+
+Explicit caller assumptions and certified deductions have separate provenance and
+can be rolled back. Source edits never change the snapshot; use [`reset!`](@ref)
+to accept a new source. Labels must have stable equality/hash semantics and
+preserve equality/hash under owned deep copies. Use each workspace serially.
+Model metadata, solutions and warm starts are outside the objective snapshot.
 """
 mutable struct Workspace
     _snapshot::_Snapshot
@@ -438,7 +525,7 @@ mutable struct Workspace
         rules=:identity,
         integerize_scale::Bool=false,
         max_decimals::Integer=9,
-        atol::Real=1e-12,
+        atol::Real=0.0,
     )
         _check_rules(rules)
         _check_integerize_kwargs(max_decimals, atol)
@@ -450,6 +537,14 @@ mutable struct Workspace
 end
 _check_rules(rules) = rules in (:identity,:dominance,:elimination,:relations,:mixed) ? nothing :
     throw(ArgumentError("supported rules are :identity, :dominance, :elimination, :relations and :mixed; requested $(repr(rules))"))
+
+@inline function Base.getproperty(ws::Workspace, name::Symbol)
+    name === :perturbed && return getfield(ws, :_snapshot).perturbed
+    name === :max_perturbation && return getfield(ws, :_snapshot).max_perturbation
+    return getfield(ws, name)
+end
+Base.propertynames(::Workspace, private::Bool=false) =
+    private ? (:_snapshot, :_generation, :_state, :perturbed, :max_perturbation) : (:perturbed, :max_perturbation)
 
 """`generation(ws_or_export)` returns its immutable source/workspace identity."""
 generation(ws::Workspace) = ws._generation
@@ -469,18 +564,22 @@ function is_integer_scaled(ws::Workspace)::Bool
 end
 
 """
-    reset!(ws, model; integerize_scale::Bool=false, max_decimals::Integer=9, atol::Real=1e-12)
+    reset!(ws, model; integerize_scale::Bool=false, max_decimals::Integer=9, atol::Real=0.0)
 
 Validate a fresh snapshot before committing it. Failed validation preserves the
 old workspace. Success creates a fresh generation, including for an identical
-source. Owned exports remain evidence for their historical generation.
+source. Owned exports remain evidence for their historical generation. With default
+`atol=0.0`, `integerize_scale=true` is exact (`ws.perturbed == false`,
+`ws.max_perturbation == 0 // 1`); passing `atol > 0` opts in to tolerance-based
+decimal rounding and updates `ws.perturbed` and `ws.max_perturbation` from the
+stored scale and coefficients/offset.
 """
 function reset!(
     ws::Workspace,
     model;
     integerize_scale::Bool=false,
     max_decimals::Integer=9,
-    atol::Real=1e-12,
+    atol::Real=0.0,
 )
     _check_integerize_kwargs(max_decimals, atol)
     raw_snapshot = _snapshot(model)
@@ -497,7 +596,8 @@ end
     ExportResult
 
 Owned immutable identity export, with `status == :certified`, original scope
-and an empty reduction chain. This certifies unchanged representation only.
+and an empty reduction chain. `certificate.unchanged_representation` is `true`
+iff the snapshot was not perturbed (`result.perturbed == false`).
 Obtain a separately owned mutable solver model with [`export_model`](@ref).
 Private fields are implementation details, not a mutation API.
 """
@@ -509,17 +609,26 @@ struct ExportResult
 end
 generation(result::ExportResult) = result.generation
 
+@inline function Base.getproperty(r::ExportResult, name::Symbol)
+    name === :perturbed && return getfield(r, :_snapshot).perturbed
+    name === :max_perturbation && return getfield(r, :_snapshot).max_perturbation
+    return getfield(r, name)
+end
+Base.propertynames(::ExportResult, private::Bool=false) =
+    private ? (:_snapshot, :generation, :status, :certificate, :perturbed, :max_perturbation) :
+              (:generation, :status, :certificate, :perturbed, :max_perturbation)
+
 """
     materialize(ws; coefficient_type=Float64, map=nothing)
     materialize(ws, map::DomainGaugeMap; coefficient_type=Float64)
 
 Explicitly capture an owned export. Without fixings or a coordinate `map`, this
-is the unchanged Float64 identity export. With caller assumptions, certified
-deductions or a [`DomainGaugeMap`](@ref), return a [`ConditionedExport`](@ref)
-with the complete proof chain when present: Float64 transport must represent
-every conditioned/converted coefficient and constant exactly, or the call raises
-`ArgumentError`; use `coefficient_type=Rational{BigInt}` for exact transport.
-Materialization scans/copies the graph; it is never implicit in updates.
+is the Float64 identity export (`certificate.unchanged_representation == !ws.perturbed`).
+With caller assumptions, certified deductions or a [`DomainGaugeMap`](@ref), return a
+[`ConditionedExport`](@ref) with the complete proof chain when present: Float64
+transport must represent every conditioned/converted coefficient and constant
+exactly, or the call raises `ArgumentError`; use `coefficient_type=Rational{BigInt}`
+for exact transport. Materialization scans/copies the graph; it is never implicit in updates.
 """
 function materialize(ws::Workspace; coefficient_type=Float64, map=nothing)
     map === nothing || _validate_domain_map(ws, map)
@@ -530,7 +639,7 @@ function materialize(ws::Workspace; coefficient_type=Float64, map=nothing)
     snapshot = deepcopy(ws._snapshot)
     _validate_label_copy(ws._snapshot.labels, snapshot.labels)
     return ExportResult(snapshot, generation(ws), :certified,
-                        (scope=:original, reduction_chain=(), unchanged_representation=true))
+                        (scope=:original, reduction_chain=(), unchanged_representation=!snapshot.perturbed))
 end
 
 """`original_variables(ws_or_export)` returns owned labels in original index order."""
@@ -624,21 +733,25 @@ struct IdentityReport
 end
 
 """
-    preprocess(model; rules=:identity, integerize_scale::Bool=(rules !== :identity), max_decimals::Integer=9, atol::Real=1e-12, kwargs...)
+    preprocess(model; rules=:identity, integerize_scale::Bool=(rules !== :identity), max_decimals::Integer=9, atol::Real=0.0, kwargs...)
 
-Return `(workspace, report)` using the same snapshot path as Workspace.
+Return `(workspace, report)` using the same snapshot path as [`Workspace`](@ref).
 `:identity` returns a no-inference `IdentityReport`; `:dominance` runs
 [`propagate!`](@ref) with forwarded keyword limits and returns its report.
-When `rules !== :identity`, `integerize_scale` defaults to `true` so decimal and
-dyadic floating-point denominators are factored into `scale` before reduction.
-No model is materialized implicitly.
+When `rules !== :identity`, `integerize_scale` defaults to `true` with `atol=0.0`,
+so only exact dyadic denominators ``2^a`` within `0 <= a <= max_decimals` are
+factored into `scale` before reduction (`ws.perturbed == false`,
+`ws.max_perturbation == 0 // 1`). Passing `atol > 0` explicitly opts in to
+tolerance-based decimal rounding and records any resulting effective-coefficient
+or scaled-offset perturbation on `ws` and its exported certificates. No model is
+materialized implicitly.
 """
 function preprocess(
     model;
     rules=:identity,
     integerize_scale::Bool=(rules !== :identity),
     max_decimals::Integer=9,
-    atol::Real=1e-12,
+    atol::Real=0.0,
     kwargs...,
 )
     ws = Workspace(model; rules, integerize_scale, max_decimals, atol)
