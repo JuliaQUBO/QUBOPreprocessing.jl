@@ -12,8 +12,8 @@ authors:
 repository-code: "https://github.com/JuliaQUBO/QUBOPreprocessing.jl"
 url: "https://juliaqubo.github.io/QUBOPreprocessing.jl/"
 license: MPL-2.0
-version: "0.1.5"
-date-released: "2026-10-31"
+version: "0.2.0"
+date-released: "2026-11-02"
 keywords:
   - "Julia"
   - "QUBO"

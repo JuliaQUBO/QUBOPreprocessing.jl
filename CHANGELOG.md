@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.2.0
+
+Exact-by-default scale integerization with recorded perturbation, and a Float64
+coercive-witness fast path (#86, #87, #88, #89):
+
+- **Exact `integerize_scale` by default (#87, #89):** `integerize_scale`,
+  `Workspace`, `reset!` and `preprocess` default to `atol = 0.0`. A multiplier
+  $m = 2^a$ is accepted only when every coefficient and the offset scale to exact
+  integers, so the snapshot always represents the input model exactly. Decimal
+  multipliers ($m = 2^a 5^b$, $b \ge 1$) and rounding within a tolerance require
+  an explicit `atol > 0`. On v0.1.5, `preprocess(model; rules = :mixed)` rounded
+  $0.3 x_1 + 0.6 x_2 - 0.9 x_1 x_2$ to $3 x_1 + 6 x_2 - 9 x_1 x_2$ and returned a
+  non-optimal state with a valid certificate for the rounded model.
+- **Recorded perturbation:** `Workspace`, `ExportResult`, `ConditionedExport`
+  and `DominanceCertificate` (`ReductionCertificate`) expose `perturbed::Bool`
+  and `max_perturbation::Rational{BigInt}`, the largest absolute change in any
+  effective coefficient or scaled offset. Both are zero unless `atol > 0`
+  changed the model. `verify_certificate` and `transport_certificate` reject a
+  certificate whose recorded perturbation differs from the workspace's.
+- **Dyadic integerization stays Float64:** multiplying binary64 by $2^a$ is
+  exact, so the default path checks and scales in Float64. Exact rational
+  arithmetic is used only for opt-in decimal multipliers.
+- **Float64 coercive witness and candidate ordering (#86, #88):**
+  `coercive_field_witness` and `:coercive` / `:extremal` probing order run in
+  Float64 when the active fields and couplings fit comfortably in Float64,
+  falling back to exact arithmetic on overflow or near-subnormal values. Proofs and certificates remain
+  exact. `coercive_field_witness` gains `sequential = true`; when every free field
+  is zero, the sequential pass seeds one coupled anchor with the opposite spin to
+  break the $\mathbb{Z}_2$ symmetry. `:coercive` order breaks ties by the incident
+  coupling $\ell_1$ norm.
+- **Cross-corpus coercive alignment tables:** `docs/src/benchmarks.md` adds the
+  611-instance local-field alignment and witness study, reproducible with
+  `scripts/coercive_alignment_pilot.jl`.
+
+### Breaking changes
+
+- `preprocess(model; rules)` with `rules !== :identity`, and
+  `Workspace(model; integerize_scale = true)`, no longer round decimal
+  coefficients such as `0.1`. Such models keep `scale` and their coefficients,
+  so results and reduction counts can differ from v0.1.5. Pass `atol = 1e-12` to
+  restore the previous rounding, and check `ws.perturbed`.
+- `DominanceCertificate` has two new fields. The 5- and 6-argument positional
+  constructors still work. Certificates now record the source perturbation, an
+  explicit change to the certificate contract.
+- `propertynames(::Workspace)` lists only the public `:perturbed` and
+  `:max_perturbation`; private fields require `propertynames(ws, true)`.
+- Witnesses and probing candidate order can differ from v0.1.5, so probing
+  under round or candidate limits can find different reductions.
+
 ## 0.1.5
 
 Batch witness export memoization, type-erased `ConditionedExport` reduction chains,
