@@ -27,7 +27,7 @@ spin glasses, and `5` `BiqMac` instances, with `11` certified globally optimal).
 In addition, `QUBOLib.jl` `v0.2.4-data+6` includes **29** pure binary unconstrained QUBO
 instances from `MINLPLib` (`2` `autocorr_bern20-03, 25-03`, `20` D-Wave `chimera_*`, and
 `7` `sporttournament06..20`, with `18` proven globally optimal and `100%` $\mathbb{Z}_2$
-gauge invariance after exact `0.1` scale factorization via `integerize_scale`).
+gauge invariance after opt-in decimal `0.1` scale factorization via `integerize_scale(model; atol=1e-12)`).
 
 | Collection | Problem Class | Instances | $n$ Range | $m$ Range (Quad Terms) | Bitstring Solutions | Certified Optimal (`proven_optimal=1`) |
 |:--|--:|--:|--:|--:|--:|--:|

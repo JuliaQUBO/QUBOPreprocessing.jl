@@ -49,7 +49,22 @@ E(x)=\alpha\left(\beta+\sum_i L_i x_i+\sum_{i<j}Q_{ij}x_i x_j\right).
 
 Identity export preserves coefficients, signed stored zeros, label/index order,
 scale, offset, sense, domain and every variable. No arithmetic, normalization,
-zero dropping or scale folding occurs. Exact representation identity proves
+zero dropping or scale folding occurs. When `integerize_scale=true` is passed to
+`Workspace`, `reset!` or `preprocess`, default `atol=0.0` performs **exact**
+integerization only over the bounded search range
+``0 \le a, b \le \min(\text{max\_decimals}, 300)``: a multiplier ``m = 2^a \cdot 5^b``
+is accepted only when `Rational{BigInt}(v) * m` is an exact integer for every
+coefficient and `offset` and `Rational{BigInt}(scale / m) * m == Rational{BigInt}(scale)`
+(with no rounding), which only accepts exact dyadic powers ``2^a``
+(``b = 0``) within `0 <= a <= max_decimals` and leaves coefficients whose binary64
+denominator exceeds ``2^{\text{max\_decimals}}`` (such as `0.1`, `0.3`, `0.9`
+under the default `max_decimals=9`) unchanged (`ws.perturbed == false`,
+`ws.max_perturbation == 0 // 1`). Passing `atol > 0` explicitly opts in to
+tolerance-based decimal rounding (``b \ge 1``); `ws.max_perturbation` records the
+largest absolute change in any effective objective coefficient or scaled offset
+``\max_v |\operatorname{Rational\{BigInt\}}(\alpha_{\text{new}}) \cdot \operatorname{Rational\{BigInt\}}(v_{\text{new}}) - \operatorname{Rational\{BigInt\}}(\alpha) \cdot \operatorname{Rational\{BigInt\}}(v)|``
+between the stored snapshot and the input model, and `ws.perturbed` is `true`
+iff `ws.max_perturbation > 0 // 1`. Exact representation identity proves
 that source and export represent the same problem, with an empty reduction
 chain and original scope. **It does not prove that a supplied state is optimal.**
 
