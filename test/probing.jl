@@ -807,6 +807,35 @@
         @test w_seq_nt == w_pair_seq == [1, 1, 1, 0, 0, 0]
         @test reconstruct(materialize(ws_nt), w_seq_nt).energy.value <
               reconstruct(materialize(ws_nt), w_par_nt).energy.value
+
+        # 10. Float64 and exact witness paths agree on zero-field anchor seeding (#86):
+        # scaling every coupling by 2^-1000 is exact and forces the exact path.
+        Q_zf = Dict(
+            (1, 2) => -2.0, (1, 3) => -2.0, (2, 3) => -2.0,
+            (4, 5) => -2.0, (4, 6) => -2.0, (5, 6) => -2.0,
+            (3, 4) => 3.0,  (2, 5) => 1.0,
+        )
+        zf_ws(c) = Workspace(
+            QT.Model{Int,Float64,Int}(Dict(i => 0.0 for i in 1:6), Dict(k => c * v for (k, v) in Q_zf);
+                                      domain=:spin, sense=:min);
+            rules=:identity, integerize_scale=false,
+        )
+        ws_zf, ws_zf_exact = zf_ws(1.0), zf_ws(2.0^-1000)
+        @test QUBOPreprocessing._can_use_float_spin_heuristic(ws_zf, collect(1:6))
+        @test !QUBOPreprocessing._can_use_float_spin_heuristic(ws_zf_exact, collect(1:6))
+        for seq in (false, true)
+            @test coercive_field_witness(ws_zf; sequential=seq) ==
+                  coercive_field_witness(ws_zf_exact; sequential=seq)
+        end
+        @test coercive_field_witness(ws_zf; sequential=false) == fill(-1, 6)
+        @test coercive_field_witness(ws_zf; sequential=true) == [1, 1, 1, -1, -1, -1]
+        for ws_m in (ws_zf, ws_zf_exact)
+            dmap = domain_map(ws_m; domain=:bool, gauge=[1, -1, 1, -1, 1, -1])
+            @test QUBOPreprocessing._coercive_field_witness_pair(ws_m; map=dmap) == (
+                coercive_field_witness(ws_m; sequential=false, map=dmap),
+                coercive_field_witness(ws_m; sequential=true, map=dmap),
+            )
+        end
     end
 
     @testset "two-branch common-implication double probing (:double_probe) and pair contractions (#60)" begin

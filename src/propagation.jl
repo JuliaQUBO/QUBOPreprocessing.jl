@@ -485,28 +485,6 @@ function _try_build_float_spin_subproblem(ws::Workspace, free_vars::Vector{Int})
     return h_f, adj_f, l1_f
 end
 
-function _build_float_spin_subproblem(ws::Workspace, free_vars::Vector{Int})
-    st = ws._state
-    n = length(ws._snapshot.labels)
-    h_f = zeros(Float64, n)
-    l1_f = zeros(Float64, n)
-    adj_f = [Tuple{Int,Float64}[] for _ in 1:n]
-    @inbounds for i in free_vars
-        h_f[i] = Float64(_spin_field(ws, i))
-        ai = adj_f[i]
-        sizehint!(ai, length(st.adjacency[i]))
-        l1 = 0.0
-        for (j, q) in st.adjacency[i]
-            (st.fixed[j] == 2 && !iszero(q)) || continue
-            jf = _float_spin_coupling(ws, q)
-            push!(ai, (j, jf))
-            l1 += abs(jf)
-        end
-        l1_f[i] = l1
-    end
-    return h_f, adj_f, l1_f
-end
-
 function _polish_spin_state_float!(
     spin_s::Vector{Int},
     free_vars::Vector{Int},
@@ -894,8 +872,8 @@ function _coercive_field_witness_pair(
     w_par = _lift_spin_witness(ws, spin_par)
     w_best = spin_best === spin_par ? copy(w_par) : _lift_spin_witness(ws, spin_best)
     if map !== nothing
-        w_par = _orig_witness_to_domain_witness(w_par, map)
-        w_best = _orig_witness_to_domain_witness(w_best, map)
+        w_par = Int[_map_index_value(map, i, w_par[i]) for i in eachindex(w_par)]
+        w_best = Int[_map_index_value(map, i, w_best[i]) for i in eachindex(w_best)]
     end
     return w_par, w_best
 end
