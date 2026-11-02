@@ -642,6 +642,200 @@
         @test_throws ArgumentError coercive_field_witness(ws_b; max_flips=true)
         @test_throws ArgumentError coercive_field_witness(ws_b; tie_break=:middle)
         @test_throws ArgumentError probe_variables!(ws_b; order=:random)
+
+        # 5. Zero-field (h_i = 0) symmetry breaking and l1-coupling tie-breaking (#86)
+        # Two ferromagnetic triangles {1,2,3} (weight -4) and {4,5,6} (weight -8, larger l1)
+        # coupled by antiferromagnetic edges (3,4) => +2 and (2,5) => +2, with L chosen so h_i = 0
+        # identically for all 6 variables:
+        # At x = (0,0,0,0,0,0), every 1-flip delta is L_i > 0 (strict 1-flip local minimum, F = 0).
+        # With l1 secondary ordering + zero-field anchor symmetry breaking, sequential conditioning
+        # starts at hub cluster {4,5,6} with s_4 = +1 (x_4 = 1), propagates x_5 = x_6 = 1, and
+        # global optimum F = -2.0!
+        Q_zf = Dict(
+            (1, 2) => -4.0, (1, 3) => -4.0, (2, 3) => -4.0,
+            (4, 5) => -8.0, (4, 6) => -8.0, (5, 6) => -8.0,
+            (3, 4) => 2.0,  (2, 5) => 2.0,
+        )
+        L_zf = Dict(i => 0.0 for i in 1:6)
+        for ((u, v), w) in Q_zf
+            L_zf[u] -= 0.5 * w
+            L_zf[v] -= 0.5 * w
+        end
+        m_zf = QT.Model{Int,Float64,Int}(L_zf, Q_zf; domain=:bool, sense=:min)
+        ws_zf = Workspace(m_zf; rules=:identity)
+        @test is_gauge_invariant(ws_zf)
+        @test all(iszero, coercive_fields(ws_zf))
+        cand_zf = collect(1:6)
+        QUBOPreprocessing._order_probing_candidates!(ws_zf, cand_zf, zeros(Int, 6), :coercive)
+        # Variables 4, 5 have the largest coupling l1 norm ((8+8+2)/4 = 4.5), followed by 6 (4.0)
+        @test cand_zf[1:3] == [4, 5, 6]
+        w_zf = coercive_field_witness(ws_zf)
+        @test w_zf == [0, 0, 0, 1, 1, 1]
+        @test reconstruct(materialize(ws_zf), w_zf).energy.value == -2.0
+
+        # 5b. Scale-invariant witness selection on sub-1e-12 scaled models and near-tie exact fallback (#86)
+        scale_tiny = 2.0^-50
+        L_zf_tiny = Dict(i => v * scale_tiny for (i, v) in L_zf)
+        Q_zf_tiny = Dict(k => v * scale_tiny for (k, v) in Q_zf)
+        ws_zf_tiny_min = Workspace(
+            QT.Model{Int,Float64,Int}(L_zf_tiny, Q_zf_tiny; domain=:bool, sense=:min);
+            rules=:identity, integerize_scale=false,
+        )
+        w_zf_tiny_min = coercive_field_witness(ws_zf_tiny_min)
+        @test w_zf_tiny_min == [0, 0, 0, 1, 1, 1]
+        @test reconstruct(materialize(ws_zf_tiny_min), w_zf_tiny_min).energy.value == -2.0 * scale_tiny
+
+        L_zf_tiny_max = Dict(i => -v * scale_tiny for (i, v) in L_zf)
+        Q_zf_tiny_max = Dict(k => -v * scale_tiny for (k, v) in Q_zf)
+        ws_zf_tiny_max = Workspace(
+            QT.Model{Int,Float64,Int}(L_zf_tiny_max, Q_zf_tiny_max; domain=:bool, sense=:max);
+            rules=:identity, integerize_scale=false,
+        )
+        w_zf_tiny_max = coercive_field_witness(ws_zf_tiny_max)
+        @test w_zf_tiny_max == [0, 0, 0, 1, 1, 1]
+        @test reconstruct(materialize(ws_zf_tiny_max), w_zf_tiny_max).energy.value == 2.0 * scale_tiny
+
+        # Near-tie exact fallback in _spin_seq_strictly_better when |delta_f| <= 1e-11 * bound_f:
+        ws_near_tie = Workspace(
+            QT.Model{Int,Float64,Int}(
+                Dict(1 => 0.0, 2 => 0.0, 3 => 0.0),
+                Dict((1, 2) => 1.0, (1, 3) => -(1.0 + 2.0^-42));
+                domain=:spin, sense=:min,
+            );
+            rules=:identity, integerize_scale=false,
+        )
+        h_nt = [0.0, 0.0, 0.0]
+        adj_nt = [
+            [(2, 1.0), (3, -(1.0 + 2.0^-42))],
+            [(1, 1.0)],
+            [(1, -(1.0 + 2.0^-42))],
+        ]
+        @test QUBOPreprocessing._spin_seq_strictly_better(
+            ws_near_tie, [1, 2, 3], [1, 1, 1], [-1, 1, 1], h_nt, adj_nt, 1,
+        )
+        @test !QUBOPreprocessing._spin_seq_strictly_better(
+            ws_near_tie, [1, 2, 3], [-1, 1, 1], [1, 1, 1], h_nt, adj_nt, 1,
+        )
+
+        # 5c. Signed-zero canonicalization in :extremal candidate ordering on zero-field models (#86)
+        for sense in (:min, :max)
+            sgn = sense === :min ? 1.0 : -1.0
+            ws_ext_zf = Workspace(
+                QT.Model{Int,Float64,Int}(
+                    Dict(1 => 0.0, 2 => 0.0, 3 => 0.0),
+                    Dict((1, 2) => 1.0 * sgn, (2, 3) => 2.0 * sgn);
+                    domain=:spin, sense=sense,
+                );
+                rules=:identity, integerize_scale=false,
+            )
+            for w_ext in ([-1, 1, -1], [1, -1, 1])
+                c_float = [1, 2, 3]
+                QUBOPreprocessing._order_probing_candidates!(ws_ext_zf, c_float, w_ext, :extremal)
+                @test c_float == [2, 3, 1]
+            end
+        end
+
+        # 6. Float64 fast path on dense distinct-denominator rational models (#86)
+        n_dense = 60
+        L_rat = Dict{Int,Float64}(i => (isodd(i) ? 1.0 : -1.0) / (100.0 + 3.0 * i) for i in 1:n_dense)
+        Q_rat = Dict{Tuple{Int,Int},Float64}()
+        for i in 1:n_dense, j in (i + 1):n_dense
+            p = 1000.0 + 7.0 * i * n_dense + 13.0 * j
+            Q_rat[(i, j)] = ((i + j) % 3 == 0 ? 1.0 : -1.0) / p
+        end
+        m_rat = QT.Model{Int,Float64,Int}(L_rat, Q_rat; domain=:bool, sense=:min)
+        ws_rat = Workspace(m_rat; rules=:identity, integerize_scale=false)
+        @test QUBOPreprocessing._can_use_float_spin_heuristic(ws_rat, collect(1:n_dense))
+        t_wit = @elapsed w_rat = coercive_field_witness(ws_rat; max_flips=200)
+        @test length(w_rat) == n_dense
+        @test all(v -> v in (0, 1), w_rat)
+        @test t_wit < 2.0
+        cand_rat = collect(1:n_dense)
+        t_ord = @elapsed QUBOPreprocessing._order_probing_candidates!(ws_rat, cand_rat, w_rat, :coercive)
+        @test length(cand_rat) == n_dense
+        @test t_ord < 1.0
+
+        # 7. Exact fallback when internal _Exact coefficients overflow Float64 (#86)
+        m_big = QT.Model{Int,Float64,Int}(
+            Dict(1 => 0.0, 2 => 0.0, 3 => 0.0),
+            Dict((1, 2) => -4.0, (2, 3) => 2.0);
+            domain=:spin, sense=:min,
+        )
+        ws_big = Workspace(m_big; rules=:identity, integerize_scale=false)
+        ws_big._state.fields[1] = (BigInt(10)^310) // 1
+        @test !QUBOPreprocessing._can_use_float_spin_heuristic(ws_big, [1, 2, 3])
+        w_big = coercive_field_witness(ws_big)
+        @test length(w_big) == 3
+        @test all(v -> v in (-1, 1), w_big)
+        cand_big = [1, 2, 3]
+        QUBOPreprocessing._order_probing_candidates!(ws_big, cand_big, w_big, :coercive)
+        @test cand_big[1] == 1
+
+        # 8. Exact fallback when subnormal Float64 coefficients would lose precision or underflow (#86)
+        c_sub = nextfloat(0.0)
+        L_sub = Dict(i => (i == 1 ? c_sub : 0.0) for i in 1:6)
+        Q_sub = Dict((1, j) => 3.0 * c_sub for j in 2:6)
+        ws_sub = Workspace(
+            QT.Model{Int,Float64,Int}(L_sub, Q_sub; domain=:bool, sense=:min);
+            rules=:identity, integerize_scale=false,
+        )
+        @test !QUBOPreprocessing._can_use_float_spin_heuristic(ws_sub, collect(1:6))
+        w_sub = coercive_field_witness(ws_sub; max_flips=500)
+        @test w_sub == [0, 0, 0, 0, 0, 0]
+        @test reconstruct(materialize(ws_sub), w_sub).energy.value == 0.0
+
+        # 9. Tiny non-zero field L[1] -= 2^-40 below 1e-12 * l1_f[1] with near-tied energy (#86)
+        Q_nt = Dict(
+            (1, 2) => -4.0, (1, 3) => -4.0, (2, 3) => -4.0,
+            (4, 5) => -8.0, (4, 6) => -8.0, (5, 6) => -8.0,
+            (3, 4) => 2.0,  (2, 5) => 2.0,
+        )
+        L_nt = zeros(Float64, 6)
+        for ((u, v), w) in Q_nt
+            L_nt[u] -= 0.5 * w
+            L_nt[v] -= 0.5 * w
+        end
+        L_nt[1] -= 2.0^-40
+        ws_nt = Workspace(
+            QT.Model{Int,Float64,Int}(Dict(i => L_nt[i] for i in 1:6), Q_nt; domain=:bool, sense=:min);
+            rules=:identity, integerize_scale=false,
+        )
+        w_par_nt = coercive_field_witness(ws_nt; sequential=false, max_flips=500, tie_break=:low)
+        w_seq_nt = coercive_field_witness(ws_nt; sequential=true, max_flips=500, tie_break=:low)
+        w_pair_par, w_pair_seq = QUBOPreprocessing._coercive_field_witness_pair(ws_nt; max_flips=500, tie_break=:low)
+        @test w_par_nt == w_pair_par == [0, 0, 0, 0, 0, 0]
+        @test w_seq_nt == w_pair_seq == [1, 1, 1, 0, 0, 0]
+        @test reconstruct(materialize(ws_nt), w_seq_nt).energy.value <
+              reconstruct(materialize(ws_nt), w_par_nt).energy.value
+
+        # 10. Float64 and exact witness paths agree on zero-field anchor seeding (#86):
+        # scaling every coupling by 2^-1000 is exact and forces the exact path.
+        Q_zf = Dict(
+            (1, 2) => -2.0, (1, 3) => -2.0, (2, 3) => -2.0,
+            (4, 5) => -2.0, (4, 6) => -2.0, (5, 6) => -2.0,
+            (3, 4) => 3.0,  (2, 5) => 1.0,
+        )
+        zf_ws(c) = Workspace(
+            QT.Model{Int,Float64,Int}(Dict(i => 0.0 for i in 1:6), Dict(k => c * v for (k, v) in Q_zf);
+                                      domain=:spin, sense=:min);
+            rules=:identity, integerize_scale=false,
+        )
+        ws_zf, ws_zf_exact = zf_ws(1.0), zf_ws(2.0^-1000)
+        @test QUBOPreprocessing._can_use_float_spin_heuristic(ws_zf, collect(1:6))
+        @test !QUBOPreprocessing._can_use_float_spin_heuristic(ws_zf_exact, collect(1:6))
+        for seq in (false, true)
+            @test coercive_field_witness(ws_zf; sequential=seq) ==
+                  coercive_field_witness(ws_zf_exact; sequential=seq)
+        end
+        @test coercive_field_witness(ws_zf; sequential=false) == fill(-1, 6)
+        @test coercive_field_witness(ws_zf; sequential=true) == [1, 1, 1, -1, -1, -1]
+        for ws_m in (ws_zf, ws_zf_exact)
+            dmap = domain_map(ws_m; domain=:bool, gauge=[1, -1, 1, -1, 1, -1])
+            @test QUBOPreprocessing._coercive_field_witness_pair(ws_m; map=dmap) == (
+                coercive_field_witness(ws_m; sequential=false, map=dmap),
+                coercive_field_witness(ws_m; sequential=true, map=dmap),
+            )
+        end
     end
 
     @testset "two-branch common-implication double probing (:double_probe) and pair contractions (#60)" begin
