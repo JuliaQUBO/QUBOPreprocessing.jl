@@ -113,6 +113,34 @@ there is no hard real-time or process-preemption guarantee. A completed boundary
 that crosses the deadline cannot retain an optimality claim. Work/deadline refusals
 report the valid prefix/evidence available at that point.
 
+## Falling back to the original model
+
+A small reduction does not always pay off: the residual still has to be built
+and verified, and a heuristic child may do better on the original model in the
+same time. Two options, both off by default, make the child solve the original
+model instead of the residual:
+- `min_reduction`: the child gets the original model when preprocessing
+  removed less than this fraction of the variables.
+- `max_prep_fraction`: with a `deadline_ns`, the child gets the original model
+  when preprocessing used more than this fraction of the time to the deadline.
+
+Neither applies when the caller has assumptions or every variable was removed.
+After a fallback, `result.workspace` and `result.exported` are a fresh identity
+workspace and export of the same source. The caller's workspace keeps its
+reductions.
+
+`metadata.child_model` (`:residual` or `:original`) records which model the child
+solved, and `metadata.bypass_reason` records why (`:min_reduction`,
+`:max_prep_fraction` or `nothing`). `metadata.residual_variables` keeps the
+residual size preprocessing reached.
+
+As guidance only, not a guarantee: in the v0.2.0 benchmark campaign, MQLib
+heuristics with a 2 s budget were worse after Weak preprocessing than on the raw
+model in 37% of runs that removed less than 5% of the variables, and in 2% of
+runs that removed at least 75%. So `min_reduction = 0.05` is a reasonable
+starting point for heuristic children. Exact children usually gain from any
+reduction.
+
 ## MOI and ToQUBO
 
 The factory is not exported; use its qualified name alongside other solver packages.

@@ -62,13 +62,17 @@ function QP.sample_preprocessed(input,child_factory;rules=nothing,max_work=typem
         enable_dominance=true,enable_elimination=true,enable_relations=true,
         enable_star_triangle=false,allow_weak_relations=false,allow_exact_fallback=true,
         stop_on_disabled_optional=false,max_fill=typemax(Int),max_total_fill=typemax(Int),
-        relation_work_budget=typemax(Int))
+        relation_work_budget=typemax(Int),min_reduction=0,max_prep_fraction=1)
     QP._limits(max_work,deadline_ns)
     QP._limits(max_deductions,deadline_ns)
     QP._limits(max_exact_work,deadline_ns)
     QP._limits(max_child_variables,deadline_ns)
     QP._limits(max_results,deadline_ns)
     max_results <= 1_000_000 || throw(ArgumentError("max_results must be <=1000000"))
+    (min_reduction isa Real && !(min_reduction isa Bool) && 0 <= min_reduction <= 1) ||
+        throw(ArgumentError("min_reduction must be a fraction between 0 and 1"))
+    (max_prep_fraction isa Real && !(max_prep_fraction isa Bool) && 0 <= max_prep_fraction <= 1) ||
+        throw(ArgumentError("max_prep_fraction must be a fraction between 0 and 1"))
     begin_ns = time_ns()
     budget = _Budget(Int(max_work),0,deadline_ns)
     ws = input isa QP.Workspace ? input : nothing
@@ -82,6 +86,8 @@ function QP.sample_preprocessed(input,child_factory;rules=nothing,max_work=typem
     timings = Dict{Symbol,Float64}()
     propagation = nothing
     child_variables = 0
+    residual_variables = nothing
+    bypass = nothing
     function finish(reason;scope_optimal=false)
         scope = exported === nothing ? :unknown : exported.certificate.scope
         source = ws === nothing ? nothing : ws._snapshot
@@ -89,6 +95,8 @@ function QP.sample_preprocessed(input,child_factory;rules=nothing,max_work=typem
             work_used=budget.used,work_remaining=budget.remaining,child_work_reserved=child_allowance,
             child_called=child_called,child_variables=child_variables,rejected_results=rejected,
             propagation=propagation,stopped_phase=phase,
+            residual_variables=residual_variables,bypass_reason=bypass,
+            child_model=bypass === nothing ? :residual : :original,
             labels=exported === nothing ? [] : QP.original_variables(exported),
             caller_assumptions=exported isa QP.ConditionedExport ? exported.certificate.assumptions : (),
             reduction_chain=exported === nothing ? () : exported.certificate.reduction_chain,
@@ -151,6 +159,20 @@ function QP.sample_preprocessed(input,child_factory;rules=nothing,max_work=typem
         budget.used += used
         timings[:propagation] = Float64(time_ns()-t)/1e9
         propagation.stop_reason === :deadline && return finish(:deadline)
+    end
+    # Give the child the original model instead when the certified reduction is too
+    # small to pay off, or preprocessing used too much of the deadline. Caller
+    # assumptions and fully reduced models never bypass.
+    n_total = length(ws._snapshot.labels)
+    residual_variables = Base.count(==(Int8(2)),ws._state.fixed) # `count` is a local below
+    if residual_variables > 0 && isempty(QP.assumptions(ws))
+        if n_total-residual_variables < min_reduction*n_total
+            bypass = :min_reduction
+        elseif deadline_ns !== nothing && max_prep_fraction < 1 &&
+                Float64(time_ns())-Float64(begin_ns) > max_prep_fraction*(Float64(deadline_ns)-Float64(begin_ns))
+            bypass = :max_prep_fraction
+        end
+        bypass === nothing || (ws = QP._identity_workspace(ws))
     end
     phase = :materialization
     t = time_ns()
@@ -325,7 +347,9 @@ function QUBODrivers.sample(opt::SamplerOptimizer{Float64})
         "seeds"=>Dict{String,Any}(),"time"=>Dict("total"=>elapsed,"effective"=>elapsed),
         "preprocessing"=>Dict("scope"=>String(result.scope),"scope_optimal"=>result.scope_optimal,
             "work_used"=>result.metadata.work_used,"child_called"=>result.metadata.child_called,
-            "child_variables"=>result.metadata.child_variables,"child_status"=>String(result.child_status)))
+            "child_variables"=>result.metadata.child_variables,"child_status"=>String(result.child_status),
+            "child_model"=>String(result.metadata.child_model),
+            "bypass_reason"=>String(something(result.metadata.bypass_reason,:none))))
     out = SampleSet{Float64}(samples,metadata;sense=QT.sense(s),domain=QT.domain(s))
     final_metadata = QT.metadata(out)
     if QP._expired(get(options,:deadline_ns,nothing))
