@@ -535,6 +535,10 @@ mutable struct Workspace
         return new(snapshot, Generation(uuid4(), uuid4()), state)
     end
 end
+# A fresh identity workspace over the same snapshot (new generation): the original
+# model a consumer can solve instead of the residual
+_identity_workspace(ws::Workspace) =
+    Workspace(ws._snapshot, Generation(uuid4(), uuid4()), _incremental(ws._snapshot; rules=:identity))
 _check_rules(rules) = rules in (:identity,:dominance,:elimination,:relations,:mixed) ? nothing :
     throw(ArgumentError("supported rules are :identity, :dominance, :elimination, :relations and :mixed; requested $(repr(rules))"))
 

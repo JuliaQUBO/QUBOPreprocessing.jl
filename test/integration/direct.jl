@@ -173,3 +173,72 @@ end
     small,large = reconstruction_bytes(10),reconstruction_bytes(200)
     @test large <= small+8192 # complete state storage grows; the dense graph is not copied per sample
 end
+
+@testset "fallback to the original model when the reduction is small (#92)" begin
+    # Dominance removes x and y; :tie stays free (2 of 3 variables removed)
+    model = QT.Model(Dict(:x=>3.0,:y=>1.0,:tie=>0.0),Dict((:x,:y)=>-2.0))
+    default = sample_preprocessed(model,ScriptedChild.factory())
+    @test default.metadata.child_model === :residual && default.metadata.bypass_reason === nothing
+    @test default.metadata.child_variables == 1 && default.metadata.residual_variables == 1
+
+    # Below min_reduction the child solves the original model; the caller's workspace keeps its reductions
+    ws = Workspace(model;rules=:dominance)
+    r = sample_preprocessed(ws,ScriptedChild.factory();min_reduction=0.9)
+    @test r.metadata.child_model === :original && r.metadata.bypass_reason === :min_reduction
+    @test r.metadata.child_variables == 3 && r.metadata.residual_variables == 1
+    @test r.optimal && r.scope === :original && isempty(r.metadata.reduction_chain)
+    @test generation(r) == generation(r.exported) && r.workspace !== ws && generation(r) != generation(ws)
+    @test ScriptedChild.scalar(model,first(r.samples).state) == independent_optimum(model)
+    @test length(deductions(ws)) == 2
+    kept = sample_preprocessed(model,ScriptedChild.factory();min_reduction=0.5)
+    @test kept.metadata.child_model === :residual && kept.metadata.child_variables == 1
+
+    # max_prep_fraction needs a deadline; a zero fraction is always exceeded
+    late = sample_preprocessed(model,ScriptedChild.factory();max_prep_fraction=0.0,
+                               deadline_ns=time_ns()+UInt64(30_000_000_000))
+    @test late.metadata.bypass_reason === :max_prep_fraction && late.metadata.child_variables == 3
+    @test ScriptedChild.scalar(model,first(late.samples).state) == independent_optimum(model)
+    @test sample_preprocessed(model,ScriptedChild.factory();max_prep_fraction=0.0).metadata.bypass_reason === nothing
+
+    # Caller assumptions and fully reduced models never fall back. Here the
+    # assumption leaves two free variables, so only the assumption guard applies.
+    pair = QT.Model(Dict(:a=>0.0,:b=>0.0,:c=>1.0),Dict((:a,:b)=>-1.0,(:b,:c)=>0.5))
+    wa = Workspace(pair;rules=:dominance)
+    assume!(wa,:c,0)
+    ra = sample_preprocessed(wa,ScriptedChild.factory();min_reduction=1)
+    @test ra.metadata.bypass_reason === nothing && ra.metadata.child_model === :residual
+    @test ra.metadata.child_called && ra.metadata.child_variables == 2
+    @test ra.scope === :assumptions && ra.scope_optimal && !ra.optimal
+    @test ra.metadata.caller_assumptions == (QT.index(pair,:c)=>0,)
+    @test ScriptedChild.scalar(pair,first(ra.samples).state) == independent_optimum(pair;scope=Dict(:c=>0))
+    fully = QT.Model(Dict(:a=>1.0,:b=>2.0),Dict{Tuple{Symbol,Symbol},Float64}())
+    rf = sample_preprocessed(fully,()->error("all-fixed dispatch");min_reduction=1)
+    @test rf.optimal && rf.metadata.bypass_reason === nothing
+
+    # The identity rebuild is charged before it happens; with nothing removed there is none
+    wd = Workspace(model;rules=:dominance)
+    propagate!(wd)
+    rw = sample_preprocessed(wd,ScriptedChild.factory();min_reduction=0.9,max_work=40)
+    @test rw.stop_reason === :work_limit && rw.workspace === wd && rw.metadata.bypass_reason === nothing
+    @test rw.metadata.stopped_phase === :bypass && !rw.metadata.child_called
+    rd = sample_preprocessed(wd,ScriptedChild.factory();min_reduction=0.9)
+    @test rd.metadata.bypass_reason === :min_reduction && haskey(rd.metadata.phases,:bypass)
+    wid = Workspace(model;rules=:identity)
+    rt = sample_preprocessed(wid,ScriptedChild.factory();min_reduction=0.05)
+    @test rt.metadata.bypass_reason === :min_reduction && rt.metadata.child_model === :original
+    @test rt.workspace === wid && !haskey(rt.metadata.phases,:bypass) && rt.metadata.child_variables == 3
+
+    for bad in ((;min_reduction=-0.1),(;min_reduction=1.5),(;min_reduction=NaN),(;min_reduction=true),
+                (;max_prep_fraction=2),(;max_prep_fraction=-1),(;max_prep_fraction=false))
+        @test_throws ArgumentError sample_preprocessed(model,ScriptedChild.factory();bad...)
+    end
+
+    # The MOI optimizer forwards the options and reports the choice
+    opt = QUBOPreprocessing.Optimizer(ScriptedChild.factory();rules=:dominance,min_reduction=0.9)
+    vi = MOI.VariableIndex.(1:3)
+    QD.set_model!(opt,QT.Model(Dict(vi[1]=>3.0,vi[2]=>1.0,vi[3]=>0.0),Dict((vi[1],vi[2])=>-2.0)))
+    MOI.optimize!(opt)
+    @test MOI.get(opt,MOI.TerminationStatus()) === MOI.OPTIMAL
+    pre = QT.metadata(QT.solution(opt))["preprocessing"]
+    @test pre["child_model"] == "original" && pre["bypass_reason"] == "min_reduction"
+end
