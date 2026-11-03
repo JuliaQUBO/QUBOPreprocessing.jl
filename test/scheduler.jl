@@ -617,6 +617,25 @@ end
     end
     @test t_probe < 0.25
 
+    # Deterministic cancellation: on a dense 256-variable graph (32,640 couplings),
+    # each probing-preparation scan stops at its first poll once the deadline has passed
+    dense = QT.Model{Int,Float64,Int}(Dict(i => (isodd(i) ? 0.5 : -0.5) for i in 1:256),
+                                      Dict((i, j) => (iseven(i + j) ? 1.0 : -1.0) for i in 1:256 for j in (i + 1):256);
+                                      domain=:spin, sense=:min)
+    ws_d = Workspace(dense; rules=:mixed)
+    free_d = collect(1:256)
+    expired = UInt64(1)
+    @test QP._can_use_float_spin_heuristic(ws_d, free_d)
+    @test !QP._can_use_float_spin_heuristic(ws_d, free_d; deadline_ns=expired)
+    @test QP._try_build_float_spin_subproblem(ws_d, free_d) !== nothing
+    @test QP._try_build_float_spin_subproblem(ws_d, free_d; deadline_ns=expired) === nothing
+    spins_d = [isodd(i) ? 1 : -1 for i in 1:256]
+    @test QP._polish_spin_state!(copy(spins_d), ws_d, free_d, 1, 1000) isa Rational
+    s_d = copy(spins_d)
+    @test QP._polish_spin_state!(s_d, ws_d, free_d, 1, 1000; deadline_ns=expired) === nothing && s_d == spins_d
+    cands_d = collect(1:256)
+    @test QP._order_probing_candidates!(ws_d, cands_d, spins_d, :coercive; deadline_ns=expired) == 1:256
+
     # Keywords are forwarded, weak mode is accepted, and invalid budgets are rejected
     ws_w, rep_w = preprocess(m8; rules=:mixed, time_limit=60.0, allow_weak=true, enable_probing=false)
     @test rep_w.residual_variables == 0 && all(f -> f.family !== :probing, rep_w.families)

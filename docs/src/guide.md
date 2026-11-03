@@ -91,10 +91,11 @@ is useful for an off/on comparison.
 
 To run every reduction family, pass `rules=:mixed` with a `time_limit` in seconds
 (see [`schedule_budgeted!`](@ref)):
-- the cheap rules (dominance, low-degree elimination and pair relations) always
-  reach their fixpoint;
-- roof duality, submodular cuts, Max-Cut, block elimination, residual-SCC
-  contraction and probing share the rest of the budget.
+- the cheap rules (dominance and low-degree elimination, with pair-relation
+  search capped at a fixed amount of work) always reach their fixpoint, even past
+  the time limit;
+- uncapped relation search, roof duality, submodular cuts, Max-Cut, block
+  elimination, residual-SCC contraction and probing share the rest of the budget.
 
 The report shows the time each family took and the variables it removed:
 

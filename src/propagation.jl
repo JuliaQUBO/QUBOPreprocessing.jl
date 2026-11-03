@@ -432,10 +432,14 @@ const _MIN_FLOAT_SPIN_COEFF = floatmin(Float64) * 1e16
 @inline _float_spin_coupling(ws::Workspace, q::_Exact) =
     ws._snapshot.domain === QT.SpinDomain ? Float64(q) : 0.25 * Float64(q)
 
-function _can_use_float_spin_heuristic(ws::Workspace, indices::Vector{Int})
+function _can_use_float_spin_heuristic(ws::Workspace, indices::Vector{Int}; deadline_ns=nothing)
     st = ws._state
     total_abs = 0.0
+    scanned = 0
     @inbounds for i in indices
+        scanned += 1
+        # On expiry the answer is false; callers check the deadline before the exact path
+        _poll_expired(scanned, deadline_ns) && return false
         h_ex = _spin_field(ws, i)
         if !iszero(h_ex)
             hf = Float64(h_ex)
@@ -443,6 +447,8 @@ function _can_use_float_spin_heuristic(ws::Workspace, indices::Vector{Int})
             total_abs += abs(hf)
         end
         for (j, q) in st.adjacency[i]
+            scanned += 1
+            _poll_expired(scanned, deadline_ns) && return false
             (st.fixed[j] == 2 && !iszero(q)) || continue
             jf = _float_spin_coupling(ws, q)
             (isfinite(jf) && abs(jf) >= _MIN_FLOAT_SPIN_COEFF) || return false
@@ -459,8 +465,10 @@ function _try_build_float_spin_subproblem(ws::Workspace, free_vars::Vector{Int};
     l1_f = zeros(Float64, n)
     adj_f = [Tuple{Int,Float64}[] for _ in 1:n]
     total_abs = 0.0
-    @inbounds for (k, i) in enumerate(free_vars)
-        _poll_expired(k, deadline_ns) && return nothing
+    scanned = 0
+    @inbounds for i in free_vars
+        scanned += 1
+        _poll_expired(scanned, deadline_ns) && return nothing
         h_ex = _spin_field(ws, i)
         if !iszero(h_ex)
             hf = Float64(h_ex)
@@ -472,6 +480,8 @@ function _try_build_float_spin_subproblem(ws::Workspace, free_vars::Vector{Int};
         sizehint!(ai, length(st.adjacency[i]))
         l1 = 0.0
         for (j, q) in st.adjacency[i]
+            scanned += 1
+            _poll_expired(scanned, deadline_ns) && return nothing
             (st.fixed[j] == 2 && !iszero(q)) || continue
             jf = _float_spin_coupling(ws, q)
             (isfinite(jf) && abs(jf) >= _MIN_FLOAT_SPIN_COEFF) || return nothing
@@ -545,9 +555,13 @@ function _polish_spin_state!(
     st = ws._state
     n = length(ws._snapshot.labels)
     eff_h = Vector{_Exact}(undef, n)
+    # Interrupted before the energy is known: `nothing`, with spin_s unchanged
+    scanned = 0
     @inbounds for i in free_vars
         eh = _spin_field(ws, i)
         for (j, q) in st.adjacency[i]
+            scanned += 1
+            _poll_expired(scanned, deadline_ns) && return nothing
             (st.fixed[j] == 2 && !iszero(q)) || continue
             eh += _spin_coupling(ws, q) * spin_s[j]
         end
@@ -591,7 +605,8 @@ function _spin_seq_strictly_better(
     spin_par::Vector{Int},
     h_f::Vector{Float64},
     adj_f::Vector{Vector{Tuple{Int,Float64}}},
-    direction::Int,
+    direction::Int;
+    deadline_ns=nothing,
 )
     dir_f = Float64(direction)
     delta_f = 0.0
@@ -618,11 +633,15 @@ function _spin_seq_strictly_better(
     delta_f > tol && return false
     st = ws._state
     delta_ex = _Exact(0)
+    scanned = 0
     @inbounds for i in free_vars
         s_seq = spin_seq[i]
         s_seq == spin_par[i] && continue
         cut_ex = _spin_field(ws, i)
         for (j, q) in st.adjacency[i]
+            # On expiry the parallel state is kept
+            scanned += 1
+            _poll_expired(scanned, deadline_ns) && return false
             (st.fixed[j] == 2 && spin_seq[j] == spin_par[j] && !iszero(q)) || continue
             cut_ex += _spin_coupling(ws, q) * spin_par[j]
         end
@@ -698,7 +717,7 @@ function _coercive_field_witness_float_spin!(
             end
         end
         _polish_spin_state_float!(spin_seq, free_vars, h_f, adj_f, l1_f, direction, mf; deadline_ns)
-        if _spin_seq_strictly_better(ws, free_vars, spin_seq, spin_s, h_f, adj_f, direction)
+        if _spin_seq_strictly_better(ws, free_vars, spin_seq, spin_s, h_f, adj_f, direction; deadline_ns)
             spin_best = spin_seq
         end
     end
@@ -818,9 +837,11 @@ function _coercive_field_witness_spins(
                     cond_h[i] = _spin_field(ws, i)
                 end
                 complete = true
-                @inbounds for (k, i) in enumerate(seq_order)
+                scanned = 0
+                @inbounds for i in seq_order
                     # A partial sequential state is discarded
-                    if _poll_expired(k, deadline_ns)
+                    scanned += 1
+                    if _poll_expired(scanned, deadline_ns)
                         complete = false
                         break
                     end
@@ -840,13 +861,14 @@ function _coercive_field_witness_spins(
                     spin_seq[i] = s_i
                     assigned[i] = true
                     for (j, q) in st.adjacency[i]
+                        scanned += 1
                         (st.fixed[j] == 2 && !assigned[j] && !iszero(q)) || continue
                         cond_h[j] += _spin_coupling(ws, q) * s_i
                     end
                 end
-                if complete
+                if complete && e_par !== nothing
                     e_seq = _polish_spin_state!(spin_seq, ws, free_vars, direction, mf; deadline_ns)
-                    if e_seq < e_par
+                    if e_seq !== nothing && e_seq < e_par
                         spin_best = spin_seq
                     end
                 end
@@ -946,7 +968,9 @@ function _order_probing_candidates!(
     is_bool = s.domain === QT.BoolDomain
     direction = _direction(s)
     tiers = zeros(Int, n)
-    if _can_use_float_spin_heuristic(ws, cand_indices)
+    use_float = _can_use_float_spin_heuristic(ws, cand_indices; deadline_ns)
+    _expired(deadline_ns) && return cand_indices
+    if use_float
         ratios_f = zeros(Float64, n)
         secondary_f = zeros(Float64, n)
         l1_f = zeros(Float64, n)
@@ -957,6 +981,8 @@ function _order_probing_candidates!(
                 abs_h = _canon_zero(abs(Float64(_spin_field(ws, i))))
                 l1 = 0.0
                 for (j, q) in st.adjacency[i]
+                    polled += 1
+                    _poll_expired(polled, deadline_ns) && return cand_indices
                     (st.fixed[j] == 2 && !iszero(q)) || continue
                     l1 += abs(_float_spin_coupling(ws, q))
                 end
@@ -981,6 +1007,8 @@ function _order_probing_candidates!(
                 l1 = 0.0
                 eff_h = h_i
                 for (j, q) in st.adjacency[i]
+                    polled += 1
+                    _poll_expired(polled, deadline_ns) && return cand_indices
                     (st.fixed[j] == 2 && !iszero(q)) || continue
                     c_ij = _float_spin_coupling(ws, q)
                     l1 += abs(c_ij)
@@ -1014,6 +1042,8 @@ function _order_probing_candidates!(
             abs_h = abs(_spin_field(ws, i))
             l1 = _Exact(0)
             for (j, q) in st.adjacency[i]
+                polled += 1
+                _poll_expired(polled, deadline_ns) && return cand_indices
                 (st.fixed[j] == 2 && !iszero(q)) || continue
                 l1 += abs(_spin_coupling(ws, q))
             end
@@ -1037,6 +1067,8 @@ function _order_probing_candidates!(
             l1 = _Exact(0)
             eff_h = h_i
             for (j, q) in st.adjacency[i]
+                polled += 1
+                _poll_expired(polled, deadline_ns) && return cand_indices
                 (st.fixed[j] == 2 && !iszero(q)) || continue
                 c_ij = _spin_coupling(ws, q)
                 l1 += abs(c_ij)
@@ -4120,18 +4152,21 @@ The cheap rules (dominance, low-degree and star-triangle elimination, pair
 relations: [`schedule_reductions!`](@ref)) first reach a fixpoint whatever the
 budget, with pair-relation search limited to `guaranteed_relation_work` work units.
 So a small budget never does less than this floor, while relation search cannot run
-for minutes on a dense model. Within the budget, relation search then continues
-without that limit, and the expensive families run in turn — roof duality,
-submodular cuts, Max-Cut, block elimination (`max_block_size`), residual-SCC
-contraction and, when `enable_probing`, coercive-order probing with `probe_rounds`
-trial rounds. Each gets an equal share of the budget still left, so one slow family
-cannot consume it all and time a fast family leaves passes to the next, and the
-cheap rules run again after every expensive family that removes a variable. Passes
-repeat while some family has not finished on the current workspace: a family runs
-again when its share ran out before it finished, or when variables were removed
-after its last run. Every budgeted call shares the deadline, so the schedule returns
-within a small margin of `time_limit` or of the end of the cheap floor, whichever is
-later, and an interrupted call rolls back cleanly.
+for minutes on a dense model. `time_limit` is therefore a soft cutoff: the floor can
+run past it. Within the budget, the cheap rules continue without the relation limit,
+and the expensive families run in turn — roof duality, submodular cuts, Max-Cut,
+block elimination (`max_block_size`), residual-SCC contraction and, when
+`enable_probing`, coercive-order probing with `probe_rounds` trial rounds. Each of
+these gets an equal share of the budget still left, so one slow family cannot
+consume it all and time a fast family leaves passes to the next. The cheap rules
+run again, with the next family's share, after every expensive family that removes
+a variable. Passes repeat while some family has not finished on the current
+workspace: a family runs again when its share ran out before it finished, or when
+variables were removed after its last run. Every budgeted call shares the deadline,
+so the schedule returns within a small margin of `time_limit` or of the end of the
+cheap floor, whichever is later, and an interrupted call rolls back cleanly. On
+large dense models, garbage collection of exact-arithmetic temporaries can still
+stretch a call past its share.
 
 `allow_weak=true` additionally applies weak dominance, weak relations and weak
 submodular/Max-Cut reductions, which keep at least one optimum; exact elimination
@@ -4220,8 +4255,9 @@ function schedule_budgeted!(
         (unfinished(:cheap) || any(unfinished, order)) || break
         passes += 1
         passes == 1 && run_family!(:cheap, typemax(UInt64); relation_work_budget=guaranteed_relation_work)
-        unfinished(:cheap) && !_expired(deadline) && run_family!(:cheap, deadline)
-        active = filter(unfinished, order)
+        # Within the budget the cheap rules (uncapped relation search after the floor)
+        # take an equal share like every other family
+        active = filter(unfinished, [:cheap; order])
         for (k, family) in enumerate(active)
             free_count() == 0 && break
             # Compare against the same clock reading before subtracting: the deadline is unsigned
@@ -4229,8 +4265,13 @@ function schedule_budgeted!(
             now >= deadline && break
             share = (deadline - now) ÷ UInt64(length(active) - k + 1)
             freed = run_family!(family, now + share)
-            # Re-run the cheap rules after any expensive family that removed a variable
-            freed > 0 && free_count() > 0 && run_family!(:cheap, deadline)
+            # Re-run the cheap rules after any expensive family that removed a variable,
+            # with the share the next family would get
+            if family !== :cheap && freed > 0 && free_count() > 0
+                now = time_ns()
+                now >= deadline && break
+                run_family!(:cheap, now + (deadline - now) ÷ UInt64(length(active) - k + 1))
+            end
         end
     end
     free_count() == 0 && (stop = :solved)
