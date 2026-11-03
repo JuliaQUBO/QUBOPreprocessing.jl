@@ -862,9 +862,14 @@ function _coercive_field_witness_spins(
                     assigned[i] = true
                     for (j, q) in st.adjacency[i]
                         scanned += 1
+                        if _poll_expired(scanned, deadline_ns)
+                            complete = false
+                            break
+                        end
                         (st.fixed[j] == 2 && !assigned[j] && !iszero(q)) || continue
                         cond_h[j] += _spin_coupling(ws, q) * s_i
                     end
+                    complete || break
                 end
                 if complete && e_par !== nothing
                     e_seq = _polish_spin_state!(spin_seq, ws, free_vars, direction, mf; deadline_ns)
