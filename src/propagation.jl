@@ -4036,6 +4036,131 @@ function schedule_reductions!(
 end
 
 """
+    BudgetedFamilyRun
+
+One reduction family's share of a [`schedule_budgeted!`](@ref) run: `family`
+(`:cheap`, `:roof_duality`, `:submodular_cut`, `:maxcut`, `:blocks`, `:roof_scc`
+or `:probing`), number of `calls`, wall-clock `time_s`, variables it removed
+(`freed`) and the `stop_reason` of its last call.
+"""
+struct BudgetedFamilyRun
+    family::Symbol
+    calls::Int
+    time_s::Float64
+    freed::Int
+    stop_reason::Symbol
+end
+
+"""
+    BudgetedScheduleReport
+
+Returned by [`schedule_budgeted!`](@ref): `stop_reason` (`:fixpoint` when a full
+pass removed no variable, `:solved` when no free variable remains, or `:deadline`
+when `time_limit` expired first), number of `passes`, wall-clock `elapsed_s`,
+`initial_variables`, `residual_variables` and the per-family `families` in
+schedule order.
+"""
+struct BudgetedScheduleReport
+    generation::Generation
+    stop_reason::Symbol
+    passes::Int
+    elapsed_s::Float64
+    initial_variables::Int
+    residual_variables::Int
+    families::Vector{BudgetedFamilyRun}
+end
+generation(r::BudgetedScheduleReport) = r.generation
+
+"""
+    schedule_budgeted!(ws; time_limit, allow_weak=false, enable_probing=true,
+                       max_block_size=12, probe_rounds=8, tie_break=:low)
+
+Run every certified reduction family on `ws` under one wall-clock budget of
+`time_limit` seconds, instead of caller-chosen size gates. The cheap rules
+(dominance, low-degree and star-triangle elimination, pair relations: one
+[`schedule_reductions!`](@ref) call) reach a fixpoint first. Each expensive family
+then runs in turn with whatever budget remains — roof duality, submodular cuts,
+Max-Cut, block elimination (`max_block_size`), residual-SCC contraction and, when
+`enable_probing`, coercive-order probing with `probe_rounds` trial rounds — and
+the cheap rules run again after every expensive family that removes a variable.
+Passes repeat until one removes no variable or the budget expires. Every family
+receives the shared `deadline_ns`, so the call returns within a small margin of
+`time_limit` and any interrupted pass rolls back cleanly. Only strongly persistent
+reductions are applied unless `allow_weak=true`. Returns a
+[`BudgetedScheduleReport`](@ref) with per-family time and removed variables.
+"""
+function schedule_budgeted!(
+    ws::Workspace;
+    time_limit::Real,
+    allow_weak::Bool=false,
+    enable_probing::Bool=true,
+    max_block_size=12,
+    probe_rounds=8,
+    tie_break::Symbol=:low,
+)
+    (isfinite(time_limit) && time_limit >= 0) ||
+        throw(ArgumentError("time_limit must be a finite nonnegative number of seconds"))
+    t0 = time_ns()
+    deadline = t0 + round(UInt64, Float64(time_limit) * 1e9)
+    st = ws._state
+    free_count() = count(==(Int8(2)), st.fixed)
+    n0 = free_count()
+    order = [:roof_duality, :submodular_cut, :maxcut, :blocks, :roof_scc]
+    enable_probing && push!(order, :probing)
+    stats = Dict{Symbol,BudgetedFamilyRun}()
+    function run_family!(family::Symbol)
+        before = free_count()
+        t = time_ns()
+        rep = if family === :cheap || family === :blocks
+            schedule_reductions!(
+                ws;
+                enable_star_triangle=true, enable_blocks=(family === :blocks), max_block_size,
+                allow_weak_dominance=allow_weak, allow_weak_relations=allow_weak, tie_break,
+                deadline_ns=deadline,
+            )
+        elseif family === :roof_duality || family === :roof_scc
+            apply_roof_duality!(ws; contract_scc=(family === :roof_scc), deadline_ns=deadline)
+        elseif family === :submodular_cut
+            apply_submodular_cut!(ws; allow_weak, tie_break, deadline_ns=deadline)
+        elseif family === :maxcut
+            apply_maxcut!(ws; allow_weak, deadline_ns=deadline)
+        else
+            probe_variables!(ws; order=:coercive, max_rounds=probe_rounds, deadline_ns=deadline)
+        end
+        freed = before - free_count()
+        prev = get(stats, family, BudgetedFamilyRun(family, 0, 0.0, 0, :none))
+        stats[family] = BudgetedFamilyRun(family, prev.calls + 1, prev.time_s + (time_ns() - t) / 1e9,
+                                          prev.freed + freed, rep.stop_reason)
+        return freed
+    end
+    passes = 0
+    stop = :fixpoint
+    while free_count() > 0
+        if _expired(deadline)
+            stop = :deadline
+            break
+        end
+        passes += 1
+        freed_pass = run_family!(:cheap)
+        for family in order
+            (free_count() == 0 || _expired(deadline)) && break
+            freed = run_family!(family)
+            freed_pass += freed
+            # Re-run the cheap rules after any expensive family that removed a variable
+            freed > 0 && free_count() > 0 && !_expired(deadline) && (freed_pass += run_family!(:cheap))
+        end
+        if _expired(deadline)
+            stop = :deadline
+            break
+        end
+        freed_pass == 0 && break
+    end
+    free_count() == 0 && (stop = :solved)
+    families = BudgetedFamilyRun[stats[f] for f in (:cheap, order...) if haskey(stats, f)]
+    return BudgetedScheduleReport(generation(ws), stop, passes, (time_ns() - t0) / 1e9, n0, free_count(), families)
+end
+
+"""
     PhaseAccounting
 
 Per-phase work, exact-arithmetic, fallback, allocation and wall-time accounting

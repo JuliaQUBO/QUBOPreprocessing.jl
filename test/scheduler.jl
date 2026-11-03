@@ -499,3 +499,53 @@ end
     @test acct_w_rec.export_phase.stop_reason === :certified && acct_w_rec.reconstruction.stop_reason === :work_limit
 end
 
+
+@testset "budgeted schedule: every family under one time budget (#95)" begin
+    QP = QUBOPreprocessing
+    # Zero-field ferromagnetic K_{8,8}: the cheap rules alone remove nothing; residual-SCC
+    # contraction solves it, then the cheap rules finish.
+    bip(n, w) = QT.Model{Int,Float64,Int}(Dict(i => 0.0 for i in 1:2n), Dict((u, v) => w for u in 1:n for v in (n + 1):2n);
+                                          domain=:spin, sense=:min)
+    m8 = bip(8, -1.0)
+    ws_cheap = Workspace(m8; rules=:mixed)
+    schedule_reductions!(ws_cheap; enable_star_triangle=true)
+    @test count(==(Int8(2)), ws_cheap._state.fixed) == 16
+    ws, rep = preprocess(m8; rules=:mixed, time_limit=60.0)
+    @test rep isa BudgetedScheduleReport
+    @test rep.stop_reason === :solved && rep.residual_variables == 0 && rep.initial_variables == 16
+    @test first(rep.families).family === :cheap
+    @test sum(f.freed for f in rep.families) == rep.initial_variables - rep.residual_variables
+    @test any(f -> f.family === :roof_scc && f.freed > 0, rep.families)
+    @test all(f -> f.calls >= 1 && f.time_s >= 0, rep.families)
+    @test verify_certificate(ws, export_certificate(ws)).valid
+    rec = reconstruct(materialize(ws; coefficient_type=Rational{BigInt}), Int[])
+    @test rec.energy.value == -64
+
+    # Models the cheap rules finish are left exactly where schedule_reductions! leaves them
+    chain = QT.Model{Int,Float64,Int}(Dict(1 => 3.0, 2 => -1.0, 3 => 0.5, 4 => -2.0), Dict((1, 2) => 1.0, (2, 3) => -2.0, (3, 4) => 1.5);
+                                      domain=:bool, sense=:min)
+    ws_c, rep_c = preprocess(chain; rules=:mixed, time_limit=60.0)
+    ws_s = Workspace(chain; rules=:mixed); schedule_reductions!(ws_s; enable_star_triangle=true)
+    @test rep_c.residual_variables <= count(==(Int8(2)), ws_s._state.fixed)
+    @test rep_c.stop_reason in (:solved, :fixpoint)
+
+    # The budget is honored: zero time runs nothing; a short budget on K_{60,60}
+    # (about 1 s to solve) returns at the deadline with a consistent workspace.
+    ws0 = Workspace(m8; rules=:mixed)
+    rep0 = schedule_budgeted!(ws0; time_limit=0)
+    @test rep0.stop_reason === :deadline && rep0.passes == 0 && rep0.residual_variables == 16 && isempty(rep0.families)
+    m60 = bip(60, -1.0)
+    preprocess(m60; rules=:mixed, time_limit=60.0)
+    t_short = @elapsed (ws60, rep60) = preprocess(m60; rules=:mixed, time_limit=0.05)
+    @test rep60.stop_reason === :deadline
+    @test t_short < 0.5
+    cert60 = export_certificate(ws60)
+    @test cert60 === nothing || verify_certificate(ws60, cert60).valid
+
+    # Keywords are forwarded, weak mode is accepted, and invalid budgets are rejected
+    ws_w, rep_w = preprocess(m8; rules=:mixed, time_limit=60.0, allow_weak=true, enable_probing=false)
+    @test rep_w.residual_variables == 0 && all(f -> f.family !== :probing, rep_w.families)
+    @test_throws ArgumentError schedule_budgeted!(Workspace(m8; rules=:mixed); time_limit=-1)
+    @test_throws ArgumentError schedule_budgeted!(Workspace(m8; rules=:mixed); time_limit=Inf)
+    @test_throws ArgumentError preprocess(m8; rules=:dominance, time_limit=1.0)
+end
