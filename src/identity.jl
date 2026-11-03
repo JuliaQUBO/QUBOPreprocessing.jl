@@ -753,11 +753,16 @@ struct IdentityReport
 end
 
 """
-    preprocess(model; rules=:identity, integerize_scale::Bool=(rules !== :identity), max_decimals::Integer=9, atol::Real=0.0, kwargs...)
+    preprocess(model; rules=:identity, integerize_scale::Bool=(rules !== :identity), max_decimals::Integer=9, atol::Real=0.0, time_limit=nothing, kwargs...)
 
 Return `(workspace, report)` using the same snapshot path as [`Workspace`](@ref).
 `:identity` returns a no-inference `IdentityReport`; `:dominance` runs
 [`propagate!`](@ref) with forwarded keyword limits and returns its report.
+With `rules=:mixed` and a `time_limit` in seconds, every reduction family runs
+under that budget through [`schedule_budgeted!`](@ref) (forwarding its keywords)
+and its [`BudgetedScheduleReport`](@ref) is returned (the budget starts once the
+workspace is built, and the cheap rules' capped floor can run past it); without
+`time_limit`, `:mixed` runs [`schedule_reductions!`](@ref).
 When `rules !== :identity`, `integerize_scale` defaults to `true` with `atol=0.0`,
 so only exact dyadic denominators ``2^a`` within `0 <= a <= max_decimals` are
 factored into `scale` before reduction (`ws.perturbed == false`,
@@ -772,9 +777,13 @@ function preprocess(
     integerize_scale::Bool=(rules !== :identity),
     max_decimals::Integer=9,
     atol::Real=0.0,
+    time_limit=nothing,
     kwargs...,
 )
+    time_limit === nothing || rules === :mixed ||
+        throw(ArgumentError("time_limit requires rules=:mixed"))
     ws = Workspace(model; rules, integerize_scale, max_decimals, atol)
+    time_limit === nothing || return ws, schedule_budgeted!(ws; time_limit, kwargs...)
     rules === :dominance && return ws, propagate!(ws;kwargs...)
     rules === :elimination && return ws, eliminate_low_degree!(ws;kwargs...)
     rules === :relations && return ws, contract_relations!(ws;kwargs...)
