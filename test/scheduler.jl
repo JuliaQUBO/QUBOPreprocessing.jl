@@ -521,46 +521,100 @@ end
     rec = reconstruct(materialize(ws; coefficient_type=Rational{BigInt}), Int[])
     @test rec.energy.value == -64
 
-    # Models the cheap rules finish are left exactly where schedule_reductions! leaves them
+    # The cheap rules reach their fixpoint whatever the budget, even a zero one
     chain = QT.Model{Int,Float64,Int}(Dict(1 => 3.0, 2 => -1.0, 3 => 0.5, 4 => -2.0), Dict((1, 2) => 1.0, (2, 3) => -2.0, (3, 4) => 1.5);
                                       domain=:bool, sense=:min)
-    ws_c, rep_c = preprocess(chain; rules=:mixed, time_limit=60.0)
     ws_s = Workspace(chain; rules=:mixed); schedule_reductions!(ws_s; enable_star_triangle=true)
-    @test rep_c.residual_variables <= count(==(Int8(2)), ws_s._state.fixed)
-    @test rep_c.stop_reason in (:solved, :fixpoint)
+    for tl in (0, 60.0)
+        ws_c, rep_c = preprocess(chain; rules=:mixed, time_limit=tl)
+        @test rep_c.residual_variables <= count(==(Int8(2)), ws_s._state.fixed)
+        @test first(rep_c.families).family === :cheap
+    end
 
-    # The budget is honored: zero time runs nothing; a short budget on K_{60,60}
-    # (about 1 s to solve) returns at the deadline with a consistent workspace.
+    # :fixpoint means every family finished on the final workspace. With a disjoint
+    # frustrated glass beside K_{8,8}, roof duality runs again after SCC contraction
+    # removes the K_{8,8} part, and then no single family can remove anything more.
+    glass_J = Dict{Tuple{Int,Int},Float64}()
+    for i in 1:20, j in (i + 1):20
+        w = ((i * 7919 + j * 104729) % 7) - 3
+        abs(w) >= 2 && (glass_J[(16 + i, 16 + j)] = Float64(w))
+    end
+    mix = QT.Model{Int,Float64,Int}(
+        merge(Dict(i => 0.0 for i in 1:16), Dict(16 + i => Float64(((i * 31) % 5) - 2) for i in 1:20)),
+        merge(Dict((u, v) => -1.0 for u in 1:8 for v in 9:16), glass_J); domain=:spin, sense=:min)
+    ws_mix = Workspace(mix; rules=:mixed)
+    rep_mix = schedule_budgeted!(ws_mix; time_limit=60.0)
+    fam(r, f) = only(x for x in r.families if x.family === f)
+    @test rep_mix.stop_reason === :fixpoint && rep_mix.residual_variables == 18 && rep_mix.passes == 2
+    @test fam(rep_mix, :roof_scc).freed > 0 && fam(rep_mix, :roof_duality).calls == 2
+    for single in (w -> schedule_reductions!(w; enable_star_triangle=true), apply_roof_duality!, apply_submodular_cut!,
+                   apply_maxcut!, w -> schedule_reductions!(w; enable_blocks=true),
+                   w -> apply_roof_duality!(w; contract_scc=true), w -> probe_variables!(w; order=:coercive, max_rounds=8))
+        single(ws_mix)
+        @test count(==(Int8(2)), ws_mix._state.fixed) == 18
+    end
+
+    # A family cut short by its share stays eligible instead of ending the schedule
+    # in a false :fixpoint (zero-field antiferromagnetic spin K_12: only block
+    # elimination of the whole graph solves it)
+    k12 = QT.Model{Int,Float64,Int}(Dict(i => 0.0 for i in 1:12), Dict((i, j) => 1.0 for i in 1:12 for j in (i + 1):12);
+                                    domain=:spin, sense=:min)
+    for tl in (0.001, 0.01, 0.05, 0.2)
+        rk = schedule_budgeted!(Workspace(k12; rules=:mixed); time_limit=tl, enable_probing=false)
+        @test rk.stop_reason !== :fixpoint || all(f -> f.stop_reason !== :deadline, rk.families)
+    end
+    @test schedule_budgeted!(Workspace(k12; rules=:mixed); time_limit=60.0, enable_probing=false).stop_reason === :solved
+
+    # The budget is honored: zero time runs only the cheap floor; a short budget on K_{60,60}
+    # (about 1 s to solve) returns at the deadline with a consistent workspace. The
+    # timing check takes the fastest of three trials so machine load cannot fail it.
     ws0 = Workspace(m8; rules=:mixed)
     rep0 = schedule_budgeted!(ws0; time_limit=0)
-    @test rep0.stop_reason === :deadline && rep0.passes == 0 && rep0.residual_variables == 16 && isempty(rep0.families)
+    @test rep0.stop_reason === :deadline && rep0.passes == 1 && rep0.residual_variables == 16
+    @test [f.family for f in rep0.families] == [:cheap]
     m60 = bip(60, -1.0)
     preprocess(m60; rules=:mixed, time_limit=60.0)
-    ws60 = Workspace(m60; rules=:mixed)
-    t_short = @elapsed rep60 = schedule_budgeted!(ws60; time_limit=0.05)
-    @test rep60.stop_reason in (:deadline, :solved)
+    t_short = Inf
+    for _ in 1:3
+        ws60 = Workspace(m60; rules=:mixed)
+        t = @elapsed rep60 = schedule_budgeted!(ws60; time_limit=0.05)
+        t_short = min(t_short, t)
+        @test rep60.stop_reason in (:deadline, :solved)
+        cert60 = export_certificate(ws60)
+        @test cert60 === nothing || verify_certificate(ws60, cert60).valid
+    end
     @test t_short < 0.5
-    cert60 = export_certificate(ws60)
-    @test cert60 === nothing || verify_certificate(ws60, cert60).valid
 
-    # Options are validated before anything changes; huge budgets saturate
-    ws_v = Workspace(m8; rules=:mixed)
-    @test_throws ArgumentError schedule_budgeted!(ws_v; time_limit=1.0, probe_rounds=-1)
-    @test_throws ArgumentError schedule_budgeted!(ws_v; time_limit=1.0, max_block_size=0)
-    @test_throws ArgumentError schedule_budgeted!(ws_v; time_limit=1.0, tie_break=:mid)
-    @test count(==(Int8(2)), ws_v._state.fixed) == 16 && isempty(reductions(ws_v))
-    @test schedule_budgeted!(ws_v; time_limit=1e30).stop_reason === :solved
+    # Options are validated before anything changes (the isolated variable is the
+    # first deduction any family would make); huge budgets saturate
+    m8i = QT.Model{Int,Float64,Int}(merge(Dict(i => 0.0 for i in 1:16), Dict(17 => 1.0)),
+                                    Dict((u, v) => -1.0 for u in 1:8 for v in 9:16); domain=:spin, sense=:min)
+    ws_v = Workspace(m8i; rules=:mixed)
+    for bad in ((; probe_rounds=-1), (; probe_rounds=big(2)^70), (; probe_rounds=true), (; max_block_size=1),
+                (; max_block_size=17), (; max_block_size=typemax(Int)), (; max_block_size=2.0), (; tie_break=:mid),
+                (; guaranteed_relation_work=-1), (; guaranteed_relation_work=big(2)^70), (; guaranteed_relation_work=1.0))
+        @test_throws ArgumentError schedule_budgeted!(ws_v; time_limit=1.0, bad...)
+    end
+    @test count(==(Int8(2)), ws_v._state.fixed) == 17 && isempty(reductions(ws_v))
+    @test schedule_budgeted!(ws_v; time_limit=1e30, max_block_size=16).stop_reason === :solved
 
-    # Probing's witness construction and ordering honor a short deadline on a
-    # 20,000-variable ring: only linear-time setup remains (polishing alone took a few
-    # hundred ms, and probing this ring to completion takes minutes). The warm-up uses
-    # a UInt64 deadline so the timed call does not compile.
+    # Probing's witness construction and ordering honor a deadline on a
+    # 20,000-variable ring. An expired deadline changes nothing; a 1 ms deadline
+    # leaves only linear-time setup (polishing alone took a few hundred ms, and
+    # probing this ring to completion takes minutes). The warm-up uses a UInt64
+    # deadline so the timed call does not compile; the fastest of three trials counts.
     ring = QT.Model{Int,Float64,Int}(Dict(i => (isodd(i) ? 0.5 : -0.25) for i in 1:20_000),
                                      Dict((i, i % 20_000 + 1) => -1.0 for i in 1:20_000); domain=:spin, sense=:min)
     probe_variables!(Workspace(ring; rules=:mixed); order=:coercive, max_candidates=1, deadline_ns=time_ns() + UInt64(10)^9)
     ws_ring = Workspace(ring; rules=:mixed)
-    t_probe = @elapsed rep_probe = probe_variables!(ws_ring; order=:coercive, deadline_ns=time_ns() + UInt64(10)^6)
-    @test rep_probe.stop_reason === :deadline
+    rep_exp = probe_variables!(ws_ring; order=:coercive, deadline_ns=time_ns())
+    @test rep_exp.stop_reason === :deadline && count(==(Int8(2)), ws_ring._state.fixed) == 20_000
+    t_probe = Inf
+    for _ in 1:3
+        t = @elapsed rep_probe = probe_variables!(ws_ring; order=:coercive, deadline_ns=time_ns() + UInt64(10)^6)
+        t_probe = min(t_probe, t)
+        @test rep_probe.stop_reason === :deadline
+    end
     @test t_probe < 0.25
 
     # Keywords are forwarded, weak mode is accepted, and invalid budgets are rejected

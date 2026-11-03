@@ -452,14 +452,15 @@ function _can_use_float_spin_heuristic(ws::Workspace, indices::Vector{Int})
     return isfinite(total_abs) && total_abs < 1e290
 end
 
-function _try_build_float_spin_subproblem(ws::Workspace, free_vars::Vector{Int})
+function _try_build_float_spin_subproblem(ws::Workspace, free_vars::Vector{Int}; deadline_ns=nothing)
     st = ws._state
     n = length(ws._snapshot.labels)
     h_f = zeros(Float64, n)
     l1_f = zeros(Float64, n)
     adj_f = [Tuple{Int,Float64}[] for _ in 1:n]
     total_abs = 0.0
-    @inbounds for i in free_vars
+    @inbounds for (k, i) in enumerate(free_vars)
+        _poll_expired(k, deadline_ns) && return nothing
         h_ex = _spin_field(ws, i)
         if !iszero(h_ex)
             hf = Float64(h_ex)
@@ -671,7 +672,9 @@ function _coercive_field_witness_float_spin!(
         accum_l1_f = zeros(Float64, n)
         assigned = falses(n)
         anchor_seeded = false
-        @inbounds for i in seq_order
+        @inbounds for (k, i) in enumerate(seq_order)
+            # A partial sequential state is discarded
+            _poll_expired(k, deadline_ns) && return spin_s, spin_best
             h_i = cond_h_f[i]
             g_i = map === nothing ? 1 : map.gauge[i]
             tie_spin = tie_break === :low ? -g_i : g_i
@@ -792,8 +795,10 @@ function _coercive_field_witness_spins(
     spin_best = spin_s
     # Past the deadline the field-aligned start is returned unpolished (still feasible)
     if polish && direction != 0 && !isempty(free_vars) && !_expired(deadline_ns)
-        float_sub = _try_build_float_spin_subproblem(ws, free_vars)
-        if float_sub !== nothing
+        float_sub = _try_build_float_spin_subproblem(ws, free_vars; deadline_ns)
+        if _expired(deadline_ns)
+            # Keep the field-aligned start
+        elseif float_sub !== nothing
             h_f, adj_f, l1_f = float_sub
             spin_s, spin_best = _coercive_field_witness_float_spin!(
                 ws, spin_s, free_vars, h_f, adj_f, l1_f, direction, mf, tie_break, all_zero_h;
@@ -802,7 +807,7 @@ function _coercive_field_witness_spins(
         else
             e_par = _polish_spin_state!(spin_s, ws, free_vars, direction, mf; deadline_ns)
             spin_best = spin_s
-            if sequential && length(free_vars) > 1
+            if sequential && length(free_vars) > 1 && !_expired(deadline_ns)
                 seq_order = copy(free_vars)
                 _order_probing_candidates!(ws, seq_order, spin_s, :coercive; deadline_ns)
                 spin_seq = zeros(Int, n)
@@ -812,7 +817,13 @@ function _coercive_field_witness_spins(
                 @inbounds for i in free_vars
                     cond_h[i] = _spin_field(ws, i)
                 end
-                @inbounds for i in seq_order
+                complete = true
+                @inbounds for (k, i) in enumerate(seq_order)
+                    # A partial sequential state is discarded
+                    if _poll_expired(k, deadline_ns)
+                        complete = false
+                        break
+                    end
                     h_i = cond_h[i]
                     g_i = map === nothing ? 1 : map.gauge[i]
                     tie_spin = tie_break === :low ? -g_i : g_i
@@ -833,9 +844,11 @@ function _coercive_field_witness_spins(
                         cond_h[j] += _spin_coupling(ws, q) * s_i
                     end
                 end
-                e_seq = _polish_spin_state!(spin_seq, ws, free_vars, direction, mf; deadline_ns)
-                if e_seq < e_par
-                    spin_best = spin_seq
+                if complete
+                    e_seq = _polish_spin_state!(spin_seq, ws, free_vars, direction, mf; deadline_ns)
+                    if e_seq < e_par
+                        spin_best = spin_seq
+                    end
                 end
             end
         end
@@ -927,6 +940,7 @@ function _order_probing_candidates!(
         throw(ArgumentError("order must be :index, :coercive, or :extremal"))
     # On an expired deadline the candidates stay unordered; the caller stops next.
     (order === :index || length(cand_indices) <= 1 || _expired(deadline_ns)) && return cand_indices
+    polled = 0
     s, st = ws._snapshot, ws._state
     n = length(s.labels)
     is_bool = s.domain === QT.BoolDomain
@@ -938,6 +952,8 @@ function _order_probing_candidates!(
         l1_f = zeros(Float64, n)
         if order === :coercive
             @inbounds for i in cand_indices
+                polled += 1
+                _poll_expired(polled, deadline_ns) && return cand_indices
                 abs_h = _canon_zero(abs(Float64(_spin_field(ws, i))))
                 l1 = 0.0
                 for (j, q) in st.adjacency[i]
@@ -957,6 +973,8 @@ function _order_probing_candidates!(
             end
         else # :extremal
             @inbounds for i in cand_indices
+                polled += 1
+                _poll_expired(polled, deadline_ns) && return cand_indices
                 h_i = _canon_zero(Float64(_spin_field(ws, i)))
                 s_i = is_bool ? (2 * w_vec[i] - 1) : w_vec[i]
                 fav_h = _canon_zero((-direction * s_i) * h_i)
@@ -991,6 +1009,8 @@ function _order_probing_candidates!(
     l1_ex = fill(_Exact(0), n)
     if order === :coercive
         @inbounds for i in cand_indices
+            polled += 1
+            _poll_expired(polled, deadline_ns) && return cand_indices
             abs_h = abs(_spin_field(ws, i))
             l1 = _Exact(0)
             for (j, q) in st.adjacency[i]
@@ -1009,6 +1029,8 @@ function _order_probing_candidates!(
         end
     else # :extremal
         @inbounds for i in cand_indices
+            polled += 1
+            _poll_expired(polled, deadline_ns) && return cand_indices
             h_i = _spin_field(ws, i)
             s_i = is_bool ? (2 * w_vec[i] - 1) : w_vec[i]
             fav_h = (-direction * s_i) * h_i
@@ -4066,9 +4088,10 @@ end
 """
     BudgetedScheduleReport
 
-Returned by [`schedule_budgeted!`](@ref): `stop_reason` (`:fixpoint` when a full
-pass removed no variable, `:solved` when no free variable remains, or `:deadline`
-when `time_limit` expired first), number of `passes`, wall-clock `elapsed_s`,
+Returned by [`schedule_budgeted!`](@ref): `stop_reason` (`:fixpoint` when every
+family finished on the final workspace without removing a variable, `:solved` when
+no free variable remains, or `:deadline` when `time_limit` expired first), number of
+`passes`, wall-clock `elapsed_s`,
 `initial_variables`, `residual_variables` and the per-family `families` in
 schedule order.
 """
@@ -4085,24 +4108,30 @@ generation(r::BudgetedScheduleReport) = r.generation
 
 """
     schedule_budgeted!(ws; time_limit, allow_weak=false, enable_probing=true,
-                       max_block_size=12, probe_rounds=8, tie_break=:low)
+                       max_block_size=12, probe_rounds=8, guaranteed_relation_work=75_000,
+                       tie_break=:low)
 
 Run every certified reduction family on `ws` under one wall-clock budget of
-`time_limit` seconds, instead of caller-chosen size gates. The budget covers the
-reduction work on the existing workspace; building `ws` (snapshot import and
-integerization) happens before it starts.
+`time_limit` seconds, instead of caller-chosen size gates. The budget counts from
+this call; building `ws` (snapshot import and integerization) happens before it
+starts.
 
 The cheap rules (dominance, low-degree and star-triangle elimination, pair
-relations: one [`schedule_reductions!`](@ref) call) reach a fixpoint first. The
-expensive families then run in turn — roof duality, submodular cuts, Max-Cut, block
-elimination (`max_block_size`), residual-SCC contraction and, when
-`enable_probing`, coercive-order probing with `probe_rounds` trial rounds. Each
-gets at most an equal share of the budget left in the pass, so one unproductive
-family cannot consume it all, and the cheap rules run again after every expensive
-family that removes a variable. Passes repeat while some family removes a
-variable; from the second pass on, families that have removed nothing are skipped.
-Every call shares the deadline, so the schedule returns within a small margin of
-`time_limit`, and an interrupted pass rolls back cleanly.
+relations: [`schedule_reductions!`](@ref)) first reach a fixpoint whatever the
+budget, with pair-relation search limited to `guaranteed_relation_work` work units.
+So a small budget never does less than this floor, while relation search cannot run
+for minutes on a dense model. Within the budget, relation search then continues
+without that limit, and the expensive families run in turn — roof duality,
+submodular cuts, Max-Cut, block elimination (`max_block_size`), residual-SCC
+contraction and, when `enable_probing`, coercive-order probing with `probe_rounds`
+trial rounds. Each gets an equal share of the budget still left, so one slow family
+cannot consume it all and time a fast family leaves passes to the next, and the
+cheap rules run again after every expensive family that removes a variable. Passes
+repeat while some family has not finished on the current workspace: a family runs
+again when its share ran out before it finished, or when variables were removed
+after its last run. Every budgeted call shares the deadline, so the schedule returns
+within a small margin of `time_limit` or of the end of the cheap floor, whichever is
+later, and an interrupted call rolls back cleanly.
 
 `allow_weak=true` additionally applies weak dominance, weak relations and weak
 submodular/Max-Cut reductions, which keep at least one optimum; exact elimination
@@ -4116,15 +4145,19 @@ function schedule_budgeted!(
     enable_probing::Bool=true,
     max_block_size=12,
     probe_rounds=8,
+    guaranteed_relation_work=75_000,
     tie_break::Symbol=:low,
 )
     # Validate every option before any family can modify the workspace
     (time_limit isa Real && !(time_limit isa Bool) && isfinite(time_limit) && time_limit >= 0) ||
         throw(ArgumentError("time_limit must be a finite nonnegative number of seconds"))
-    (probe_rounds isa Integer && !(probe_rounds isa Bool) && probe_rounds >= 0) ||
-        throw(ArgumentError("probe_rounds must be a nonnegative integer"))
-    (max_block_size isa Integer && !(max_block_size isa Bool) && max_block_size >= 1) ||
-        throw(ArgumentError("max_block_size must be a positive integer"))
+    (probe_rounds isa Integer && !(probe_rounds isa Bool) && 0 <= probe_rounds <= typemax(Int)) ||
+        throw(ArgumentError("probe_rounds must be a nonnegative machine-sized integer"))
+    (max_block_size isa Integer && !(max_block_size isa Bool) && 2 <= max_block_size <= _MAX_BLOCK_ELIMINATION_SIZE) ||
+        throw(ArgumentError("max_block_size must be an integer between 2 and $_MAX_BLOCK_ELIMINATION_SIZE"))
+    (guaranteed_relation_work isa Integer && !(guaranteed_relation_work isa Bool) &&
+     0 <= guaranteed_relation_work <= typemax(Int)) ||
+        throw(ArgumentError("guaranteed_relation_work must be a nonnegative machine-sized integer"))
     tie_break in (:low, :high) || throw(ArgumentError("tie_break must be :low or :high"))
     t0 = time_ns()
     # Saturate budgets too long to represent as a time_ns() deadline
@@ -4136,14 +4169,17 @@ function schedule_budgeted!(
     order = [:roof_duality, :submodular_cut, :maxcut, :blocks, :roof_scc]
     enable_probing && push!(order, :probing)
     stats = Dict{Symbol,BudgetedFamilyRun}()
-    function run_family!(family::Symbol, family_deadline::UInt64)
+    # Free variables each family left behind, and whether it stopped before finishing
+    left = Dict{Symbol,Int}()
+    cut = Dict{Symbol,Bool}()
+    function run_family!(family::Symbol, family_deadline::UInt64; relation_work_budget=typemax(Int))
         before = free_count()
         t = time_ns()
         rep = if family === :cheap
             schedule_reductions!(
                 ws;
                 enable_star_triangle=true, allow_weak_dominance=allow_weak, allow_weak_relations=allow_weak,
-                tie_break, deadline_ns=family_deadline,
+                tie_break, relation_work_budget, deadline_ns=family_deadline,
             )
         elseif family === :blocks
             # Block elimination alone; the cheap cascade that follows is counted as :cheap
@@ -4165,33 +4201,37 @@ function schedule_budgeted!(
         prev = get(stats, family, BudgetedFamilyRun(family, 0, 0.0, 0, :none))
         stats[family] = BudgetedFamilyRun(family, prev.calls + 1, prev.time_s + (time_ns() - t) / 1e9,
                                           prev.freed + freed, rep.stop_reason)
+        left[family] = free_count()
+        # The cheap floor's relation limit leaves relation search to the budgeted passes
+        cut[family] = rep.stop_reason === :deadline || (family === :cheap && rep.stop_reason === :work_limit)
         return freed
     end
+    # A family has not finished on the current workspace if it never ran, its deadline
+    # cut it short, or variables were removed after its last run
+    unfinished(f) = !haskey(left, f) || cut[f] || free_count() < left[f]
     passes = 0
     stop = :fixpoint
     while free_count() > 0
-        if _expired(deadline)
+        # The cheap floor runs whatever the budget
+        if passes > 0 && _expired(deadline)
             stop = :deadline
             break
         end
+        (unfinished(:cheap) || any(unfinished, order)) || break
         passes += 1
-        freed_pass = run_family!(:cheap, deadline)
-        # From the second pass on, only families that have removed something run again
-        active = passes == 1 ? order : [f for f in order if haskey(stats, f) && stats[f].freed > 0]
+        passes == 1 && run_family!(:cheap, typemax(UInt64); relation_work_budget=guaranteed_relation_work)
+        unfinished(:cheap) && !_expired(deadline) && run_family!(:cheap, deadline)
+        active = filter(unfinished, order)
         for (k, family) in enumerate(active)
-            (free_count() == 0 || _expired(deadline)) && break
+            free_count() == 0 && break
+            # Compare against the same clock reading before subtracting: the deadline is unsigned
             now = time_ns()
+            now >= deadline && break
             share = (deadline - now) ÷ UInt64(length(active) - k + 1)
             freed = run_family!(family, now + share)
-            freed_pass += freed
             # Re-run the cheap rules after any expensive family that removed a variable
-            freed > 0 && free_count() > 0 && !_expired(deadline) && (freed_pass += run_family!(:cheap, deadline))
+            freed > 0 && free_count() > 0 && run_family!(:cheap, deadline)
         end
-        if _expired(deadline)
-            stop = :deadline
-            break
-        end
-        freed_pass == 0 && break
     end
     free_count() == 0 && (stop = :solved)
     families = BudgetedFamilyRun[stats[f] for f in (:cheap, order...) if haskey(stats, f)]
