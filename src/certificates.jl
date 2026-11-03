@@ -3555,9 +3555,16 @@ function _extract_roof_scc_specs(
             !(v_var in used_vars) && !(v_var in seen_K) && (push!(seen_K, v_var); push!(vars_K, v_var))
         end
         length(vars_K) >= 2 || continue
-        sort!(vars_K; by = v -> (v in cand_set ? 1 : 0, v))
-        _expired(deadline_ns) && return (false, :deadline, specs, ver_w, ex_w)
+        # Tarjan sorts SCC literals, so vars_K is ascending: the representative is the
+        # first non-candidate (else the first variable), and candidates follow in order.
         rep = vars_K[1]
+        for (i, v) in enumerate(vars_K)
+            _poll_expired(i, deadline_ns) && return (false, :deadline, specs, ver_w, ex_w)
+            if !(v in cand_set)
+                rep = v
+                break
+            end
+        end
         for u in vars_K
             (u != rep && (u in cand_set)) || continue
             _expired(deadline_ns) && return (false, :deadline, specs, ver_w, ex_w)
@@ -3581,7 +3588,8 @@ function _extract_roof_scc_specs(
         length(K) >= 2 || continue
         n_unused = 0
         has_c = false
-        for lit in K
+        for (i, lit) in enumerate(K)
+            _poll_expired(i, deadline_ns) && return (false, :deadline, specs, ver_w, ex_w)
             vv = _lit_var(lit)
             if !(vv in used_vars)
                 n_unused += 1
@@ -3642,9 +3650,14 @@ function _extract_roof_scc_specs(
                         !(v_var in used_vars) && !(v_var in seen_K) && (push!(seen_K, v_var); push!(vars_K, v_var))
                     end
                     length(vars_K) >= 2 || continue
-                    sort!(vars_K; by = v -> (v in cand_set ? 1 : 0, v))
-                    _expired(deadline_ns) && return (false, :deadline, specs, ver_w, ex_w)
                     rep = vars_K[1]
+                    for (i, v) in enumerate(vars_K)
+                        _poll_expired(i, deadline_ns) && return (false, :deadline, specs, ver_w, ex_w)
+                        if !(v in cand_set)
+                            rep = v
+                            break
+                        end
+                    end
                     for u in vars_K
                         (u != rep && (u in cand_set)) || continue
                         _expired(deadline_ns) && return (false, :deadline, specs, ver_w, ex_w)
@@ -3667,6 +3680,7 @@ function _extract_roof_scc_specs(
         end
     end
     sort!(specs; by = first)
+    _expired(deadline_ns) && return (false, :deadline, specs, ver_w, ex_w)
     return (true, :ok, specs, ver_w, ex_w)
 end
 
@@ -4047,10 +4061,11 @@ SCC and, for each closed residual SCC with K literals, two widest-path
 passes of O(K²) exact comparisons; verification replays a batch with the
 same per-SCC passes, and witness-backed contractions also re-validate
 their witness state per step. `deadline_ns` is polled at least every 1,024
-iterations of every loop over SCC literals, residual arcs or batch steps
-(sorting an SCC's literals is the one unpolled O(K log K) step);
-`max_work` counts the SCC decomposition, widest-path and commit work but
-not the closedness scan.
+iterations of the extraction, closedness, widest-path, decomposition and
+batch-verification loops; the only unpolled steps are two O(k log k) sorts
+(an SCC's literals and the final contraction order), each followed by a
+deadline check. `max_work` counts the SCC decomposition, widest-path and
+commit work but not the closedness scan.
 Returns a [`RoofDualityAttempt`](@ref) containing the exact normalized
 `lower_bound`, scaled model `objective_bound`, maximum `S`-`T` flow `max_flow`,
 strongly persistent `fixings`, `contracted_count`, `contractions`, phase-separated
