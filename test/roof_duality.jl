@@ -362,6 +362,107 @@
         @test r_df_roof.graph_work > 0
     end
 
+    @testset "bulk residual-SCC extraction: one widest-path pass per SCC, bounded by deadline and work (#94)" begin
+        QP = QUBOPreprocessing
+        # Zero-field ferromagnetic bipartite blocks leave large closed residual SCCs.
+        for (nA, nB, w) in ((3, 3, -2.0), (4, 5, -1.5), (6, 6, -3.0))
+            n = nA + nB
+            m = QT.Model{Int,Float64,Int}(Dict(i => 0.0 for i in 1:n), Dict((u, v) => w for u in 1:nA for v in (nA + 1):n);
+                                          domain=:spin, sense=:min)
+            ws = Workspace(m; rules=:relations)
+            cand = collect(1:n)
+            out = QP._roof_duality_pass(ws, cand)
+            L_roof, net, R_S, R_T = out[3], out[13], out[14], out[15]
+            in_half = QP._half_integral_literals(net, R_S, R_T, idx -> ws._state.fixed[idx] == 2)
+            ok, _, scc_id, sccs, _ = QP._tarjan_residual_sccs(net, in_half, QP._Exact(0))
+            @test ok
+            big = [K for K in sccs if length(K) >= 2]
+            @test !isempty(big)
+            # Each one-pass value equals the per-pair widest path it replaces
+            for K in big, src in K
+                cid = scc_id[src]
+                r_f, from_src, _ = QP._widest_scc_paths(net, scc_id, cid, K, src, QP._Exact(0))
+                r_b, to_src, _ = QP._widest_scc_paths(net, scc_id, cid, K, src, QP._Exact(0); reverse=true)
+                @test r_f === :ok && r_b === :ok
+                @test all(x -> from_src[x] == QP._widest_scc_path(net, scc_id, cid, K, src, x, QP._Exact(0)), K)
+                @test all(x -> to_src[x] == QP._widest_scc_path(net, scc_id, cid, K, x, src, QP._Exact(0)), K)
+            end
+            K1 = first(big)
+            @test first(QP._widest_scc_paths(net, scc_id, scc_id[K1[1]], K1, K1[1], QP._Exact(0); deadline_ns=time_ns())) === :deadline
+            # Bulk extraction stops at an expired deadline or exhausted work instead of running on
+            done = QP._extract_roof_scc_specs(ws, cand, net, L_roof, R_S, R_T)
+            @test done[1] && done[2] === :ok
+            @test QP._extract_roof_scc_specs(ws, cand, net, L_roof, R_S, R_T; deadline_ns=time_ns())[2] === :deadline
+            @test QP._extract_roof_scc_specs(ws, cand, net, L_roof, R_S, R_T; max_work=done[4] - 1)[2] === :work_limit
+        end
+
+        # A deadline that expires mid-phase stops extraction, the public pass and batch
+        # verification long before they would finish, and the public pass rolls back.
+        # K_{60,60} takes about 0.2 s per phase; each deadline is 5% of the measured time.
+        m60 = QT.Model{Int,Float64,Int}(Dict(i => 0.0 for i in 1:120), Dict((u, v) => -1.0 for u in 1:60 for v in 61:120);
+                                        domain=:spin, sense=:min)
+        # Full and cut runs both pass a UInt64 deadline, so both use the same compiled method.
+        cut_at(t) = time_ns() + round(UInt64, 0.05e9 * t)
+        far() = time_ns() + UInt64(10)^12
+        ws60 = Workspace(m60; rules=:relations)
+        out60 = QP._roof_duality_pass(ws60, collect(1:120))
+        args60 = (ws60, collect(1:120), out60[13], out60[3], out60[14], out60[15])
+        QP._extract_roof_scc_specs(args60...)
+        t_full = @elapsed full60 = QP._extract_roof_scc_specs(args60...)
+        @test full60[2] === :ok && length(full60[3]) == 119
+        t_cut = @elapsed cut60 = QP._extract_roof_scc_specs(args60...; deadline_ns=cut_at(t_full))
+        @test cut60[2] === :deadline
+        @test t_cut < 0.5 * t_full
+
+        apply_roof_duality!(Workspace(m60; rules=:relations); contract_scc=true, deadline_ns=far())
+        ws_done = Workspace(m60; rules=:relations)
+        t_apply = @elapsed rep_done = apply_roof_duality!(ws_done; contract_scc=true, deadline_ns=far())
+        @test rep_done.stop_reason === :applied && rep_done.contracted_count == 119
+        ws_cut = Workspace(m60; rules=:relations)
+        t_apply_cut = @elapsed rep_cut = apply_roof_duality!(ws_cut; contract_scc=true, deadline_ns=cut_at(t_apply))
+        @test rep_cut.stop_reason === :deadline && rep_cut.contracted_count == 0
+        @test t_apply_cut < 0.5 * t_apply
+        @test isempty(reductions(ws_cut))
+
+        cert60 = export_certificate(ws_done)
+        verify_certificate(ws_done, cert60; deadline_ns=far())
+        t_verify = @elapsed v_done = verify_certificate(ws_done, cert60; deadline_ns=far())
+        @test v_done.valid
+        t_verify_cut = @elapsed v_cut = verify_certificate(ws_done, cert60; deadline_ns=cut_at(t_verify))
+        @test !v_cut.valid && v_cut.stop_reason === :deadline
+        @test t_verify_cut < 0.5 * t_verify
+
+        # Running out of budget after part of the batch is committed (here one work unit
+        # short of the full pass) rolls the workspace back to its checkpoint. Deadline and
+        # work cancellation share the same abort path.
+        ws_part = Workspace(m60; rules=:relations)
+        rep_part = apply_roof_duality!(ws_part; contract_scc=true, max_work=rep_done.edge_visits - 1)
+        @test rep_part.stop_reason === :work_limit && rep_part.contracted_count == 0
+        @test rep_part.materialization_work > 0
+        @test isempty(reductions(ws_part))
+        @test length(unique(first.(relation_map(ws_part)))) == 120
+        @test count(==(Int8(2)), ws_part._state.fixed) == 120
+        @test apply_roof_duality!(ws_part; contract_scc=true).contracted_count == 119
+
+        # Inner loops on one 20,000-literal residual SCC, where a full widest-path pass
+        # would take minutes: each routine stops at a short deadline.
+        ring = QT.Model{Int,Float64,Int}(Dict(i => 0.0 for i in 1:20_000), Dict((i, i % 20_000 + 1) => -1.0 for i in 1:20_000);
+                                         domain=:spin, sense=:min)
+        ws_r = Workspace(ring; rules=:relations)
+        out_r = QP._roof_duality_pass(ws_r, collect(1:20_000))
+        net_r = out_r[13]
+        in_r = QP._half_integral_literals(net_r, out_r[14], out_r[15], i -> ws_r._state.fixed[i] == 2)
+        ok_r, _, id_r, sccs_r, _ = QP._tarjan_residual_sccs(net_r, in_r, QP._Exact(0))
+        K_r = sccs_r[argmax(length.(sccs_r))]
+        @test ok_r && length(K_r) == 20_000
+        @test QP._is_closed_residual_scc(net_r, in_r, id_r, K_r; deadline_ns=time_ns()) === nothing
+        @test first(QP._tarjan_residual_sccs(net_r, in_r, QP._Exact(0); deadline_ns=time_ns() + UInt64(10)^5)) == false
+        t_ring = @elapsed r_ring = QP._widest_scc_paths(net_r, id_r, id_r[K_r[1]], K_r, K_r[1], QP._Exact(0);
+                                                        deadline_ns=time_ns() + UInt64(10)^6)
+        @test first(r_ring) === :deadline
+        @test t_ring < 0.5
+    end
+
     @testset "residual-SCC 2-SAT pair equivalences (:roof_scc_pair, #60)" begin
         # 1. Witness-free closed residual SCC on zero-field ferromagnetic K_{3,3}:
         # Bipartition {1, 2, 3} x {4, 5, 6}, all 9 edges J_{uv} = -2.0, zero fields.

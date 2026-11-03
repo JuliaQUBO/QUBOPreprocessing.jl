@@ -1356,8 +1356,17 @@ assignments in `candidates` (defaulting to all free variables in original order)
 as [`RoofDualityStep`](@ref) records on the reversible trail. When
 `contract_scc=true`, also extracts and commits 2-SAT pair equivalences from
 residual implication-network strongly connected components (`:roof_scc_pair`
-[`RelationStep`](@ref) records respecting `max_fill`). If committing the
-batch is interrupted by `max_work` or `deadline_ns`, the pass rolls back cleanly
+[`RelationStep`](@ref) records respecting `max_fill`). SCC contraction adds a residual SCC decomposition, a closedness scan per
+SCC and, for each closed residual SCC with K literals, two widest-path
+passes of O(K²) exact comparisons; verification replays a batch with the
+same per-SCC passes, and witness-backed contractions also re-validate
+their witness state per step. `deadline_ns` is polled at least every 1,024
+iterations of the extraction, closedness, widest-path, decomposition and
+batch-verification loops; the only unpolled steps are two O(k log k) sorts
+(an SCC's literals and the final contraction order), each followed by a
+deadline check. `max_work` counts the SCC decomposition, widest-path and
+commit work but not the closedness scan. If committing
+the batch is interrupted by `max_work` or `deadline_ns`, the pass rolls back cleanly
 to the pre-pass checkpoint.
 """
 function apply_roof_duality!(
