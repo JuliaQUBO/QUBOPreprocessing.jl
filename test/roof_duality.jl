@@ -431,6 +431,36 @@
         t_verify_cut = @elapsed v_cut = verify_certificate(ws_done, cert60; deadline_ns=cut_at(t_verify))
         @test !v_cut.valid && v_cut.stop_reason === :deadline
         @test t_verify_cut < 0.5 * t_verify
+
+        # Running out of budget after part of the batch is committed (here one work unit
+        # short of the full pass) rolls the workspace back to its checkpoint. Deadline and
+        # work cancellation share the same abort path.
+        ws_part = Workspace(m60; rules=:relations)
+        rep_part = apply_roof_duality!(ws_part; contract_scc=true, max_work=rep_done.edge_visits - 1)
+        @test rep_part.stop_reason === :work_limit && rep_part.contracted_count == 0
+        @test rep_part.materialization_work > 0
+        @test isempty(reductions(ws_part))
+        @test length(unique(first.(relation_map(ws_part)))) == 120
+        @test count(==(Int8(2)), ws_part._state.fixed) == 120
+        @test apply_roof_duality!(ws_part; contract_scc=true).contracted_count == 119
+
+        # Inner loops on one 20,000-literal residual SCC, where a full widest-path pass
+        # would take minutes: each routine stops at a short deadline.
+        ring = QT.Model{Int,Float64,Int}(Dict(i => 0.0 for i in 1:20_000), Dict((i, i % 20_000 + 1) => -1.0 for i in 1:20_000);
+                                         domain=:spin, sense=:min)
+        ws_r = Workspace(ring; rules=:relations)
+        out_r = QP._roof_duality_pass(ws_r, collect(1:20_000))
+        net_r = out_r[13]
+        in_r = QP._half_integral_literals(net_r, out_r[14], out_r[15], i -> ws_r._state.fixed[i] == 2)
+        ok_r, _, id_r, sccs_r, _ = QP._tarjan_residual_sccs(net_r, in_r, QP._Exact(0))
+        K_r = sccs_r[argmax(length.(sccs_r))]
+        @test ok_r && length(K_r) == 20_000
+        @test QP._is_closed_residual_scc(net_r, in_r, id_r, K_r; deadline_ns=time_ns()) === nothing
+        @test first(QP._tarjan_residual_sccs(net_r, in_r, QP._Exact(0); deadline_ns=time_ns() + UInt64(10)^5)) == false
+        t_ring = @elapsed r_ring = QP._widest_scc_paths(net_r, id_r, id_r[K_r[1]], K_r, K_r[1], QP._Exact(0);
+                                                        deadline_ns=time_ns() + UInt64(10)^6)
+        @test first(r_ring) === :deadline
+        @test t_ring < 0.5
     end
 
     @testset "residual-SCC 2-SAT pair equivalences (:roof_scc_pair, #60)" begin

@@ -404,7 +404,10 @@ function _tarjan_residual_sccs(
                         scc_id[w] = cid
                         push!(comp, w)
                         w == u && break
+                        _poll_expired(length(comp), deadline_ns) && return (false, :deadline, scc_id, sccs, visits)
                     end
+                    # The Int sort is the one unpolled O(k log k) step (about 1 ms per 100k literals).
+                    _expired(deadline_ns) && return (false, :deadline, scc_id, sccs, visits)
                     sort!(comp)
                     push!(sccs, comp)
                     _expired(deadline_ns) && return (false, :deadline, scc_id, sccs, visits)
@@ -530,13 +533,21 @@ function _widest_scc_paths(
     max_work::Int=typemax(Int),
     deadline_ns=nothing,
 )
-    _expired(deadline_ns) && return (:deadline, Dict{Int,_Exact}(), 0)
-    best = Dict{Int,_Exact}(x => _Exact(0) for x in K)
+    best = Dict{Int,_Exact}()
+    sizehint!(best, length(K))
+    for (i, x) in enumerate(K)
+        _poll_expired(i, deadline_ns) && return (:deadline, best, 0)
+        best[x] = _Exact(0)
+    end
     scc_id[src] == cid || return (:ok, best, 0)
     n_lit = length(scc_id)
     # Residual arcs inside the SCC, keyed by the node the search expands from
-    arcs = Dict{Int,Vector{Tuple{Int,_Exact}}}(x => Tuple{Int,_Exact}[] for x in K)
-    _expired(deadline_ns) && return (:deadline, best, 0)
+    arcs = Dict{Int,Vector{Tuple{Int,_Exact}}}()
+    sizehint!(arcs, length(K))
+    for (i, x) in enumerate(K)
+        _poll_expired(i, deadline_ns) && return (:deadline, best, 0)
+        arcs[x] = Tuple{Int,_Exact}[]
+    end
     visits = 0
     for x in K
         _expired(deadline_ns) && return (:deadline, best, visits)
@@ -552,7 +563,8 @@ function _widest_scc_paths(
         end
     end
     visited = Set{Int}((src,))
-    for (y, rc) in arcs[src]
+    for (i, (y, rc)) in enumerate(arcs[src])
+        _poll_expired(i, deadline_ns) && return (:deadline, best, visits)
         rc > best[y] && (best[y] = rc)
     end
     while length(visited) < length(K)

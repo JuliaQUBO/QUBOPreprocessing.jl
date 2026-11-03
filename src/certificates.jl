@@ -3549,12 +3549,14 @@ function _extract_roof_scc_specs(
         closed || continue
         vars_K = Int[]
         seen_K = Set{Int}()
-        for lit in K
+        for (i, lit) in enumerate(K)
+            _poll_expired(i, deadline_ns) && return (false, :deadline, specs, ver_w, ex_w)
             v_var = _lit_var(lit)
             !(v_var in used_vars) && !(v_var in seen_K) && (push!(seen_K, v_var); push!(vars_K, v_var))
         end
         length(vars_K) >= 2 || continue
         sort!(vars_K; by = v -> (v in cand_set ? 1 : 0, v))
+        _expired(deadline_ns) && return (false, :deadline, specs, ver_w, ex_w)
         rep = vars_K[1]
         for u in vars_K
             (u != rep && (u in cand_set)) || continue
@@ -3634,12 +3636,14 @@ function _extract_roof_scc_specs(
                     _expired(deadline_ns) && return (false, :deadline, specs, ver_w, ex_w)
                     vars_K = Int[]
                     seen_K = Set{Int}()
-                    for lit in K_d
+                    for (i, lit) in enumerate(K_d)
+                        _poll_expired(i, deadline_ns) && return (false, :deadline, specs, ver_w, ex_w)
                         v_var = _lit_var(lit)
                         !(v_var in used_vars) && !(v_var in seen_K) && (push!(seen_K, v_var); push!(vars_K, v_var))
                     end
                     length(vars_K) >= 2 || continue
                     sort!(vars_K; by = v -> (v in cand_set ? 1 : 0, v))
+                    _expired(deadline_ns) && return (false, :deadline, specs, ver_w, ex_w)
                     rep = vars_K[1]
                     for u in vars_K
                         (u != rep && (u in cand_set)) || continue
@@ -4042,8 +4046,11 @@ contractions from nontrivial residual SCCs (`:roof_scc_pair`). SCC contraction a
 SCC and, for each closed residual SCC with K literals, two widest-path
 passes of O(K²) exact comparisons; verification replays a batch with the
 same per-SCC passes, and witness-backed contractions also re-validate
-their witness state per step. `max_work` and `deadline_ns` bound every
-phase, which polls the deadline at least every 1,024 inner iterations.
+their witness state per step. `deadline_ns` is polled at least every 1,024
+iterations of every loop over SCC literals, residual arcs or batch steps
+(sorting an SCC's literals is the one unpolled O(K log K) step);
+`max_work` counts the SCC decomposition, widest-path and commit work but
+not the closedness scan.
 Returns a [`RoofDualityAttempt`](@ref) containing the exact normalized
 `lower_bound`, scaled model `objective_bound`, maximum `S`-`T` flow `max_flow`,
 strongly persistent `fixings`, `contracted_count`, `contractions`, phase-separated
@@ -5027,7 +5034,8 @@ function _verify_relation_step(
                     return (false, :invalid_step, cost)
                 push!(elim_set, u_r)
             end
-            for (_, v_r, _) in wit.batch_contractions
+            for (i, (_, v_r, _)) in enumerate(wit.batch_contractions)
+                _poll_expired(i, deadline) && return (false, :deadline, cost)
                 !(v_r in elim_set) || return (false, :invalid_step, cost)
             end
             built = _build_poly_implication_network(p, deadline)
