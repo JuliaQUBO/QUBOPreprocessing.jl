@@ -362,6 +362,41 @@
         @test r_df_roof.graph_work > 0
     end
 
+    @testset "bulk residual-SCC extraction: one widest-path pass per SCC, bounded by deadline and work (#94)" begin
+        QP = QUBOPreprocessing
+        # Zero-field ferromagnetic bipartite blocks leave large closed residual SCCs.
+        for (nA, nB, w) in ((3, 3, -2.0), (4, 5, -1.5), (6, 6, -3.0))
+            n = nA + nB
+            m = QT.Model{Int,Float64,Int}(Dict(i => 0.0 for i in 1:n), Dict((u, v) => w for u in 1:nA for v in (nA + 1):n);
+                                          domain=:spin, sense=:min)
+            ws = Workspace(m; rules=:relations)
+            cand = collect(1:n)
+            out = QP._roof_duality_pass(ws, cand)
+            L_roof, net, R_S, R_T = out[3], out[13], out[14], out[15]
+            in_half = QP._half_integral_literals(net, R_S, R_T, idx -> ws._state.fixed[idx] == 2)
+            ok, _, scc_id, sccs, _ = QP._tarjan_residual_sccs(net, in_half, QP._Exact(0))
+            @test ok
+            big = [K for K in sccs if length(K) >= 2]
+            @test !isempty(big)
+            # Each one-pass value equals the per-pair widest path it replaces
+            for K in big, src in K
+                cid = scc_id[src]
+                r_f, from_src, _ = QP._widest_scc_paths(net, scc_id, cid, K, src, QP._Exact(0))
+                r_b, to_src, _ = QP._widest_scc_paths(net, scc_id, cid, K, src, QP._Exact(0); reverse=true)
+                @test r_f === :ok && r_b === :ok
+                @test all(x -> from_src[x] == QP._widest_scc_path(net, scc_id, cid, K, src, x, QP._Exact(0)), K)
+                @test all(x -> to_src[x] == QP._widest_scc_path(net, scc_id, cid, K, x, src, QP._Exact(0)), K)
+            end
+            K1 = first(big)
+            @test first(QP._widest_scc_paths(net, scc_id, scc_id[K1[1]], K1, K1[1], QP._Exact(0); deadline_ns=time_ns())) === :deadline
+            # Bulk extraction stops at an expired deadline or exhausted work instead of running on
+            done = QP._extract_roof_scc_specs(ws, cand, net, L_roof, R_S, R_T)
+            @test done[1] && done[2] === :ok
+            @test QP._extract_roof_scc_specs(ws, cand, net, L_roof, R_S, R_T; deadline_ns=time_ns())[2] === :deadline
+            @test QP._extract_roof_scc_specs(ws, cand, net, L_roof, R_S, R_T; max_work=done[4] - 1)[2] === :work_limit
+        end
+    end
+
     @testset "residual-SCC 2-SAT pair equivalences (:roof_scc_pair, #60)" begin
         # 1. Witness-free closed residual SCC on zero-field ferromagnetic K_{3,3}:
         # Bipartition {1, 2, 3} x {4, 5, 6}, all 9 edges J_{uv} = -2.0, zero fields.

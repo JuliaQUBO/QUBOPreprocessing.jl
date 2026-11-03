@@ -504,6 +504,71 @@ function _widest_scc_path(
     return get(best, dst, _Exact(0))
 end
 
+# Widest symmetrized-residual path values from `src` to every literal of SCC `cid`
+# (`reverse=true`: from every literal to `src`) in one greedy pass. Each value
+# equals `_widest_scc_path(net, scc_id, cid, K, src, x, min_sym_cap)` (or with
+# `src` and `x` swapped), so bulk extraction needs two passes per SCC instead of
+# two per candidate. Returns `(reason, best, visits)`; `reason` is `:ok`,
+# `:deadline` or `:work_limit`.
+function _widest_scc_paths(
+    net::_FlowNetwork,
+    scc_id::Vector{Int},
+    cid::Int,
+    K::Vector{Int},
+    src::Int,
+    min_sym_cap::_Exact;
+    reverse::Bool=false,
+    max_work::Int=typemax(Int),
+    deadline_ns=nothing,
+)
+    best = Dict{Int,_Exact}(x => _Exact(0) for x in K)
+    scc_id[src] == cid || return (:ok, best, 0)
+    n_lit = length(scc_id)
+    # Residual arcs inside the SCC, keyed by the node the search expands from
+    arcs = Dict{Int,Vector{Tuple{Int,_Exact}}}(x => Tuple{Int,_Exact}[] for x in K)
+    visits = 0
+    for x in K
+        _expired(deadline_ns) && return (:deadline, best, visits)
+        for (idx, e) in enumerate(net.adj[x])
+            visits < max_work || return (:work_limit, best, visits)
+            visits += 1
+            y = e.to
+            (1 <= y <= n_lit && scc_id[y] == cid) || continue
+            rc = _symmetrized_residual_cap(net, x, idx, e)
+            rc > min_sym_cap || continue
+            reverse ? push!(arcs[y], (x, rc)) : push!(arcs[x], (y, rc))
+        end
+    end
+    visited = Set{Int}((src,))
+    for (y, rc) in arcs[src]
+        rc > best[y] && (best[y] = rc)
+    end
+    while length(visited) < length(K)
+        _expired(deadline_ns) && return (:deadline, best, visits)
+        visits + length(K) <= max_work || return (:work_limit, best, visits)
+        visits += length(K)
+        best_u = 0
+        best_val = _Exact(0)
+        for x in K
+            x in visited && continue
+            v = best[x]
+            if v > best_val
+                best_val = v
+                best_u = x
+            end
+        end
+        best_u == 0 && break
+        push!(visited, best_u)
+        for (y, rc) in arcs[best_u]
+            y in visited && continue
+            cand = min(best_val, rc)
+            cand > best[y] && (best[y] = cand)
+        end
+    end
+    best[src] = _Exact(0)
+    return (:ok, best, visits)
+end
+
 function _scc_cycle_bottleneck(
     net::_FlowNetwork,
     scc_id::Vector{Int},
