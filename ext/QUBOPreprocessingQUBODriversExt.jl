@@ -166,13 +166,26 @@ function QP.sample_preprocessed(input,child_factory;rules=nothing,max_work=typem
     n_total = length(ws._snapshot.labels)
     residual_variables = Base.count(==(Int8(2)),ws._state.fixed) # `count` is a local below
     if residual_variables > 0 && isempty(QP.assumptions(ws))
+        reason = nothing
         if n_total-residual_variables < min_reduction*n_total
-            bypass = :min_reduction
+            reason = :min_reduction
         elseif deadline_ns !== nothing && max_prep_fraction < 1 &&
                 Float64(time_ns())-Float64(begin_ns) > max_prep_fraction*(Float64(deadline_ns)-Float64(begin_ns))
-            bypass = :max_prep_fraction
+            reason = :max_prep_fraction
         end
-        bypass === nothing || (ws = QP._identity_workspace(ws))
+        if reason !== nothing && isempty(ws._state.fixes)
+            # Nothing was removed: the identity export already is the original model
+            bypass = reason
+        elseif reason !== nothing
+            phase = :bypass
+            t = time_ns()
+            # Rebuilding identity state is a full source pass, charged like source construction
+            stop = _charge!(budget,_passes(_units(ws._snapshot),8))
+            stop === nothing || return finish(stop)
+            ws = QP._identity_workspace(ws)
+            bypass = reason
+            timings[:bypass] = Float64(time_ns()-t)/1e9
+        end
     end
     phase = :materialization
     t = time_ns()

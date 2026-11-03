@@ -44,8 +44,9 @@ absolute `deadline_ns`, `max_child_variables=16`, `max_results=1024`,
 `child_work_bound=nothing`, `min_reduction=0` and `max_prep_fraction=1`. With
 `min_reduction > 0`, the child solves the original model instead of the residual
 when preprocessing removed less than that fraction of the variables; with
-`max_prep_fraction < 1` and a `deadline_ns`, it does so when preprocessing used
-more than that fraction of the time to the deadline. Neither applies with caller
+`max_prep_fraction < 1` and a `deadline_ns`, it does so when setup and propagation
+used more than that fraction of the time to the deadline (checked before the
+residual is built). The fallback's identity rebuild is charged to `max_work`. Neither applies with caller
 assumptions or when every variable was removed. `metadata.child_model`
 (`:residual`/`:original`) and `metadata.bypass_reason` record the choice. Work is one shared allowance for charged adapter
 storage/update/verification/reconstruction units and a reserved child bound.

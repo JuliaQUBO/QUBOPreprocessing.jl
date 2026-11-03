@@ -122,12 +122,17 @@ model instead of the residual:
 - `min_reduction`: the child gets the original model when preprocessing
   removed less than this fraction of the variables.
 - `max_prep_fraction`: with a `deadline_ns`, the child gets the original model
-  when preprocessing used more than this fraction of the time to the deadline.
+  when setup and propagation used more than this fraction of the time to the
+  deadline. The check runs before the residual is built, so materialization and
+  verification time are not counted.
 
 Neither applies when the caller has assumptions or every variable was removed.
 After a fallback, `result.workspace` and `result.exported` are a fresh identity
 workspace and export of the same source. The caller's workspace keeps its
-reductions.
+reductions. Rebuilding that identity state is a full source pass, charged to
+`max_work` like source construction and timed as the `:bypass` phase. When
+nothing was removed, the residual already is the original model and nothing is
+rebuilt.
 
 `metadata.child_model` (`:residual` or `:original`) records which model the child
 solved, and `metadata.bypass_reason` records why (`:min_reduction`,
