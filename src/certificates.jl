@@ -3540,29 +3540,33 @@ function _extract_roof_scc_specs(
         return (:ok, (to_b > min_cap && from_b > min_cap) ? min(to_b, from_b) : _Exact(0))
     end
     cache_0 = Dict{Tuple{Int,Int,Bool},Dict{Int,_Exact}}()
+    tuples_0 = Dict{Int,Tuple{Vararg{Int}}}()
     for K in sccs_0
         length(K) >= 2 || continue
         _expired(deadline_ns) && return (false, :deadline, specs, ver_w, ex_w)
-        _is_closed_residual_scc(net, in_half, scc_id_0, K) || continue
+        closed = _is_closed_residual_scc(net, in_half, scc_id_0, K; deadline_ns=deadline_ns)
+        closed === nothing && return (false, :deadline, specs, ver_w, ex_w)
+        closed || continue
         vars_K = Int[]
+        seen_K = Set{Int}()
         for lit in K
             v_var = _lit_var(lit)
-            !(v_var in used_vars) && !(v_var in vars_K) && push!(vars_K, v_var)
+            !(v_var in used_vars) && !(v_var in seen_K) && (push!(seen_K, v_var); push!(vars_K, v_var))
         end
         length(vars_K) >= 2 || continue
         sort!(vars_K; by = v -> (v in cand_set ? 1 : 0, v))
         rep = vars_K[1]
         for u in vars_K
             (u != rep && (u in cand_set)) || continue
+            _expired(deadline_ns) && return (false, :deadline, specs, ver_w, ex_w)
             a = 2 * u - 1
             cid_u = scc_id_0[a]
-            K_u = sccs_0[cid_u]
             b = scc_id_0[2 * rep - 1] == cid_u ? (2 * rep - 1) : (2 * rep)
             orig_σ = b == 2 * rep - 1 ? 1 : -1
             r_b, B_cycle = cycle_bottleneck!(cache_0, scc_id_0, sccs_0, cid_u, a, b, _Exact(0))
             r_b === :ok || return (false, r_b, specs, ver_w, ex_w)
             if B_cycle > 0
-                push!(specs, (u, rep, orig_σ, B_cycle, L_roof, (), Tuple(K_u)))
+                push!(specs, (u, rep, orig_σ, B_cycle, L_roof, (), get!(() -> Tuple(sccs_0[cid_u]), tuples_0, cid_u)))
             end
         end
         for v_var in vars_K
@@ -3624,29 +3628,31 @@ function _extract_roof_scc_specs(
                 ok_sccd || return (false, scc_reasond, specs, ver_w, ex_w)
                 w_tuple = Tuple(w_vec)
                 cache_d = Dict{Tuple{Int,Int,Bool},Dict{Int,_Exact}}()
+                tuples_d = Dict{Int,Tuple{Vararg{Int}}}()
                 for K_d in sccs_d
                     length(K_d) >= 2 || continue
                     _expired(deadline_ns) && return (false, :deadline, specs, ver_w, ex_w)
                     vars_K = Int[]
+                    seen_K = Set{Int}()
                     for lit in K_d
                         v_var = _lit_var(lit)
-                        !(v_var in used_vars) && !(v_var in vars_K) && push!(vars_K, v_var)
+                        !(v_var in used_vars) && !(v_var in seen_K) && (push!(seen_K, v_var); push!(vars_K, v_var))
                     end
                     length(vars_K) >= 2 || continue
                     sort!(vars_K; by = v -> (v in cand_set ? 1 : 0, v))
                     rep = vars_K[1]
                     for u in vars_K
                         (u != rep && (u in cand_set)) || continue
+                        _expired(deadline_ns) && return (false, :deadline, specs, ver_w, ex_w)
                         a = 2 * u - 1
                         cid_u = scc_id_d[a]
-                        K_u = sccs_d[cid_u]
                         b = scc_id_d[2 * rep - 1] == cid_u ? (2 * rep - 1) : (2 * rep)
                         orig_σ = b == 2 * rep - 1 ? 1 : -1
                         r_b, B_cycle = cycle_bottleneck!(cache_d, scc_id_d, sccs_d, cid_u, a, b, Δ)
                         r_b === :ok || return (false, r_b, specs, ver_w, ex_w)
                         margin = B_cycle - Δ
                         if margin > 0
-                            push!(specs, (u, rep, orig_σ, margin, U_exact, w_tuple, Tuple(K_u)))
+                            push!(specs, (u, rep, orig_σ, margin, U_exact, w_tuple, get!(() -> Tuple(sccs_d[cid_u]), tuples_d, cid_u)))
                         end
                     end
                     for v_var in vars_K
@@ -4032,10 +4038,12 @@ end
 Compute the exact rational implication-network (posiform / roof-duality) lower
 bound and extract strongly persistent variable assignments without mutating `ws`.
 When `contract_scc=true`, also extracts strongly persistent signed pair
-contractions from nontrivial residual SCCs (`:roof_scc_pair`). SCC contraction adds a residual SCC decomposition and, for each closed
-residual SCC with K literals, two widest-path passes of O(K²) exact
-comparisons (verification replays a batch with the same per-SCC passes);
-`max_work` and `deadline_ns` bound this phase.
+contractions from nontrivial residual SCCs (`:roof_scc_pair`). SCC contraction adds a residual SCC decomposition, a closedness scan per
+SCC and, for each closed residual SCC with K literals, two widest-path
+passes of O(K²) exact comparisons; verification replays a batch with the
+same per-SCC passes, and witness-backed contractions also re-validate
+their witness state per step. `max_work` and `deadline_ns` bound every
+phase, which polls the deadline at least every 1,024 inner iterations.
 Returns a [`RoofDualityAttempt`](@ref) containing the exact normalized
 `lower_bound`, scaled model `objective_bound`, maximum `S`-`T` flow `max_flow`,
 strongly persistent `fixings`, `contracted_count`, `contractions`, phase-separated
@@ -4997,6 +5005,7 @@ function _verify_relation_step(
             step_idx + m - 1 <= length(all_steps) || return (false, :invalid_step, cost)
             elim_set = Set{Int}()
             for r in 1:m
+                _expired(deadline) && return (false, :deadline, cost)
                 s_r = all_steps[step_idx + r - 1]
                 (s_r isa RelationStep &&
                  s_r.method === :roof_scc_pair &&
@@ -5039,6 +5048,7 @@ function _verify_relation_step(
             # literal, Δ, direction), as in extraction (#94); per-step recomputation
             # made batch verification cubic in the SCC size.
             closed_0 = Dict{Int,Bool}()
+            tuples_v = Dict{Tuple{_Exact,Int},Tuple{Vararg{Int}}}()
             path_cache = Dict{Tuple{Int,Int,_Exact,Bool},Dict{Int,_Exact}}()
             function batch_bottleneck(scc_id, sccs, cid, a, b, min_cap)
                 for rev in (false, true)
@@ -5065,8 +5075,12 @@ function _verify_relation_step(
                     cid_0 = scc_id_0[a_r]
                     (cid_0 > 0 && scc_id_0[b_r] == cid_0) || return (false, :invalid_bound, cost)
                     K_0 = sccs_0[cid_0]
-                    (w_r.scc_literals == Tuple(K_0) &&
-                     get!(() -> _is_closed_residual_scc(net, in_half, scc_id_0, K_0), closed_0, cid_0)) ||
+                    if !haskey(closed_0, cid_0)
+                        closed = _is_closed_residual_scc(net, in_half, scc_id_0, K_0; deadline_ns=deadline)
+                        closed === nothing && return (false, :deadline, cost)
+                        closed_0[cid_0] = closed
+                    end
+                    (w_r.scc_literals == get!(() -> Tuple(K_0), tuples_v, (_Exact(0), cid_0)) && closed_0[cid_0]) ||
                         return (false, :invalid_bound, cost)
                     r_v, B_cycle = batch_bottleneck(scc_id_0, sccs_0, cid_0, a_r, b_r, _Exact(0))
                     r_v === :ok || return (false, r_v, cost)
@@ -5096,7 +5110,7 @@ function _verify_relation_step(
                     cid_d = scc_id_d[a_r]
                     (cid_d > 0 && scc_id_d[b_r] == cid_d) || return (false, :invalid_bound, cost)
                     K_d = sccs_d[cid_d]
-                    w_r.scc_literals == Tuple(K_d) || return (false, :invalid_bound, cost)
+                    w_r.scc_literals == get!(() -> Tuple(K_d), tuples_v, (Δ, cid_d)) || return (false, :invalid_bound, cost)
                     r_v, B_cycle = batch_bottleneck(scc_id_d, sccs_d, cid_d, a_r, b_r, Δ)
                     r_v === :ok || return (false, r_v, cost)
                     margin = B_cycle - Δ

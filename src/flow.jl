@@ -407,6 +407,7 @@ function _tarjan_residual_sccs(
                     end
                     sort!(comp)
                     push!(sccs, comp)
+                    _expired(deadline_ns) && return (false, :deadline, scc_id, sccs, visits)
                 end
             end
         end
@@ -414,19 +415,27 @@ function _tarjan_residual_sccs(
     return (true, :ok, scc_id, sccs, visits)
 end
 
+# Deadline poll every 1,024 iterations of an inner loop.
+@inline _poll_expired(i::Int, deadline_ns) = (i & 1023) == 0 && _expired(deadline_ns)
+
+# `nothing` when `deadline_ns` expires before the scan finishes.
 function _is_closed_residual_scc(
     net::_FlowNetwork,
     in_half::BitVector,
     scc_id::Vector{Int},
-    K::Vector{Int},
+    K::Vector{Int};
+    deadline_ns=nothing,
 )
     length(K) >= 2 || return false
     cid = scc_id[K[1]]
     n_lit = length(in_half)
+    scanned = 0
     for a in K
         scc_id[_lit_complement(a)] == cid && return false
         adj_a = net.adj[a]
         for (idx, e) in enumerate(adj_a)
+            scanned += 1
+            _poll_expired(scanned, deadline_ns) && return nothing
             b = e.to
             (1 <= b <= n_lit && in_half[b]) || continue
             # Check outgoing residual capacity a -> b and incoming residual capacity b -> a:
@@ -521,17 +530,20 @@ function _widest_scc_paths(
     max_work::Int=typemax(Int),
     deadline_ns=nothing,
 )
+    _expired(deadline_ns) && return (:deadline, Dict{Int,_Exact}(), 0)
     best = Dict{Int,_Exact}(x => _Exact(0) for x in K)
     scc_id[src] == cid || return (:ok, best, 0)
     n_lit = length(scc_id)
     # Residual arcs inside the SCC, keyed by the node the search expands from
     arcs = Dict{Int,Vector{Tuple{Int,_Exact}}}(x => Tuple{Int,_Exact}[] for x in K)
+    _expired(deadline_ns) && return (:deadline, best, 0)
     visits = 0
     for x in K
         _expired(deadline_ns) && return (:deadline, best, visits)
         for (idx, e) in enumerate(net.adj[x])
             visits < max_work || return (:work_limit, best, visits)
             visits += 1
+            _poll_expired(visits, deadline_ns) && return (:deadline, best, visits)
             y = e.to
             (1 <= y <= n_lit && scc_id[y] == cid) || continue
             rc = _symmetrized_residual_cap(net, x, idx, e)
@@ -549,7 +561,8 @@ function _widest_scc_paths(
         visits += length(K)
         best_u = 0
         best_val = _Exact(0)
-        for x in K
+        for (i, x) in enumerate(K)
+            _poll_expired(i, deadline_ns) && return (:deadline, best, visits)
             x in visited && continue
             v = best[x]
             if v > best_val
@@ -559,7 +572,8 @@ function _widest_scc_paths(
         end
         best_u == 0 && break
         push!(visited, best_u)
-        for (y, rc) in arcs[best_u]
+        for (i, (y, rc)) in enumerate(arcs[best_u])
+            _poll_expired(i, deadline_ns) && return (:deadline, best, visits)
             y in visited && continue
             cand = min(best_val, rc)
             cand > best[y] && (best[y] = cand)

@@ -395,6 +395,42 @@
             @test QP._extract_roof_scc_specs(ws, cand, net, L_roof, R_S, R_T; deadline_ns=time_ns())[2] === :deadline
             @test QP._extract_roof_scc_specs(ws, cand, net, L_roof, R_S, R_T; max_work=done[4] - 1)[2] === :work_limit
         end
+
+        # A deadline that expires mid-phase stops extraction, the public pass and batch
+        # verification long before they would finish, and the public pass rolls back.
+        # K_{60,60} takes about 0.2 s per phase; each deadline is 5% of the measured time.
+        m60 = QT.Model{Int,Float64,Int}(Dict(i => 0.0 for i in 1:120), Dict((u, v) => -1.0 for u in 1:60 for v in 61:120);
+                                        domain=:spin, sense=:min)
+        # Full and cut runs both pass a UInt64 deadline, so both use the same compiled method.
+        cut_at(t) = time_ns() + round(UInt64, 0.05e9 * t)
+        far() = time_ns() + UInt64(10)^12
+        ws60 = Workspace(m60; rules=:relations)
+        out60 = QP._roof_duality_pass(ws60, collect(1:120))
+        args60 = (ws60, collect(1:120), out60[13], out60[3], out60[14], out60[15])
+        QP._extract_roof_scc_specs(args60...)
+        t_full = @elapsed full60 = QP._extract_roof_scc_specs(args60...)
+        @test full60[2] === :ok && length(full60[3]) == 119
+        t_cut = @elapsed cut60 = QP._extract_roof_scc_specs(args60...; deadline_ns=cut_at(t_full))
+        @test cut60[2] === :deadline
+        @test t_cut < 0.5 * t_full
+
+        apply_roof_duality!(Workspace(m60; rules=:relations); contract_scc=true, deadline_ns=far())
+        ws_done = Workspace(m60; rules=:relations)
+        t_apply = @elapsed rep_done = apply_roof_duality!(ws_done; contract_scc=true, deadline_ns=far())
+        @test rep_done.stop_reason === :applied && rep_done.contracted_count == 119
+        ws_cut = Workspace(m60; rules=:relations)
+        t_apply_cut = @elapsed rep_cut = apply_roof_duality!(ws_cut; contract_scc=true, deadline_ns=cut_at(t_apply))
+        @test rep_cut.stop_reason === :deadline && rep_cut.contracted_count == 0
+        @test t_apply_cut < 0.5 * t_apply
+        @test isempty(reductions(ws_cut))
+
+        cert60 = export_certificate(ws_done)
+        verify_certificate(ws_done, cert60; deadline_ns=far())
+        t_verify = @elapsed v_done = verify_certificate(ws_done, cert60; deadline_ns=far())
+        @test v_done.valid
+        t_verify_cut = @elapsed v_cut = verify_certificate(ws_done, cert60; deadline_ns=cut_at(t_verify))
+        @test !v_cut.valid && v_cut.stop_reason === :deadline
+        @test t_verify_cut < 0.5 * t_verify
     end
 
     @testset "residual-SCC 2-SAT pair equivalences (:roof_scc_pair, #60)" begin
