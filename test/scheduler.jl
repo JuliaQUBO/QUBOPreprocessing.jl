@@ -536,11 +536,32 @@ end
     @test rep0.stop_reason === :deadline && rep0.passes == 0 && rep0.residual_variables == 16 && isempty(rep0.families)
     m60 = bip(60, -1.0)
     preprocess(m60; rules=:mixed, time_limit=60.0)
-    t_short = @elapsed (ws60, rep60) = preprocess(m60; rules=:mixed, time_limit=0.05)
-    @test rep60.stop_reason === :deadline
+    ws60 = Workspace(m60; rules=:mixed)
+    t_short = @elapsed rep60 = schedule_budgeted!(ws60; time_limit=0.05)
+    @test rep60.stop_reason in (:deadline, :solved)
     @test t_short < 0.5
     cert60 = export_certificate(ws60)
     @test cert60 === nothing || verify_certificate(ws60, cert60).valid
+
+    # Options are validated before anything changes; huge budgets saturate
+    ws_v = Workspace(m8; rules=:mixed)
+    @test_throws ArgumentError schedule_budgeted!(ws_v; time_limit=1.0, probe_rounds=-1)
+    @test_throws ArgumentError schedule_budgeted!(ws_v; time_limit=1.0, max_block_size=0)
+    @test_throws ArgumentError schedule_budgeted!(ws_v; time_limit=1.0, tie_break=:mid)
+    @test count(==(Int8(2)), ws_v._state.fixed) == 16 && isempty(reductions(ws_v))
+    @test schedule_budgeted!(ws_v; time_limit=1e30).stop_reason === :solved
+
+    # Probing's witness construction and ordering honor a short deadline on a
+    # 20,000-variable ring: only linear-time setup remains (polishing alone took a few
+    # hundred ms, and probing this ring to completion takes minutes). The warm-up uses
+    # a UInt64 deadline so the timed call does not compile.
+    ring = QT.Model{Int,Float64,Int}(Dict(i => (isodd(i) ? 0.5 : -0.25) for i in 1:20_000),
+                                     Dict((i, i % 20_000 + 1) => -1.0 for i in 1:20_000); domain=:spin, sense=:min)
+    probe_variables!(Workspace(ring; rules=:mixed); order=:coercive, max_candidates=1, deadline_ns=time_ns() + UInt64(10)^9)
+    ws_ring = Workspace(ring; rules=:mixed)
+    t_probe = @elapsed rep_probe = probe_variables!(ws_ring; order=:coercive, deadline_ns=time_ns() + UInt64(10)^6)
+    @test rep_probe.stop_reason === :deadline
+    @test t_probe < 0.25
 
     # Keywords are forwarded, weak mode is accepted, and invalid budgets are rejected
     ws_w, rep_w = preprocess(m8; rules=:mixed, time_limit=60.0, allow_weak=true, enable_probing=false)

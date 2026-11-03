@@ -3607,8 +3607,9 @@ function _extract_roof_scc_specs(
             w_init = _prevalidated_witness === nothing ? _extract_witness_state(ws, witness, map) : _prevalidated_witness
             _witness_satisfies_trail(ws, w_init) ? w_init : nothing
         else
-            _coercive_field_witness_orig(ws; map=map)
+            _coercive_field_witness_orig(ws; map=map, deadline_ns=deadline_ns)
         end
+        _expired(deadline_ns) && return (false, :deadline, specs, ver_w, ex_w)
         if w_vec !== nothing
             n = length(s.labels)
             w_energy = st.constant

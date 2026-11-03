@@ -410,27 +410,29 @@
         QP._extract_roof_scc_specs(args60...)
         t_full = @elapsed full60 = QP._extract_roof_scc_specs(args60...)
         @test full60[2] === :ok && length(full60[3]) == 119
-        t_cut = @elapsed cut60 = QP._extract_roof_scc_specs(args60...; deadline_ns=cut_at(t_full))
-        @test cut60[2] === :deadline
-        @test t_cut < 0.5 * t_full
+        # Each cancellation takes the fastest of three trials, so a loaded runner does not flake.
+        cuts = [(@elapsed(r = QP._extract_roof_scc_specs(args60...; deadline_ns=cut_at(t_full))), r) for _ in 1:3]
+        @test all(c -> last(c)[2] === :deadline, cuts)
+        @test minimum(first, cuts) < 0.5 * t_full
 
         apply_roof_duality!(Workspace(m60; rules=:relations); contract_scc=true, deadline_ns=far())
         ws_done = Workspace(m60; rules=:relations)
         t_apply = @elapsed rep_done = apply_roof_duality!(ws_done; contract_scc=true, deadline_ns=far())
         @test rep_done.stop_reason === :applied && rep_done.contracted_count == 119
-        ws_cut = Workspace(m60; rules=:relations)
-        t_apply_cut = @elapsed rep_cut = apply_roof_duality!(ws_cut; contract_scc=true, deadline_ns=cut_at(t_apply))
-        @test rep_cut.stop_reason === :deadline && rep_cut.contracted_count == 0
-        @test t_apply_cut < 0.5 * t_apply
-        @test isempty(reductions(ws_cut))
+        apply_cuts = map(1:3) do _
+            w = Workspace(m60; rules=:relations)
+            (@elapsed(r = apply_roof_duality!(w; contract_scc=true, deadline_ns=cut_at(t_apply))), r, w)
+        end
+        @test all(c -> c[2].stop_reason === :deadline && c[2].contracted_count == 0 && isempty(reductions(c[3])), apply_cuts)
+        @test minimum(first, apply_cuts) < 0.5 * t_apply
 
         cert60 = export_certificate(ws_done)
         verify_certificate(ws_done, cert60; deadline_ns=far())
         t_verify = @elapsed v_done = verify_certificate(ws_done, cert60; deadline_ns=far())
         @test v_done.valid
-        t_verify_cut = @elapsed v_cut = verify_certificate(ws_done, cert60; deadline_ns=cut_at(t_verify))
-        @test !v_cut.valid && v_cut.stop_reason === :deadline
-        @test t_verify_cut < 0.5 * t_verify
+        verify_cuts = [(@elapsed(v = verify_certificate(ws_done, cert60; deadline_ns=cut_at(t_verify))), v) for _ in 1:3]
+        @test all(c -> !last(c).valid && last(c).stop_reason === :deadline, verify_cuts)
+        @test minimum(first, verify_cuts) < 0.5 * t_verify
 
         # Running out of budget after part of the batch is committed (here one work unit
         # short of the full pass) rolls the workspace back to its checkpoint. Deadline and

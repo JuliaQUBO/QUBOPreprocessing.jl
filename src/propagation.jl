@@ -492,7 +492,8 @@ function _polish_spin_state_float!(
     adj_f::Vector{Vector{Tuple{Int,Float64}}},
     l1_f::Vector{Float64},
     direction::Int,
-    mf::Int,
+    mf::Int;
+    deadline_ns=nothing,
 )
     n = length(h_f)
     eff_h = zeros(Float64, n)
@@ -505,6 +506,8 @@ function _polish_spin_state_float!(
     end
     dir_f = Float64(direction)
     for _ in 1:mf
+        # Stopping early still leaves a feasible witness state
+        _expired(deadline_ns) && break
         best_i = 0
         best_gain = 0.0
         @inbounds for i in free_vars
@@ -535,7 +538,8 @@ function _polish_spin_state!(
     ws::Workspace,
     free_vars::Vector{Int},
     direction::Int,
-    mf::Int,
+    mf::Int;
+    deadline_ns=nothing,
 )
     st = ws._state
     n = length(ws._snapshot.labels)
@@ -549,6 +553,7 @@ function _polish_spin_state!(
         eff_h[i] = eh
     end
     for _ in 1:mf
+        _expired(deadline_ns) && break
         best_i = 0
         best_gain = _Exact(0)
         @inbounds for i in free_vars
@@ -638,11 +643,12 @@ function _coercive_field_witness_float_spin!(
     all_zero_h::Bool;
     sequential::Bool=true,
     map::Union{Nothing,DomainGaugeMap}=nothing,
+    deadline_ns=nothing,
 )
     n = length(spin_s)
-    _polish_spin_state_float!(spin_s, free_vars, h_f, adj_f, l1_f, direction, mf)
+    _polish_spin_state_float!(spin_s, free_vars, h_f, adj_f, l1_f, direction, mf; deadline_ns)
     spin_best = spin_s
-    if sequential && length(free_vars) > 1
+    if sequential && length(free_vars) > 1 && !_expired(deadline_ns)
         seq_order = copy(free_vars)
         tiers = zeros(Int, n)
         ratios_f = zeros(Float64, n)
@@ -688,7 +694,7 @@ function _coercive_field_witness_float_spin!(
                 end
             end
         end
-        _polish_spin_state_float!(spin_seq, free_vars, h_f, adj_f, l1_f, direction, mf)
+        _polish_spin_state_float!(spin_seq, free_vars, h_f, adj_f, l1_f, direction, mf; deadline_ns)
         if _spin_seq_strictly_better(ws, free_vars, spin_seq, spin_s, h_f, adj_f, direction)
             spin_best = spin_seq
         end
@@ -756,6 +762,7 @@ function _coercive_field_witness_spins(
     max_flips=1000,
     tie_break::Symbol=:low,
     map::Union{Nothing,DomainGaugeMap}=nothing,
+    deadline_ns=nothing,
 )
     max_flips isa Integer && !(max_flips isa Bool) && 0 <= max_flips <= typemax(Int) ||
         throw(ArgumentError("max_flips must be a nonnegative machine-sized integer"))
@@ -783,20 +790,21 @@ function _coercive_field_witness_spins(
     end
     mf = Int(max_flips)
     spin_best = spin_s
-    if polish && direction != 0 && !isempty(free_vars)
+    # Past the deadline the field-aligned start is returned unpolished (still feasible)
+    if polish && direction != 0 && !isempty(free_vars) && !_expired(deadline_ns)
         float_sub = _try_build_float_spin_subproblem(ws, free_vars)
         if float_sub !== nothing
             h_f, adj_f, l1_f = float_sub
             spin_s, spin_best = _coercive_field_witness_float_spin!(
                 ws, spin_s, free_vars, h_f, adj_f, l1_f, direction, mf, tie_break, all_zero_h;
-                sequential=sequential, map=map,
+                sequential=sequential, map=map, deadline_ns=deadline_ns,
             )
         else
-            e_par = _polish_spin_state!(spin_s, ws, free_vars, direction, mf)
+            e_par = _polish_spin_state!(spin_s, ws, free_vars, direction, mf; deadline_ns)
             spin_best = spin_s
             if sequential && length(free_vars) > 1
                 seq_order = copy(free_vars)
-                _order_probing_candidates!(ws, seq_order, spin_s, :coercive)
+                _order_probing_candidates!(ws, seq_order, spin_s, :coercive; deadline_ns)
                 spin_seq = zeros(Int, n)
                 cond_h = Vector{_Exact}(undef, n)
                 assigned = falses(n)
@@ -825,7 +833,7 @@ function _coercive_field_witness_spins(
                         cond_h[j] += _spin_coupling(ws, q) * s_i
                     end
                 end
-                e_seq = _polish_spin_state!(spin_seq, ws, free_vars, direction, mf)
+                e_seq = _polish_spin_state!(spin_seq, ws, free_vars, direction, mf; deadline_ns)
                 if e_seq < e_par
                     spin_best = spin_seq
                 end
@@ -842,6 +850,7 @@ function _coercive_field_witness_orig(
     max_flips=1000,
     tie_break::Symbol=:low,
     map::Union{Nothing,DomainGaugeMap}=nothing,
+    deadline_ns=nothing,
 )
     _, spin_best = _coercive_field_witness_spins(
         ws;
@@ -850,6 +859,7 @@ function _coercive_field_witness_orig(
         max_flips=max_flips,
         tie_break=tie_break,
         map=map,
+        deadline_ns=deadline_ns,
     )
     return _lift_spin_witness(ws, spin_best)
 end
@@ -910,11 +920,13 @@ function _order_probing_candidates!(
     ws::Workspace,
     cand_indices::Vector{Int},
     w_vec::Vector{Int},
-    order::Symbol,
+    order::Symbol;
+    deadline_ns=nothing,
 )
     order in (:index, :coercive, :extremal) ||
         throw(ArgumentError("order must be :index, :coercive, or :extremal"))
-    (order === :index || length(cand_indices) <= 1) && return cand_indices
+    # On an expired deadline the candidates stay unordered; the caller stops next.
+    (order === :index || length(cand_indices) <= 1 || _expired(deadline_ns)) && return cand_indices
     s, st = ws._snapshot, ws._state
     n = length(s.labels)
     is_bool = s.domain === QT.BoolDomain
@@ -1130,7 +1142,7 @@ function probe_variables!(
     order in (:index, :coercive, :extremal) ||
         throw(ArgumentError("order must be :index, :coercive, or :extremal"))
     map === nothing || _validate_domain_map(ws, map)
-    w_vec::Union{Nothing,Vector{Int}} = witness === nothing ? _coercive_field_witness_orig(ws; map) : _extract_witness_state(ws, witness, map)
+    w_vec::Union{Nothing,Vector{Int}} = witness === nothing ? _coercive_field_witness_orig(ws; map, deadline_ns) : _extract_witness_state(ws, witness, map)
     s, st = ws._snapshot, ws._state
     cand_indices = if candidates === nothing
         Int[i for i in 1:length(s.labels) if st.fixed[i] == 2]
@@ -1146,7 +1158,7 @@ function probe_variables!(
         end
         out
     end
-    _order_probing_candidates!(ws, cand_indices, w_vec, order)
+    _order_probing_candidates!(ws, cand_indices, w_vec, order; deadline_ns)
     _direction(s) != 0 || return _probing_report!(ws, :zero_scale, 0, 0, 0, 0, 0; pending=length(cand_indices))
     probed = 0
     visits = 0
@@ -1271,7 +1283,7 @@ function probe_variables!(
                     branch_dirty = true
                     w_energy_ref[] = nothing
                     if w_vec !== nothing && !_witness_satisfies_trail(ws, w_vec)
-                        w_vec = witness === nothing ? _coercive_field_witness_orig(ws; map) : nothing
+                        w_vec = witness === nothing ? _coercive_field_witness_orig(ws; map, deadline_ns) : nothing
                     end
                 elseif bs_low.value != bs_high.value && contract_relations
                     _contraction_fill(st, u, i) <= mf || continue
@@ -1309,7 +1321,7 @@ function probe_variables!(
                     branch_dirty = true
                     w_energy_ref[] = nothing
                     if w_vec !== nothing && !_witness_satisfies_trail(ws, w_vec)
-                        w_vec = witness === nothing ? _coercive_field_witness_orig(ws; map) : nothing
+                        w_vec = witness === nothing ? _coercive_field_witness_orig(ws; map, deadline_ns) : nothing
                     end
                 end
             end
@@ -4076,18 +4088,26 @@ generation(r::BudgetedScheduleReport) = r.generation
                        max_block_size=12, probe_rounds=8, tie_break=:low)
 
 Run every certified reduction family on `ws` under one wall-clock budget of
-`time_limit` seconds, instead of caller-chosen size gates. The cheap rules
-(dominance, low-degree and star-triangle elimination, pair relations: one
-[`schedule_reductions!`](@ref) call) reach a fixpoint first. Each expensive family
-then runs in turn with whatever budget remains — roof duality, submodular cuts,
-Max-Cut, block elimination (`max_block_size`), residual-SCC contraction and, when
-`enable_probing`, coercive-order probing with `probe_rounds` trial rounds — and
-the cheap rules run again after every expensive family that removes a variable.
-Passes repeat until one removes no variable or the budget expires. Every family
-receives the shared `deadline_ns`, so the call returns within a small margin of
-`time_limit` and any interrupted pass rolls back cleanly. Only strongly persistent
-reductions are applied unless `allow_weak=true`. Returns a
-[`BudgetedScheduleReport`](@ref) with per-family time and removed variables.
+`time_limit` seconds, instead of caller-chosen size gates. The budget covers the
+reduction work on the existing workspace; building `ws` (snapshot import and
+integerization) happens before it starts.
+
+The cheap rules (dominance, low-degree and star-triangle elimination, pair
+relations: one [`schedule_reductions!`](@ref) call) reach a fixpoint first. The
+expensive families then run in turn — roof duality, submodular cuts, Max-Cut, block
+elimination (`max_block_size`), residual-SCC contraction and, when
+`enable_probing`, coercive-order probing with `probe_rounds` trial rounds. Each
+gets at most an equal share of the budget left in the pass, so one unproductive
+family cannot consume it all, and the cheap rules run again after every expensive
+family that removes a variable. Passes repeat while some family removes a
+variable; from the second pass on, families that have removed nothing are skipped.
+Every call shares the deadline, so the schedule returns within a small margin of
+`time_limit`, and an interrupted pass rolls back cleanly.
+
+`allow_weak=true` additionally applies weak dominance, weak relations and weak
+submodular/Max-Cut reductions, which keep at least one optimum; exact elimination
+may resolve ties in either mode. Returns a [`BudgetedScheduleReport`](@ref) with
+per-family time and removed variables.
 """
 function schedule_budgeted!(
     ws::Workspace;
@@ -4098,34 +4118,48 @@ function schedule_budgeted!(
     probe_rounds=8,
     tie_break::Symbol=:low,
 )
-    (isfinite(time_limit) && time_limit >= 0) ||
+    # Validate every option before any family can modify the workspace
+    (time_limit isa Real && !(time_limit isa Bool) && isfinite(time_limit) && time_limit >= 0) ||
         throw(ArgumentError("time_limit must be a finite nonnegative number of seconds"))
+    (probe_rounds isa Integer && !(probe_rounds isa Bool) && probe_rounds >= 0) ||
+        throw(ArgumentError("probe_rounds must be a nonnegative integer"))
+    (max_block_size isa Integer && !(max_block_size isa Bool) && max_block_size >= 1) ||
+        throw(ArgumentError("max_block_size must be a positive integer"))
+    tie_break in (:low, :high) || throw(ArgumentError("tie_break must be :low or :high"))
     t0 = time_ns()
-    deadline = t0 + round(UInt64, Float64(time_limit) * 1e9)
+    # Saturate budgets too long to represent as a time_ns() deadline
+    budget_ns = Float64(time_limit) * 1e9
+    deadline = budget_ns >= Float64(typemax(UInt64) - t0) ? typemax(UInt64) : t0 + round(UInt64, budget_ns)
     st = ws._state
     free_count() = count(==(Int8(2)), st.fixed)
     n0 = free_count()
     order = [:roof_duality, :submodular_cut, :maxcut, :blocks, :roof_scc]
     enable_probing && push!(order, :probing)
     stats = Dict{Symbol,BudgetedFamilyRun}()
-    function run_family!(family::Symbol)
+    function run_family!(family::Symbol, family_deadline::UInt64)
         before = free_count()
         t = time_ns()
-        rep = if family === :cheap || family === :blocks
+        rep = if family === :cheap
             schedule_reductions!(
                 ws;
-                enable_star_triangle=true, enable_blocks=(family === :blocks), max_block_size,
-                allow_weak_dominance=allow_weak, allow_weak_relations=allow_weak, tie_break,
-                deadline_ns=deadline,
+                enable_star_triangle=true, allow_weak_dominance=allow_weak, allow_weak_relations=allow_weak,
+                tie_break, deadline_ns=family_deadline,
+            )
+        elseif family === :blocks
+            # Block elimination alone; the cheap cascade that follows is counted as :cheap
+            schedule_reductions!(
+                ws;
+                enable_dominance=false, enable_elimination=false, enable_relations=false,
+                enable_blocks=true, max_block_size, tie_break, deadline_ns=family_deadline,
             )
         elseif family === :roof_duality || family === :roof_scc
-            apply_roof_duality!(ws; contract_scc=(family === :roof_scc), deadline_ns=deadline)
+            apply_roof_duality!(ws; contract_scc=(family === :roof_scc), deadline_ns=family_deadline)
         elseif family === :submodular_cut
-            apply_submodular_cut!(ws; allow_weak, tie_break, deadline_ns=deadline)
+            apply_submodular_cut!(ws; allow_weak, tie_break, deadline_ns=family_deadline)
         elseif family === :maxcut
-            apply_maxcut!(ws; allow_weak, deadline_ns=deadline)
+            apply_maxcut!(ws; allow_weak, deadline_ns=family_deadline)
         else
-            probe_variables!(ws; order=:coercive, max_rounds=probe_rounds, deadline_ns=deadline)
+            probe_variables!(ws; order=:coercive, max_rounds=probe_rounds, deadline_ns=family_deadline)
         end
         freed = before - free_count()
         prev = get(stats, family, BudgetedFamilyRun(family, 0, 0.0, 0, :none))
@@ -4141,13 +4175,17 @@ function schedule_budgeted!(
             break
         end
         passes += 1
-        freed_pass = run_family!(:cheap)
-        for family in order
+        freed_pass = run_family!(:cheap, deadline)
+        # From the second pass on, only families that have removed something run again
+        active = passes == 1 ? order : [f for f in order if haskey(stats, f) && stats[f].freed > 0]
+        for (k, family) in enumerate(active)
             (free_count() == 0 || _expired(deadline)) && break
-            freed = run_family!(family)
+            now = time_ns()
+            share = (deadline - now) ÷ UInt64(length(active) - k + 1)
+            freed = run_family!(family, now + share)
             freed_pass += freed
             # Re-run the cheap rules after any expensive family that removed a variable
-            freed > 0 && free_count() > 0 && !_expired(deadline) && (freed_pass += run_family!(:cheap))
+            freed > 0 && free_count() > 0 && !_expired(deadline) && (freed_pass += run_family!(:cheap, deadline))
         end
         if _expired(deadline)
             stop = :deadline

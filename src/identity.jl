@@ -740,7 +740,8 @@ Return `(workspace, report)` using the same snapshot path as [`Workspace`](@ref)
 [`propagate!`](@ref) with forwarded keyword limits and returns its report.
 With `rules=:mixed` and a `time_limit` in seconds, every reduction family runs
 under that budget through [`schedule_budgeted!`](@ref) (forwarding its keywords)
-and its [`BudgetedScheduleReport`](@ref) is returned; without `time_limit`,
+and its [`BudgetedScheduleReport`](@ref) is returned (the budget starts once the
+workspace is built); without `time_limit`,
 `:mixed` runs [`schedule_reductions!`](@ref).
 When `rules !== :identity`, `integerize_scale` defaults to `true` with `atol=0.0`,
 so only exact dyadic denominators ``2^a`` within `0 <= a <= max_decimals` are
