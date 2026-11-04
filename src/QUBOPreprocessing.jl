@@ -4,6 +4,7 @@
 module QUBOPreprocessing
 
 import QUBOTools as QT
+using PrecompileTools: @setup_workload, @compile_workload
 using LinearAlgebra: UpperTriangular
 using SparseArrays: SparseVector, SparseMatrixCSC
 using UUIDs: UUID, uuid4
@@ -56,4 +57,5 @@ include("certificates.jl")
 include("propagation.jl")
 include("compression.jl")
 include("consumer.jl")
+include("precompile.jl")
 end

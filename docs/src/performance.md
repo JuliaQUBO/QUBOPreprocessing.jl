@@ -13,6 +13,27 @@ public users can independently rerun that private source. The retained private
 campaign includes raw archives, manifests, source hashes, failed preflights and
 archive-member digests.
 
+## First calls and algorithmic budgets
+
+Package precompilation runs a small PrecompileTools workload for the budgeted
+entrypoints in Strong and Weak modes. The deterministic fixtures include a
+frustrated graph that reaches every scheduler family, a productive residual-SCC
+contraction, productive flow/Max-Cut/block/probing reductions, and both Float64
+and exact-rational witness preparation. The largest fixture has 20 variables;
+no benchmark corpus, solver or optional consumer dependency is loaded.
+
+This reduces compilation on common Float64-model call paths; it does not promise
+that every input storage type, label type or productive deduction compiles during
+installation. Measure package load, workspace construction and scheduling
+separately when first-call latency matters. For steady-state comparisons, warm
+representative productive paths before timing and report that policy. A warmed
+algorithmic budget and fresh-process wall time answer different questions.
+
+The scheduler's `time_limit` still starts after workspace construction and always
+allows the cheap floor to finish. Precompilation does not interrupt compilation
+or garbage collection, make the soft cutoff a hard wall-time guarantee, or remove
+exact-arithmetic allocation costs on large models.
+
 ## Repeated boundary updates
 
 Each comparison performs ten identical branch/propagate/rollback cycles. Reuse
