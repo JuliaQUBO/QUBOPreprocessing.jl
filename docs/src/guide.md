@@ -89,6 +89,22 @@ Select `rules=:dominance` when you want deductions. `Workspace` and `preprocess`
 default to `rules=:identity`, which preserves the model without inference and
 is useful for an off/on comparison.
 
+To run every reduction family, pass `rules=:mixed` with a `time_limit` in seconds
+(see [`schedule_budgeted!`](@ref)):
+- the cheap rules (dominance and low-degree elimination, with pair-relation
+  search capped at a fixed amount of work) always reach their fixpoint, even past
+  the time limit;
+- uncapped relation search, roof duality, submodular cuts, Max-Cut, block
+  elimination, residual-SCC contraction and probing share the rest of the budget.
+
+The report shows the time each family took and the variables it removed:
+
+```@example guide_solve
+budget_ws, budget_report = preprocess(model; rules=:mixed, time_limit=1.0)
+@assert budget_report.stop_reason in (:solved, :fixpoint, :deadline)
+[(f.family, f.time_s, f.freed) for f in budget_report.families]
+```
+
 Sometimes every variable is removed. There is then no free state for a solver
 to return; reconstruct with an empty vector:
 

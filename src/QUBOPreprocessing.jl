@@ -39,6 +39,7 @@ export propagate!, PropagationReport, ProbingReport, RoofDualityReport, Submodul
        contract_relation!, contract_relations!, relation_map,
        eliminate_variable!, eliminate_block!, eliminate_low_degree!, apply_weak_batch!,
        SchedulePassSummary, ScheduleReport, schedule_reductions!,
+       BudgetedFamilyRun, BudgetedScheduleReport, schedule_budgeted!,
        PhaseAccounting, PipelineAccounting, audit_pipeline!
 export CompressionCandidate, CompressionMetrics, CompressionAuditReport,
        compression_metrics, qubolite_compression_candidates,
