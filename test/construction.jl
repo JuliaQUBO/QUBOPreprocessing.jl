@@ -15,6 +15,20 @@ function construction_fixture(L, Q; kind=:sparse, domain=:bool, scale=1.0, offse
     return QT.Model{Int,Float64,Int}(vm, QT.Form{Float64}(n, lf, qf, scale, offset; domain, sense=:min))
 end
 
+# Expire at a chosen deadline poll, without depending on compilation speed or
+# wall-clock scheduling. This comparison is specific to the test-owned type.
+mutable struct ConstructionPollDeadline
+    expire_at::Int
+    polls::Int
+    expired::Bool
+end
+ConstructionPollDeadline(expire_at::Int) = ConstructionPollDeadline(expire_at, 0, false)
+function Base.:>=(::UInt64, deadline::ConstructionPollDeadline)
+    deadline.polls += 1
+    deadline.expired = deadline.polls >= deadline.expire_at
+    return deadline.expired
+end
+
 function construction_reference(L, Q, offset, domain)
     R = Rational{BigInt}
     fields = R.(L)
@@ -206,5 +220,39 @@ end
         end
         rollback!(ws,cp)
         check_construction_state(ws,L2,Q2,0.3,domain)
+    end
+end
+
+@testset "construction expiry during preflight and replay scans" begin
+    ws = Workspace(construction_fixture([0.1,0.3], [0.0 0.1; 0.0 0.0]); rules=:mixed)
+    historical_snapshot = ws._snapshot
+    historical_generation = generation(ws)
+    historical_state = deepcopy(ws._state)
+    storage_content(s) = (s.kind, s.shape, s.values, s.indices, s.pair_indices, s.pointers)
+    snapshot_content(s) = (s.labels, s.label_type, s.state_type,
+        storage_content(s.linear), storage_content(s.quadratic),
+        s.scale, s.offset, s.sense, s.domain, s.perturbed, s.max_perturbation)
+    historical_contents = deepcopy(snapshot_content(historical_snapshot))
+
+    # Preflight polls once before scanning, twice for the two nonzero fields,
+    # once for the edge, and once after scanning. Replay then polls twice for
+    # its fields and once for its edge. Interrupt each scan at its first term.
+    for (phase, expire_at) in ((:preflight_linear, 2), (:preflight_quadratic, 4),
+                               (:replay_linear, 6), (:replay_quadratic, 8))
+        @testset "$phase" begin
+            deadline = ConstructionPollDeadline(expire_at)
+            result = phase in (:preflight_linear, :preflight_quadratic) ?
+                QUBOPreprocessing._dyadic_construction_plan(historical_snapshot; deadline) :
+                QUBOPreprocessing._init_poly_state(historical_snapshot; deadline)
+            @test result === nothing
+            @test deadline.expired
+            @test deadline.polls == expire_at
+            @test ws._snapshot === historical_snapshot
+            @test snapshot_content(historical_snapshot) == historical_contents
+            @test generation(ws) == historical_generation
+            for field in fieldnames(typeof(historical_state))
+                @test getfield(ws._state, field) == getfield(historical_state, field)
+            end
+        end
     end
 end
