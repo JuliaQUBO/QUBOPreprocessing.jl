@@ -5,6 +5,7 @@ using SparseArrays
 using LinearAlgebra
 
 include("namespace.jl")
+include("precompile.jl")
 include("identity.jl")
 include("labels.jl")
 include("workspace.jl")

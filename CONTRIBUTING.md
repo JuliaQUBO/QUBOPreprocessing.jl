@@ -16,7 +16,8 @@ retain access for continuity; future maintainership/access changes need a separa
 handoff. Registration, tagging, releases, hosted documentation and repository
 settings changes are separate maintainer actions.
 
-The core is QUBOTools plus used Julia standard libraries. Run
+Runtime algorithms use QUBOTools and Julia standard libraries. PrecompileTools
+executes a small bounded workload during package precompilation. Run
 `julia --project=. -e 'using Pkg; Pkg.test()'`, the runnable core examples,
 and the separate documentation build (`julia --project=docs docs/make.jl --skip-deploy`).
 The test oracle uses independent scalar
