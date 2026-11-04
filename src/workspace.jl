@@ -1157,9 +1157,49 @@ function _transport_error(ws::Workspace, q::_Exact, kind::Symbol, i::Int, j::Int
         "finite Float64 rounding, or integerize_scale on input when an exact scaling is available."))
 end
 
+# Rational{BigInt}'s ordinary floating conversion can pass through the ambient
+# BigFloat precision. Round directly with integer arithmetic instead, including
+# halfway cases and subnormals, and assemble the binary64 representation exactly.
+function _nearest_float64(q::_Exact)
+    n = numerator(q)
+    sign = n < 0 ? UInt64(1) << 63 : UInt64(0)
+    iszero(n) && return reinterpret(Float64, sign)
+    n = abs(n)
+    d = denominator(q)
+    exponent = ndigits(n; base=2) - ndigits(d; base=2)
+    # The bit-length estimate is either floor(log2(abs(q))) or one greater.
+    # Bound it before shifting: arbitrarily large/small rationals need no work
+    # proportional to their distance from the representable exponent range.
+    exponent > 1024 && return reinterpret(Float64, sign | UInt64(0x7ff0000000000000))
+    exponent < -1075 && return reinterpret(Float64, sign)
+    below = exponent >= 0 ? n < (d << exponent) : (n << -exponent) < d
+    below && (exponent -= 1)
+    exponent > 1023 && return reinterpret(Float64, sign | UInt64(0x7ff0000000000000))
+    unit_exponent = max(exponent - 52, -1074)
+    scaled_n, scaled_d = unit_exponent >= 0 ? (n, d << unit_exponent) :
+        (n << -unit_exponent, d)
+    significand, remainder = divrem(scaled_n, scaled_d)
+    twice_remainder = remainder << 1
+    if twice_remainder > scaled_d || (twice_remainder == scaled_d && isodd(significand))
+        significand += 1
+    end
+    if significand < (UInt64(1) << 52)
+        # A subnormal's integer significand is already its fraction bit field.
+        return reinterpret(Float64, sign | UInt64(significand))
+    end
+    exponent = unit_exponent + 52
+    if significand == (UInt64(1) << 53)
+        significand >>= 1
+        exponent += 1
+    end
+    exponent > 1023 && return reinterpret(Float64, sign | UInt64(0x7ff0000000000000))
+    bits = sign | (UInt64(exponent + 1023) << 52) | (UInt64(significand) - (UInt64(1) << 52))
+    return reinterpret(Float64, bits)
+end
+
 function _transport(::Type{Float64}, q::_Exact; rounding::Symbol=:none,
                     ws::Workspace, kind::Symbol=:constant, i::Int=0, j::Int=0)
-    v = Float64(q)
+    v = _nearest_float64(q)
     isfinite(v) && (rounding === :nearest || _Exact(v) == q) ||
         _transport_error(ws, q, kind, i, j)
     return v
