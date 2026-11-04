@@ -121,6 +121,101 @@
     end
 end
 
+# A deterministic deadline for internal preparation routines: comparisons count
+# polling opportunities, without changing the process clock or production code.
+mutable struct SchedulerPollDeadline
+    allowed_checks::Int
+    checks::Int
+    expired::Bool
+end
+function Base.:>=(::UInt64, deadline::SchedulerPollDeadline)
+    deadline.checks += 1
+    expired = deadline.checks > deadline.allowed_checks
+    deadline.expired |= expired
+    return expired
+end
+
+@testset "budgeted report generation remains historical after reset" begin
+    model = fixture([:x, :y, :z], [3.0, -1.0, 0.5], zeros(3, 3))
+    ws = Workspace(model; rules=:mixed)
+    report = schedule_budgeted!(ws; time_limit=0)
+    original_generation = generation(ws)
+    original_families = copy(report.families)
+    @test generation(report) == original_generation
+    @test report.initial_variables == 3 && report.residual_variables == 0
+    reset!(ws, fixture([:replacement], [1.0], zeros(1, 1)))
+    @test generation(ws) != original_generation
+    @test generation(report) == original_generation
+    @test report.initial_variables == 3 && report.residual_variables == 0
+    @test report.families == original_families
+end
+
+@testset "exact extremal ordering from scalar subnormal inputs" begin
+    QP = QUBOPreprocessing
+    R = Rational{BigInt}
+    tiny = nextfloat(0.0)
+    L = tiny .* [2.0, -3.0, 0.0, 1.0, 0.0, 4.0, -2.0]
+    Q = zeros(7, 7)
+    Q[1, 2], Q[1, 4], Q[2, 3], Q[3, 4] = tiny, -tiny, -2tiny, 3tiny
+    witness = [-1, 1, -1, 1, -1, -1, -1]
+    for sense in (:min, :max), scale in (-1.0, 1.0)
+        ws = Workspace(fixture(collect(1:7), L, Q; domain=:spin, sense, scale);
+                       rules=:mixed, integerize_scale=false)
+        original = algebra_state(ws)
+        candidates = collect(1:7)
+        @test !QP._can_use_float_spin_heuristic(ws, candidates)
+        direction = (sense === :min ? 1 : -1) * (scale < 0 ? -1 : 1)
+        # Independent exact scalar derivatives, using only fixture inputs.
+        # Isolates rank by favorable unary direction; connected variables rank
+        # by normalized favorable unary field, then conditional improvement.
+        keys = map(1:7) do i
+            h = R(L[i])
+            incident = [R(Q[min(i, j), max(i, j)]) for j in 1:7 if j != i]
+            l1 = sum(abs, incident)
+            effective = h + sum(R(Q[min(i, j), max(i, j)]) * witness[j] for j in 1:7 if j != i)
+            favorable = -direction * witness[i] * h
+            tier = iszero(l1) ? (favorable > 0 ? 2 : (iszero(favorable) ? 0 : -1)) : 1
+            ratio = iszero(l1) ? favorable : favorable / l1
+            (tier, ratio, -direction * witness[i] * effective, -i)
+        end
+        expected = direction > 0 ? [6, 1, 2, 3, 4, 5, 7] : [7, 4, 3, 1, 2, 5, 6]
+        @test all(keys[expected[i]] >= keys[expected[i + 1]] for i in 1:6)
+        @test QP._order_probing_candidates!(ws, candidates, witness, :extremal) == expected
+        @test witness == [-1, 1, -1, 1, -1, -1, -1]
+        @test algebra_state(ws) == original
+    end
+end
+
+@testset "interrupted exact sequential witnesses keep a complete feasible fallback" begin
+    QP = QUBOPreprocessing
+    R = Rational{BigInt}
+    tiny = nextfloat(0.0)
+    # K33 meets a poll at a vertex boundary; K64 meets one inside adjacency.
+    # Tiny couplings force exact arithmetic. With no local-search flips, a
+    # complete sequential pass improves the initial all-minus field alignment,
+    # so returning that initial state after cancellation tests real fallback.
+    for (n, allowed_checks) in ((33, 7), (64, 12))
+        model = QT.Model{Int,Float64,Int}(Dict(i => 0.0 for i in 1:n),
+            Dict((i, j) => tiny for i in 1:n for j in (i + 1):n); domain=:spin, sense=:min)
+        ws = Workspace(model; rules=:mixed, integerize_scale=false)
+        original = algebra_state(ws)
+        root = checkpoint(ws)
+        initial = fill(-1, n)
+        scalar_energy(state) = R(tiny) * sum(state[i] * state[j] for i in 1:n for j in (i + 1):n)
+        @test !QP._can_use_float_spin_heuristic(ws, collect(1:n))
+        parallel, completed = QP._coercive_field_witness_spins(ws; max_flips=0)
+        @test parallel == initial
+        @test scalar_energy(completed) < scalar_energy(initial)
+        deadline = SchedulerPollDeadline(allowed_checks, 0, false)
+        parallel, fallback = QP._coercive_field_witness_spins(ws; max_flips=0, deadline_ns=deadline)
+        @test deadline.expired && deadline.checks == allowed_checks + 1
+        @test parallel == initial && fallback == initial
+        @test length(fallback) == n && all(s -> s in (-1, 1), fallback)
+        @test algebra_state(ws) == original && checkpoint(ws) == root
+        @test isempty(changes(ws, root)) && isempty(reductions(ws))
+    end
+end
+
 @testset "stop reasons, budgets, interruption/resumption and unsupported arithmetic" begin
     R = Rational{BigInt}
     # 1. Argument validation and rules checks:
