@@ -2,6 +2,9 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+const _PRECOMPILE_EXACT_WITNESS_SCALE = ldexp(1.0, -1020)
+const _PRECOMPILE_DEADLINE = typemax(UInt64)
+
 # Deterministic, corpus-independent fixtures. The largest graph has 20 vertices;
 # the only explicit block has five (32 assignments). Keep construction separate
 # from the captured workload so fixture-building code need not enter the cache.
@@ -21,7 +24,6 @@ function _precompile_models()
                    (5,6)=>1.0, (5,7)=>1.0, (6,7)=>1.0)
     probe_L = Dict(1=>4.0, 2=>1.5, 3=>1.5)
     probe_Q = Dict((1,2)=>2.5, (1,3)=>2.5, (2,3)=>-1.0)
-    tiny = ldexp(1.0, -1020)
     return (
         cheap=model(cheap_L, cheap_Q),
         glass=model(glass_L, glass_Q; domain=:bool),
@@ -33,7 +35,8 @@ function _precompile_models()
                      Dict((1,2)=>-2.0, (1,3)=>2.0, (2,3)=>2.0, (1,4)=>0.5, (2,4)=>0.5, (3,4)=>0.5)),
         block=model(Dict(i=>0.0 for i in 1:5), Dict((i,j)=>1.0 for i in 1:5 for j in (i+1):5)),
         probing=model(probe_L, probe_Q),
-        exact_witness=model(Dict(i=>tiny*v for (i,v) in probe_L), Dict(e=>tiny*v for (e,v) in probe_Q)),
+        exact_witness=model(Dict(i=>_PRECOMPILE_EXACT_WITNESS_SCALE*v for (i,v) in probe_L),
+                            Dict(e=>_PRECOMPILE_EXACT_WITNESS_SCALE*v for (e,v) in probe_Q)),
     )
 end
 
@@ -42,7 +45,6 @@ end
 # the scheduler's twelve-vertex block cap and the explicit five-vertex block.
 # This is not a latency promise and does not change any public runtime default.
 function _precompile_budgeted_workload(models)
-    deadline = typemax(UInt64)
     schedules = BudgetedScheduleReport[]
     for allow_weak in (false, true)
         ws = Workspace(models.glass; rules=:mixed, integerize_scale=false)
@@ -58,19 +60,19 @@ function _precompile_budgeted_workload(models)
     # Calling every family on a glass is insufficient: productive calls enter
     # proof creation and exact workspace updates that a no-change call misses.
     ws_roof = Workspace(models.roof; rules=:mixed)
-    roof = apply_roof_duality!(ws_roof; deadline_ns=deadline)
+    roof = apply_roof_duality!(ws_roof; deadline_ns=_PRECOMPILE_DEADLINE)
     submodular = map((false, true)) do allow_weak
         ws = Workspace(models.submodular; rules=:mixed)
-        apply_submodular_cut!(ws; allow_weak, deadline_ns=deadline)
+        apply_submodular_cut!(ws; allow_weak, deadline_ns=_PRECOMPILE_DEADLINE)
     end
     maxcut = map((false, true)) do allow_weak
         ws = Workspace(models.maxcut; rules=:mixed)
-        apply_maxcut!(ws, 1, 2; allow_weak, deadline_ns=deadline)
+        apply_maxcut!(ws, 1, 2; allow_weak, deadline_ns=_PRECOMPILE_DEADLINE)
     end
     ws_block = Workspace(models.block; rules=:mixed)
-    block = eliminate_block!(ws_block, collect(1:5); deadline_ns=deadline)
+    block = eliminate_block!(ws_block, collect(1:5); deadline_ns=_PRECOMPILE_DEADLINE)
     ws_probe = Workspace(models.probing; rules=:mixed)
-    probing = probe_variables!(ws_probe; order=:coercive, max_rounds=2, deadline_ns=deadline)
+    probing = probe_variables!(ws_probe; order=:coercive, max_rounds=2, deadline_ns=_PRECOMPILE_DEADLINE)
 
     # Small finite binary64 coefficients force exact-rational witness fallback;
     # the ordinary fixture uses Float64 preparation. Both call signatures occur
@@ -78,7 +80,7 @@ function _precompile_budgeted_workload(models)
     witnesses = map((models.probing, models.exact_witness)) do m
         ws = Workspace(m; rules=:mixed, integerize_scale=false)
         plain = coercive_field_witness(ws; max_flips=16)
-        limited = _coercive_field_witness_orig(ws; max_flips=16, deadline_ns=deadline)
+        limited = _coercive_field_witness_orig(ws; max_flips=16, deadline_ns=_PRECOMPILE_DEADLINE)
         (plain, limited)
     end
     return (; schedules, default_report, roof, submodular, maxcut, block, probing, witnesses)
