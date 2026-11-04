@@ -1018,6 +1018,9 @@ Owned historical residual under explicit caller assumptions and/or certified
 deductions. `status=:certified` certifies exact algebra/transport within that
 scope, not that caller assumptions retain a global optimum. The certificate
 contains the ordered strong-deduction proof when present; no solver proof is produced.
+An explicitly rounded Float64 transport has `status=:rounded` and records its
+largest effective-coefficient change in `max_perturbation`; the reduction proof
+continues to describe the exact residual, not the rounded solver model.
 Original labels/maps, scope and exact residual data are immutable snapshots;
 `export_model` returns a separately owned QUBOTools model.
 """
@@ -1090,15 +1093,85 @@ function index_map(r::ConditionedExport)
     return _fill_index_map!(map, r._free)
 end
 
-function _transport(::Type{Float64}, q::_Exact)
-    v = Float64(q)
-    isfinite(v) && _Exact(v) == q || throw(ArgumentError(
-        "conditioned coefficient cannot be represented exactly as Float64; use Rational{BigInt}"))
+function _transport_error(ws::Workspace, q::_Exact, kind::Symbol, i::Int, j::Int)
+    s, st = ws._snapshot, ws._state
+    coefficient = kind === :linear ? "linear coefficient for variable $(repr(s.labels[i]))" :
+        kind === :quadratic ? "coupling ($(repr(s.labels[i])), $(repr(s.labels[j])))" :
+        kind === :constant ? "constant" : "scale"
+    n = abs(numerator(q))
+    bits = iszero(n) ? 0 : ndigits(n; base=2) - trailing_zeros(n)
+    families = Symbol[]
+    for p in st.fixes
+        step = st.trail[p].proof
+        family = step === nothing ? :CallerAssumption : nameof(typeof(step))
+        family in families || push!(families, family)
+    end
+    chain = isempty(families) ? "none (coordinate conversion only)" : join(string.(families), ", ")
+    throw(ArgumentError("conditioned $coefficient cannot be represented exactly as finite Float64 " *
+        "($bits significant numerator bits; Float64 has 53 significant bits). " *
+        "Reduction-chain families: $chain. Fixings, eliminations and contractions add exact sums " *
+        "of input coefficients; the final state cannot attribute this coefficient to one family. " *
+        "Use coefficient_type=Rational{BigInt} for exact transport, rounding=:nearest for recorded " *
+        "finite Float64 rounding, or integerize_scale on input when an exact scaling is available."))
+end
+
+# Rational{BigInt}'s ordinary floating conversion can pass through the ambient
+# BigFloat precision. Round directly with integer arithmetic instead, including
+# halfway cases and subnormals, and assemble the binary64 representation exactly.
+function _nearest_float64(q::_Exact)
+    n = numerator(q)
+    sign = n < 0 ? UInt64(1) << 63 : UInt64(0)
+    iszero(n) && return reinterpret(Float64, sign)
+    n = abs(n)
+    d = denominator(q)
+    exponent = ndigits(n; base=2) - ndigits(d; base=2)
+    # The bit-length estimate is either floor(log2(abs(q))) or one greater.
+    # Bound it before shifting: arbitrarily large/small rationals need no work
+    # proportional to their distance from the representable exponent range.
+    exponent > 1024 && return reinterpret(Float64, sign | UInt64(0x7ff0000000000000))
+    exponent < -1075 && return reinterpret(Float64, sign)
+    below = exponent >= 0 ? n < (d << exponent) : (n << -exponent) < d
+    below && (exponent -= 1)
+    exponent > 1023 && return reinterpret(Float64, sign | UInt64(0x7ff0000000000000))
+    unit_exponent = max(exponent - 52, -1074)
+    scaled_n, scaled_d = unit_exponent >= 0 ? (n, d << unit_exponent) :
+        (n << -unit_exponent, d)
+    significand, remainder = divrem(scaled_n, scaled_d)
+    twice_remainder = remainder << 1
+    if twice_remainder > scaled_d || (twice_remainder == scaled_d && isodd(significand))
+        significand += 1
+    end
+    if significand < (UInt64(1) << 52)
+        # A subnormal's integer significand is already its fraction bit field.
+        return reinterpret(Float64, sign | UInt64(significand))
+    end
+    exponent = unit_exponent + 52
+    if significand == (UInt64(1) << 53)
+        significand >>= 1
+        exponent += 1
+    end
+    exponent > 1023 && return reinterpret(Float64, sign | UInt64(0x7ff0000000000000))
+    bits = sign | (UInt64(exponent + 1023) << 52) | (UInt64(significand) - (UInt64(1) << 52))
+    return reinterpret(Float64, bits)
+end
+
+function _transport(::Type{Float64}, q::_Exact; rounding::Symbol=:none,
+                    ws::Workspace, kind::Symbol=:constant, i::Int=0, j::Int=0)
+    v = _nearest_float64(q)
+    isfinite(v) && (rounding === :nearest || _Exact(v) == q) ||
+        _transport_error(ws, q, kind, i, j)
     return v
 end
-_transport(::Type{_Exact}, q::_Exact) = deepcopy(q)
+_transport(::Type{_Exact}, q::_Exact; kwargs...) = deepcopy(q)
 
-function _conditioned_export(ws::Workspace, ::Type{T}; map::Union{Nothing,DomainGaugeMap}=nothing) where T
+function _with_export_perturbation(s::_Snapshot, error::_Exact)
+    max_perturbation = max(s.max_perturbation, error)
+    return _Snapshot(s.labels, s.label_type, s.state_type, s.linear, s.quadratic,
+        s.scale, s.offset, s.sense, s.domain, !iszero(max_perturbation), max_perturbation)
+end
+
+function _conditioned_export(ws::Workspace, ::Type{T}; map::Union{Nothing,DomainGaugeMap}=nothing,
+                             rounding::Symbol=:none) where T
     T in (Float64, _Exact) || throw(ArgumentError("supported transport: Float64 or Rational{BigInt}"))
     map === nothing || _validate_domain_map(ws, map; full=true)
     s, st = ws._snapshot, ws._state
@@ -1107,9 +1180,13 @@ function _conditioned_export(ws::Workspace, ::Type{T}; map::Union{Nothing,Domain
     owned_map = map === nothing ? nothing : deepcopy(map)
     free = findall(==(2), st.fixed)
     idxmap = index_map(ws)
+    rounding_error = zero(_Exact)
     lin_vec = Vector{T}(undef, length(free))
     for (idx_f, i) in enumerate(free)
-        lin_vec[idx_f] = _transport(T, _mapped_field(ws, i, owned_map))
+        q = _mapped_field(ws, i, owned_map)
+        v = _transport(T, q; rounding, ws, kind=:linear, i)
+        lin_vec[idx_f] = v
+        rounding === :nearest && (rounding_error = max(rounding_error, abs(_Exact(v) - q)))
     end
     linear = Tuple(lin_vec)
     quad_vec = Tuple{Int,Int,T}[]
@@ -1117,7 +1194,10 @@ function _conditioned_export(ws::Workspace, ::Type{T}; map::Union{Nothing,Domain
         ii = idxmap[i]
         for (j, q) in st.adjacency[i]
             if i < j && st.fixed[j] == 2
-                push!(quad_vec, (ii, idxmap[j], _transport(T, _mapped_coupling(ws, i, j, q, owned_map))))
+                mapped_q = _mapped_coupling(ws, i, j, q, owned_map)
+                v = _transport(T, mapped_q; rounding, ws, kind=:quadratic, i, j)
+                push!(quad_vec, (ii, idxmap[j], v))
+                rounding === :nearest && (rounding_error = max(rounding_error, abs(_Exact(v) - mapped_q)))
             end
         end
     end
@@ -1128,17 +1208,28 @@ function _conditioned_export(ws::Workspace, ::Type{T}; map::Union{Nothing,Domain
     unchanged = isempty(st.fixes) && !s.perturbed && (owned_map === nothing ||
         (owned_map.target_domain === owned_map.source_domain && owned_map._identity_gauge))
     c_export = _direct_mapped_constant(ws, owned_map)
+    c_transport = _transport(T, c_export; rounding, ws, kind=:constant)
+    rounding === :nearest && (rounding_error = max(rounding_error, abs(_Exact(c_transport) - c_export)))
+    # The scale is copied exactly. Only stored coefficients and the constant
+    # may be rounded, so their errors share the original objective's units.
+    scale_transport = _transport(T, _Exact(s.scale); ws, kind=:scale)
+    rounded = !iszero(rounding_error)
+    if rounded
+        # Keep the proof's source metadata unchanged: it certifies the exact
+        # reductions, while the export additionally records solver rounding.
+        snapshot = _with_export_perturbation(snapshot, abs(_Exact(s.scale)) * rounding_error)
+    end
     cert = _ConditionedCertNT((
         isempty(scope) ? :original : :assumptions,
         scope,
         steps,
-        unchanged,
+        unchanged && !rounded,
         proof,
     ))
-    return ConditionedExport{T}(snapshot, generation(ws), :certified,
+    return ConditionedExport{T}(snapshot, generation(ws), rounded ? :rounded : :certified,
         cert,
         Tuple(st.fixed), Tuple(free), linear, quadratic,
-        _transport(T, c_export), _transport(T,_Exact(s.scale)), owned_map)
+        c_transport, scale_transport, owned_map)
 end
 
 function _build_export_linear(::Type{T}, @nospecialize(lin::Tuple)) where T

@@ -52,6 +52,41 @@ budgeted exact rational fallback; no epsilon or ordinary rounded sum is used as
 a proof. Exact fields are imported once and updated locally by the workspace;
 no whole-model BigInt conversion occurs at each numerical check.
 
+### Exact residuals and recorded solver rounding
+
+Reductions and coordinate conversions add exact binary-value input coefficients.
+Their sums can require more than Float64's 53 significant bits even when each
+input fits. `materialize(ws)` therefore uses `rounding=:none` by default and
+raises `ArgumentError` if any residual coefficient or constant cannot be
+transported exactly. The error names the coefficient and lists the reduction
+families present; the final state cannot identify which individual family first
+introduced its extra precision. Use
+`materialize(ws; coefficient_type=Rational{BigInt})` for an exact residual.
+Factoring a common denominator into the scale only helps Float64 transport when
+the resulting integer significands fit; rescaling cannot remove significant
+bits from arbitrary coefficient ratios.
+
+A Float64 solver can instead receive the explicit approximation
+`materialize(ws; rounding=:nearest)`. Each linear coefficient, coupling, and
+constant is rounded to its nearest finite Float64; overflow still raises an
+error. An export with changed coefficients has `status=:rounded` and
+`certificate.unchanged_representation=false`. Its `max_perturbation` is the
+maximum of the workspace's existing input perturbation and
+`abs(scale) * abs(rounded - exact)` over the residual coefficients and constant,
+calculated exactly as `Rational{BigInt}` in original objective units.
+`perturbed == (max_perturbation > 0 // 1)`; a zero scale makes any additional
+effective error zero. This is a per-coefficient bound, not a bound on the whole
+objective error or a solver-optimality certificate. Input and residual errors
+are recorded at different stages and this maximum does not add them into an
+end-to-end bound.
+
+The attached reduction proof remains an exact proof for the unrounded residual
+and retains its original source perturbation metadata. Verifying that proof
+does not certify optimality of a solution to the rounded solver model.
+`export_model` returns the captured rounded coefficients, while `reconstruct`
+lifts complete states and evaluates the historical source objective. Capturing
+a rounded export never changes the workspace or its exact coefficients.
+
 `DominanceAttempt` reports method, visited adjacency entries, fallback count
 and exact work. `max_work` bounds adjacency visits across both passes;
 `max_exact_work` reserves the field plus incident coefficient contributions for

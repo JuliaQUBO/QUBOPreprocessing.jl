@@ -623,8 +623,8 @@ Base.propertynames(::ExportResult, private::Bool=false) =
               (:generation, :status, :certificate, :perturbed, :max_perturbation)
 
 """
-    materialize(ws; coefficient_type=Float64, map=nothing)
-    materialize(ws, map::DomainGaugeMap; coefficient_type=Float64)
+    materialize(ws; coefficient_type=Float64, rounding=:none, map=nothing)
+    materialize(ws, map::DomainGaugeMap; coefficient_type=Float64, rounding=:none)
 
 Explicitly capture an owned export. Without fixings or a coordinate `map`, this
 is the Float64 identity export (`certificate.unchanged_representation == !ws.perturbed`).
@@ -633,11 +633,27 @@ With caller assumptions, certified deductions or a [`DomainGaugeMap`](@ref), ret
 transport must represent every conditioned/converted coefficient and constant
 exactly, or the call raises `ArgumentError`; use `coefficient_type=Rational{BigInt}`
 for exact transport. Materialization scans/copies the graph; it is never implicit in updates.
+
+With `coefficient_type=Float64`, opt in to `rounding=:nearest` to round each
+residual linear/quadratic coefficient and constant to its nearest finite Float64.
+If any coefficient changes, the export has `status=:rounded`,
+`certificate.unchanged_representation=false`, and `perturbed=true` when the
+effective coefficient change is nonzero (a zero scale makes it zero).
+`max_perturbation` is the maximum of the existing input perturbation and
+`abs(scale) * abs(rounded - exact)` over the residual coefficients and constant,
+computed exactly as `Rational{BigInt}` in original objective units. It is a
+coefficient bound, not an objective-error or optimality certificate. The reduction
+proof still describes the exact residual; reconstruction uses the historical
+source objective rather than the rounded solver objective. The scale is never
+rounded, and a nonfinite rounded coefficient still raises `ArgumentError`.
 """
-function materialize(ws::Workspace; coefficient_type=Float64, map=nothing)
+function materialize(ws::Workspace; coefficient_type=Float64, rounding=:none, map=nothing)
+    rounding in (:none, :nearest) || throw(ArgumentError("rounding must be :none or :nearest"))
+    rounding === :none || coefficient_type === Float64 ||
+        throw(ArgumentError("rounding=:nearest requires coefficient_type=Float64"))
     map === nothing || _validate_domain_map(ws, map)
     if !isempty(ws._state.fixes) || map !== nothing
-        return _conditioned_export(ws, coefficient_type; map)
+        return _conditioned_export(ws, coefficient_type; map, rounding)
     end
     coefficient_type === Float64 || throw(ArgumentError("only Float64 identity transport is supported"))
     snapshot = deepcopy(ws._snapshot)
