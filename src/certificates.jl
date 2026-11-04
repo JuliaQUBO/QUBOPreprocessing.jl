@@ -2710,48 +2710,35 @@ function _init_poly_state(s::_Snapshot; map::Union{Nothing,DomainGaugeMap}=nothi
     n = length(s.labels)
     fields = fill(_Exact(0), n)
     adj_pos = [Dict{Int,Int}() for _ in 1:n]
-    all_int53 = isfinite(s.offset) && s.offset == trunc(s.offset) && abs(s.offset) <= 9007199254740992.0
-    f_int = all_int53 ? zeros(Int128, n) : Int128[]
-    timed_out = false
+    plan = _dyadic_construction_plan(s; deadline)
+    plan === nothing && return nothing
+    shift, deg_init = plan.shift, plan.degrees
+    bounded = shift >= 0
+    f_int = bounded ? zeros(Int128, n) : Int128[]
+    timed_out = Ref(false)
     _foreach_linear_term(s.linear) do i, v
-        if timed_out || _expired(deadline)
-            timed_out = true
+        if timed_out[] || _expired(deadline)
+            timed_out[] = true
             return nothing
         end
         iszero(v) && return nothing
         fields[i] = _to_exact(v)
-        if all_int53
-            if v == trunc(v) && abs(v) <= 9007199254740992.0
-                f_int[i] = Int128(Int64(v))
-            else
-                all_int53 = false
-            end
-        end
+        bounded && (f_int[i] = _dyadic_integer(v, shift))
         return nothing
     end
-    timed_out && return nothing
-    deg_init = zeros(Int, n)
-    _foreach_quadratic_term(s.quadratic) do i, j, v
-        iszero(v) && return nothing
-        deg_init[i] += 1
-        deg_init[j] += 1
-        if all_int53 && !(v == trunc(v) && abs(v) <= 9007199254740992.0)
-            all_int53 = false
-        end
-        return nothing
-    end
+    timed_out[] && return nothing
     adj = [Vector{Pair{Int,_Exact}}(undef, deg_init[i]) for i in 1:n]
     for i in 1:n
         d_i = deg_init[i]
         d_i > 0 && sizehint!(adj_pos[i], d_i)
     end
-    csum_int = all_int53 ? zeros(Int128, n) : Int128[]
-    quad_sum_int = Int128(0)
-    quad_sum = _Exact(0)
+    csum_int = bounded ? zeros(Int128, n) : Int128[]
+    quad_sum_int = Ref(Int128(0))
+    quad_sum = Ref(_Exact(0))
     adj_cur = ones(Int, n)
     _foreach_quadratic_term(s.quadratic) do i, j, v
-        if timed_out || _expired(deadline)
-            timed_out = true
+        if timed_out[] || _expired(deadline)
+            timed_out[] = true
             return nothing
         end
         iszero(v) && return nothing
@@ -2764,33 +2751,33 @@ function _init_poly_state(s::_Snapshot; map::Union{Nothing,DomainGaugeMap}=nothi
         adj[j][pj] = i => q
         adj_pos[j][i] = pj
         adj_cur[j] = pj + 1
-        if all_int53
-            iv = Int128(Int64(v))
+        if bounded
+            iv = _dyadic_integer(v, shift)
             csum_int[i] += iv
             csum_int[j] += iv
-            quad_sum_int += iv
+            quad_sum_int[] += iv
         else
-            quad_sum += q
+            quad_sum[] += q
         end
         return nothing
     end
-    timed_out && return nothing
+    timed_out[] && return nothing
     constant = _to_exact(s.offset)
     is_bool = s.domain === QT.BoolDomain
     h_spin = Vector{_Exact}(undef, n)
     if is_bool
-        if all_int53
+        if bounded
             for i in 1:n
-                h_spin[i] = _Exact(BigInt(2 * f_int[i] + csum_int[i]), BigInt(4))
+                h_spin[i] = _from_dyadic_integer(2 * f_int[i] + csum_int[i], shift + 2)
             end
             field_sum_int = sum(f_int; init=Int128(0))
-            c_spin = constant + _Exact(BigInt(2 * field_sum_int + quad_sum_int), BigInt(4))
+            c_spin = constant + _from_dyadic_integer(2 * field_sum_int + quad_sum_int[], shift + 2)
         else
             for i in 1:n
                 csum = sum((q for (_, q) in adj[i]); init=_Exact(0))
                 h_spin[i] = fields[i] // 2 + csum // 4
             end
-            c_spin = constant + sum(fields; init=_Exact(0)) // 2 + quad_sum // 4
+            c_spin = constant + sum(fields; init=_Exact(0)) // 2 + quad_sum[] // 4
         end
     else
         copyto!(h_spin, fields)

@@ -85,6 +85,15 @@ work, without a graph scan or floating subtraction. Mutable state is private to
 each serial workspace. Exact integer bit complexity, allocations and label
 hash/copy costs are additional to structural counts.
 
+Construction combines binary64 coefficients with a shared power-of-two denominator
+when a checked range bound permits Int128 accumulation. It converts the resulting
+cache sums back to exact `Rational{BigInt}` values; wider exponent ranges use
+arbitrary-precision rational arithmetic. This also applies to certificate replay.
+The optimization preserves every input coefficient and the snapshot scale with
+`integerize_scale=false`, including binary64 values such as `0.1` and `0.3`.
+Persistent workspace state and certificates remain exact rational values; this
+does not introduce an approximate representation or a fixed-width update backend.
+
 `max_work` is a nonnegative integer adjacency-visit budget for an update.
 `deadline_ns` is an absolute UInt64 monotonic `time_ns()` deadline. An update
 reserves all incident work, prepares changes separately, checks deadlines

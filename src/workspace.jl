@@ -53,32 +53,71 @@ function _may_be_quadratic_deg3_fast(ws::Workspace, u::Int)
     return iszero(_spin_field(ws, u)) || _is_quadratic_deg3(ws, u)
 end
 
+mutable struct _DyadicConstructionRange
+    min_exponent::Int
+    max_top::Int
+    terms::UInt128
+    timed_out::Bool
+end
+
+@inline function _observe_dyadic!(range::_DyadicConstructionRange, v::Float64)
+    iszero(v) && return nothing
+    m, e = _dyadic_parts(v)
+    range.min_exponent = min(range.min_exponent, e)
+    range.max_top = max(range.max_top, e + (64 - leading_zeros(UInt64(abs(m)))))
+    range.terms += UInt128(1)
+    return nothing
+end
+
+# Preflight before accumulating: with D=2^shift, every numerator is smaller in
+# magnitude than 2^bits. The bound reserves a factor of two for dual-coordinate
+# formulas and covers every global/per-vertex sum, including cancellation.
+# The offset is added separately in arbitrary precision and needs no bound.
+# Unsafe exponent spreads use the existing arbitrary-precision rational path.
+function _dyadic_construction_plan(s::_Snapshot; deadline=nothing)
+    _expired(deadline) && return nothing
+    range = _DyadicConstructionRange(0, typemin(Int), UInt128(0), false)
+    degrees = zeros(Int, length(s.labels))
+    _foreach_linear_term(s.linear) do _, v
+        if range.timed_out || _expired(deadline)
+            range.timed_out = true
+            return nothing
+        end
+        _observe_dyadic!(range, v)
+    end
+    range.timed_out && return nothing
+    _foreach_quadratic_term(s.quadratic) do i, j, v
+        if range.timed_out || _expired(deadline)
+            range.timed_out = true
+            return nothing
+        end
+        iszero(v) && return nothing
+        degrees[i] += 1
+        degrees[j] += 1
+        _observe_dyadic!(range, v)
+        return nothing
+    end
+    (range.timed_out || _expired(deadline)) && return nothing
+    shift = -range.min_exponent
+    if !iszero(range.terms)
+        sum_bits = 128 - leading_zeros(range.terms - UInt128(1))
+        range.max_top + shift + sum_bits <= 126 || (shift = -1)
+    end
+    return (; shift, degrees)
+end
+
 function _incremental(s::_Snapshot;rules=:identity)
     n = length(s.labels)
     adj_pos = [Dict{Int,Int}() for _ in 1:n]
     fields = fill(_Exact(0), n)
-    all_int53 = isfinite(s.offset) && s.offset == trunc(s.offset) && abs(s.offset) <= 9007199254740992.0
-    f_int = all_int53 ? zeros(Int128, n) : Int128[]
+    plan = _dyadic_construction_plan(s)
+    shift, deg_init = plan.shift, plan.degrees
+    bounded = shift >= 0
+    f_int = bounded ? zeros(Int128, n) : Int128[]
     _foreach_linear_term(s.linear) do i, v
         iszero(v) && return nothing
         fields[i] = _to_exact(v)
-        if all_int53
-            if v == trunc(v) && abs(v) <= 9007199254740992.0
-                f_int[i] = Int128(Int64(v))
-            else
-                all_int53 = false
-            end
-        end
-        return nothing
-    end
-    deg_init = zeros(Int, n)
-    _foreach_quadratic_term(s.quadratic) do i, j, v
-        iszero(v) && return nothing
-        deg_init[i] += 1
-        deg_init[j] += 1
-        if all_int53 && !(v == trunc(v) && abs(v) <= 9007199254740992.0)
-            all_int53 = false
-        end
+        bounded && (f_int[i] = _dyadic_integer(v, shift))
         return nothing
     end
     adjacency = [Vector{Pair{Int,_Exact}}(undef, deg_init[i]) for i in 1:n]
@@ -87,10 +126,10 @@ function _incremental(s::_Snapshot;rules=:identity)
         d_i > 0 && sizehint!(adj_pos[i], d_i)
     end
     need_bounds = rules in (:dominance, :elimination, :relations, :mixed)
-    csum_int = all_int53 ? zeros(Int128, n) : Int128[]
-    neg_int = (all_int53 && need_bounds) ? zeros(Int128, n) : Int128[]
-    pos_int = (all_int53 && need_bounds) ? zeros(Int128, n) : Int128[]
-    quad_sum_int = Int128(0)
+    csum_int = bounded ? zeros(Int128, n) : Int128[]
+    neg_int = (bounded && need_bounds) ? zeros(Int128, n) : Int128[]
+    pos_int = (bounded && need_bounds) ? zeros(Int128, n) : Int128[]
+    quad_sum_int = Ref(Int128(0))
     adj_cur = ones(Int, n)
     _foreach_quadratic_term(s.quadratic) do i, j, v
         iszero(v) && return nothing
@@ -103,11 +142,11 @@ function _incremental(s::_Snapshot;rules=:identity)
         adjacency[j][pj] = i => q
         adj_pos[j][i] = pj
         adj_cur[j] = pj + 1
-        if all_int53
-            iv = Int128(Int64(v))
+        if bounded
+            iv = _dyadic_integer(v, shift)
             csum_int[i] += iv
             csum_int[j] += iv
-            quad_sum_int += iv
+            quad_sum_int[] += iv
             if need_bounds
                 if iv < 0
                     neg_int[i] += iv
@@ -125,29 +164,29 @@ function _incremental(s::_Snapshot;rules=:identity)
     dual_fields = Vector{_Exact}(undef, n)
     is_bool = s.domain === QT.BoolDomain
     offset_ex = _to_exact(s.offset)
-    if all_int53
+    if bounded
         for i in 1:n
-            dual_fields[i] = is_bool ? (_Exact(BigInt(2 * f_int[i] + csum_int[i]), BigInt(4))) :
-                                       _to_exact(2 * f_int[i] - 2 * csum_int[i])
+            dual_fields[i] = is_bool ? _from_dyadic_integer(2 * f_int[i] + csum_int[i], shift + 2) :
+                                       _from_dyadic_integer(2 * f_int[i] - 2 * csum_int[i], shift)
         end
         field_sum_int = sum(f_int; init=Int128(0))
         dual_constant = is_bool ?
-            (offset_ex + _Exact(BigInt(2 * field_sum_int + quad_sum_int), BigInt(4))) :
-            (offset_ex + _to_exact(quad_sum_int - field_sum_int))
+            (offset_ex + _from_dyadic_integer(2 * field_sum_int + quad_sum_int[], shift + 2)) :
+            (offset_ex + _from_dyadic_integer(quad_sum_int[] - field_sum_int, shift))
         lower, upper = nothing, nothing
         if need_bounds
             lower = Vector{_Exact}(undef, n)
             upper = Vector{_Exact}(undef, n)
             if is_bool
                 for i in 1:n
-                    lower[i] = _to_exact(f_int[i] + neg_int[i])
-                    upper[i] = _to_exact(f_int[i] + pos_int[i])
+                    lower[i] = _from_dyadic_integer(f_int[i] + neg_int[i], shift)
+                    upper[i] = _from_dyadic_integer(f_int[i] + pos_int[i], shift)
                 end
             else
                 for i in 1:n
                     abs_i = pos_int[i] - neg_int[i]
-                    lower[i] = _to_exact(f_int[i] - abs_i)
-                    upper[i] = _to_exact(f_int[i] + abs_i)
+                    lower[i] = _from_dyadic_integer(f_int[i] - abs_i, shift)
+                    upper[i] = _from_dyadic_integer(f_int[i] + abs_i, shift)
                 end
             end
         end
@@ -198,13 +237,16 @@ function _incremental(s::_Snapshot;rules=:identity)
     is_bool = s.domain === QT.BoolDomain
     is_quad_deg3(i) = _is_quadratic_deg3(is_bool, fields, dual_fields, adjacency, nothing, i)
     elim_queues = ntuple(b -> Int[i for i in 1:n if degrees[i] == b - 1 && (b < 4 || is_quad_deg3(i))], 4)
-    elim_queued = ntuple(b -> BitVector(degrees[i] == b - 1 && (b < 4 || is_quad_deg3(i)) for i in 1:n), 4)
+    elim_queued = ntuple(_ -> falses(n), 4)
+    for b in 1:4, i in elim_queues[b]
+        elim_queued[b][i] = true
+    end
     elim_blocked_fill = ntuple(_ -> fill(typemax(Int), n), 4)
     rel_queue = Int[i for i in 1:n if degrees[i] >= 1]
     rel_queued = BitVector(degrees[i] >= 1 for i in 1:n)
     m_init = sum(degrees; init=0) ÷ 2
     return _Incremental(_label_index_dict(s.labels),
-                        adjacency, adj_pos, fields, _Exact(s.offset), fill(Int8(2), n),
+                        adjacency, adj_pos, fields, offset_ex, fill(Int8(2), n),
                         queue, queued, _UndoEntry[], 0, uuid4(),rules,lower,upper,1,
                         Int[],Int[],zeros(Int,n),0,0,0,0,0,0,dual_fields,dual_constant,
                         degrees, initial_degrees, elim_queues, elim_queued, [1, 1, 1, 1],

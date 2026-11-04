@@ -4,14 +4,45 @@
 
 const _Exact = Rational{BigInt}
 
+# A finite nonzero binary64 value is m * 2^e, with odd signed m. Reading the
+# representation avoids the general Float64-to-rational normalization path.
+@inline function _dyadic_parts(v::Float64)
+    bits = reinterpret(UInt64, v)
+    exponent = Int((bits >> 52) & 0x7ff)
+    mantissa = bits & 0x000fffffffffffff
+    exponent == 0 || (mantissa |= 0x0010000000000000)
+    iszero(mantissa) && return (Int64(0), 0)
+    shift = trailing_zeros(mantissa)
+    m = Int64(mantissa >> shift)
+    signbit(v) && (m = -m)
+    e = (exponent == 0 ? -1074 : exponent - 1075) + shift
+    return m, e
+end
+
 @inline function _to_exact(v::Float64)::_Exact
-    if v == trunc(v) && -9007199254740992.0 <= v <= 9007199254740992.0
-        return Base.unsafe_rational(BigInt, BigInt(Int64(v)), BigInt(1))
-    end
-    return _Exact(v)
+    isfinite(v) || return _Exact(v)
+    m, e = _dyadic_parts(v)
+    # m is odd unless it is zero, so these numerator/denominator pairs are
+    # already normalized. BigInt shifts preserve subnormals and large integers.
+    num = e >= 0 ? BigInt(m) << e : BigInt(m)
+    den = e >= 0 ? BigInt(1) : BigInt(1) << -e
+    return Base.unsafe_rational(BigInt, num, den)
 end
 @inline _to_exact(v::Integer)::_Exact = Base.unsafe_rational(BigInt, BigInt(v), BigInt(1))
 @inline _to_exact(v::_Exact)::_Exact = v
+
+# Exact normalized q / 2^shift for the bounded constructor accumulators. No
+# gcd is needed because the only possible common factors are powers of two.
+@inline function _from_dyadic_integer(q::Int128, shift::Int)::_Exact
+    iszero(q) && return _to_exact(0)
+    common = min(trailing_zeros(q), shift)
+    return Base.unsafe_rational(BigInt, BigInt(q >> common), BigInt(1) << (shift - common))
+end
+
+@inline function _dyadic_integer(v::Float64, shift::Int)::Int128
+    m, e = _dyadic_parts(v)
+    return Int128(m) << (e + shift)
+end
 
 abstract type _ProofRecord end
 const _NeighborRecord = Tuple{Int,_Exact,_Exact,_Exact}
