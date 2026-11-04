@@ -113,11 +113,16 @@ function _incremental(s::_Snapshot;rules=:identity)
     plan = _dyadic_construction_plan(s)
     shift, deg_init = plan.shift, plan.degrees
     bounded = shift >= 0
+    denominators = _dyadic_denominators(max(shift, 0))
     f_int = bounded ? zeros(Int128, n) : Int128[]
     _foreach_linear_term(s.linear) do i, v
         iszero(v) && return nothing
-        fields[i] = _to_exact(v)
-        bounded && (f_int[i] = _dyadic_integer(v, shift))
+        if bounded
+            f_int[i] = _dyadic_integer(v, shift)
+            fields[i] = _from_dyadic_integer(f_int[i], shift, denominators)
+        else
+            fields[i] = _to_exact(v)
+        end
         return nothing
     end
     adjacency = [Vector{Pair{Int,_Exact}}(undef, deg_init[i]) for i in 1:n]
@@ -133,7 +138,8 @@ function _incremental(s::_Snapshot;rules=:identity)
     adj_cur = ones(Int, n)
     _foreach_quadratic_term(s.quadratic) do i, j, v
         iszero(v) && return nothing
-        q = _to_exact(v)
+        iv = bounded ? _dyadic_integer(v, shift) : Int128(0)
+        q = bounded ? _from_dyadic_integer(iv, shift, denominators) : _to_exact(v)
         pi = adj_cur[i]
         adjacency[i][pi] = j => q
         adj_pos[i][j] = pi
@@ -143,7 +149,6 @@ function _incremental(s::_Snapshot;rules=:identity)
         adj_pos[j][i] = pj
         adj_cur[j] = pj + 1
         if bounded
-            iv = _dyadic_integer(v, shift)
             csum_int[i] += iv
             csum_int[j] += iv
             quad_sum_int[] += iv
@@ -166,27 +171,27 @@ function _incremental(s::_Snapshot;rules=:identity)
     offset_ex = _to_exact(s.offset)
     if bounded
         for i in 1:n
-            dual_fields[i] = is_bool ? _from_dyadic_integer(2 * f_int[i] + csum_int[i], shift + 2) :
-                                       _from_dyadic_integer(2 * f_int[i] - 2 * csum_int[i], shift)
+            dual_fields[i] = is_bool ? _from_dyadic_integer(2 * f_int[i] + csum_int[i], shift + 2, denominators) :
+                                       _from_dyadic_integer(2 * f_int[i] - 2 * csum_int[i], shift, denominators)
         end
         field_sum_int = sum(f_int; init=Int128(0))
         dual_constant = is_bool ?
-            (offset_ex + _from_dyadic_integer(2 * field_sum_int + quad_sum_int[], shift + 2)) :
-            (offset_ex + _from_dyadic_integer(quad_sum_int[] - field_sum_int, shift))
+            (offset_ex + _from_dyadic_integer(2 * field_sum_int + quad_sum_int[], shift + 2, denominators)) :
+            (offset_ex + _from_dyadic_integer(quad_sum_int[] - field_sum_int, shift, denominators))
         lower, upper = nothing, nothing
         if need_bounds
             lower = Vector{_Exact}(undef, n)
             upper = Vector{_Exact}(undef, n)
             if is_bool
                 for i in 1:n
-                    lower[i] = _from_dyadic_integer(f_int[i] + neg_int[i], shift)
-                    upper[i] = _from_dyadic_integer(f_int[i] + pos_int[i], shift)
+                    lower[i] = _from_dyadic_integer(f_int[i] + neg_int[i], shift, denominators)
+                    upper[i] = _from_dyadic_integer(f_int[i] + pos_int[i], shift, denominators)
                 end
             else
                 for i in 1:n
                     abs_i = pos_int[i] - neg_int[i]
-                    lower[i] = _from_dyadic_integer(f_int[i] - abs_i, shift)
-                    upper[i] = _from_dyadic_integer(f_int[i] + abs_i, shift)
+                    lower[i] = _from_dyadic_integer(f_int[i] - abs_i, shift, denominators)
+                    upper[i] = _from_dyadic_integer(f_int[i] + abs_i, shift, denominators)
                 end
             end
         end

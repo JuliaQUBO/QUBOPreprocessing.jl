@@ -20,11 +20,14 @@ const _Exact = Rational{BigInt}
 end
 
 @inline function _to_exact(v::Float64)::_Exact
+    if v == trunc(v) && -9007199254740992.0 <= v <= 9007199254740992.0
+        return Base.unsafe_rational(BigInt, BigInt(Int64(v)), BigInt(1))
+    end
     isfinite(v) || return _Exact(v)
     m, e = _dyadic_parts(v)
     # m is odd unless it is zero, so these numerator/denominator pairs are
     # already normalized. BigInt shifts preserve subnormals and large integers.
-    num = e >= 0 ? BigInt(m) << e : BigInt(m)
+    num = e > 0 ? BigInt(m) << e : BigInt(m)
     den = e >= 0 ? BigInt(1) : BigInt(1) << -e
     return Base.unsafe_rational(BigInt, num, den)
 end
@@ -39,7 +42,32 @@ end
     return Base.unsafe_rational(BigInt, BigInt(q >> common), BigInt(1) << (shift - common))
 end
 
+const _DyadicDenominators = Vector{Union{Nothing,BigInt}}
+_dyadic_denominators(shift::Int) =
+    fill!(Vector{Union{Nothing,BigInt}}(undef, shift + 3), nothing)
+
+# This cache is local to one construction/replay. Rational arithmetic treats
+# its input BigInts as read-only; never pass a cached denominator as the mutable
+# destination of a GMP operation. Public coefficient queries/export copy them.
+@inline function _dyadic_denominator!(denominators::_DyadicDenominators, shift::Int)::BigInt
+    den = denominators[shift + 1]
+    if den === nothing
+        den = shift == 0 ? BigInt(1) : BigInt(1) << shift
+        denominators[shift + 1] = den
+    end
+    return den
+end
+
+@inline function _from_dyadic_integer(q::Int128, shift::Int, denominators::_DyadicDenominators)::_Exact
+    common = iszero(q) ? shift : min(trailing_zeros(q), shift)
+    den = _dyadic_denominator!(denominators, shift - common)
+    return Base.unsafe_rational(BigInt, BigInt(q >> common), den)
+end
+
 @inline function _dyadic_integer(v::Float64, shift::Int)::Int128
+    if shift == 0 && -9007199254740992.0 <= v <= 9007199254740992.0
+        return Int128(Int64(v))
+    end
     m, e = _dyadic_parts(v)
     return Int128(m) << (e + shift)
 end

@@ -2714,6 +2714,7 @@ function _init_poly_state(s::_Snapshot; map::Union{Nothing,DomainGaugeMap}=nothi
     plan === nothing && return nothing
     shift, deg_init = plan.shift, plan.degrees
     bounded = shift >= 0
+    denominators = _dyadic_denominators(max(shift, 0))
     f_int = bounded ? zeros(Int128, n) : Int128[]
     timed_out = Ref(false)
     _foreach_linear_term(s.linear) do i, v
@@ -2722,8 +2723,12 @@ function _init_poly_state(s::_Snapshot; map::Union{Nothing,DomainGaugeMap}=nothi
             return nothing
         end
         iszero(v) && return nothing
-        fields[i] = _to_exact(v)
-        bounded && (f_int[i] = _dyadic_integer(v, shift))
+        if bounded
+            f_int[i] = _dyadic_integer(v, shift)
+            fields[i] = _from_dyadic_integer(f_int[i], shift, denominators)
+        else
+            fields[i] = _to_exact(v)
+        end
         return nothing
     end
     timed_out[] && return nothing
@@ -2742,7 +2747,8 @@ function _init_poly_state(s::_Snapshot; map::Union{Nothing,DomainGaugeMap}=nothi
             return nothing
         end
         iszero(v) && return nothing
-        q = _to_exact(v)
+        iv = bounded ? _dyadic_integer(v, shift) : Int128(0)
+        q = bounded ? _from_dyadic_integer(iv, shift, denominators) : _to_exact(v)
         pi = adj_cur[i]
         adj[i][pi] = j => q
         adj_pos[i][j] = pi
@@ -2752,7 +2758,6 @@ function _init_poly_state(s::_Snapshot; map::Union{Nothing,DomainGaugeMap}=nothi
         adj_pos[j][i] = pj
         adj_cur[j] = pj + 1
         if bounded
-            iv = _dyadic_integer(v, shift)
             csum_int[i] += iv
             csum_int[j] += iv
             quad_sum_int[] += iv
@@ -2768,10 +2773,10 @@ function _init_poly_state(s::_Snapshot; map::Union{Nothing,DomainGaugeMap}=nothi
     if is_bool
         if bounded
             for i in 1:n
-                h_spin[i] = _from_dyadic_integer(2 * f_int[i] + csum_int[i], shift + 2)
+                h_spin[i] = _from_dyadic_integer(2 * f_int[i] + csum_int[i], shift + 2, denominators)
             end
             field_sum_int = sum(f_int; init=Int128(0))
-            c_spin = constant + _from_dyadic_integer(2 * field_sum_int + quad_sum_int[], shift + 2)
+            c_spin = constant + _from_dyadic_integer(2 * field_sum_int + quad_sum_int[], shift + 2, denominators)
         else
             for i in 1:n
                 csum = sum((q for (_, q) in adj[i]); init=_Exact(0))

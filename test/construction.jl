@@ -92,6 +92,45 @@ end
     for q in (Int128(0), Int128(1), Int128(-1), Int128(12), -(Int128(1) << 120)),
         shift in (0, 1, 55, 1074)
         @test QUBOPreprocessing._from_dyadic_integer(q, shift) == R(q) / (BigInt(1) << shift)
+        cache = QUBOPreprocessing._dyadic_denominators(shift)
+        cached = QUBOPreprocessing._from_dyadic_integer(q, shift, cache)
+        @test cached == R(q) / (BigInt(1) << shift)
+        @test denominator(cached) > 0 && gcd(numerator(cached), denominator(cached)) == 1
+    end
+end
+
+@testset "constructor denominator ownership and read-only arithmetic" begin
+    R = Rational{BigInt}
+    cache = QUBOPreprocessing._dyadic_denominators(5)
+    a = QUBOPreprocessing._from_dyadic_integer(Int128(3), 4, cache)
+    b = QUBOPreprocessing._from_dyadic_integer(Int128(-5), 4, cache)
+    c = QUBOPreprocessing._from_dyadic_integer(Int128(6), 5, cache)
+    @test denominator(a) === denominator(b) === denominator(c)
+    originals = (R(3,16), R(-5,16), R(3,16))
+    @test (a + b, a - b, a * b, a // b, -a, abs(b)) ==
+          (originals[1] + originals[2], originals[1] - originals[2],
+           originals[1] * originals[2], originals[1] // originals[2],
+           -originals[1], abs(originals[2]))
+    @test (a,b,c) == originals
+
+    L = [0.1,-0.3,0.2]
+    Q = [0.0 0.1 -0.3; 0.0 0.0 0.2; 0.0 0.0 0.0]
+    for domain in (:bool,:spin)
+        model = construction_fixture(L,Q; domain)
+        ws = Workspace(model; rules=:mixed)
+        other = Workspace(model; rules=:mixed)
+        poly = QUBOPreprocessing._init_poly_state(ws._snapshot)
+        @test denominator(ws._state.fields[1]) !== denominator(other._state.fields[1])
+        @test denominator(ws._state.fields[1]) !== denominator(poly.fields[1])
+        # Public coefficient results must stay owned even though private initial
+        # rationals now share read-only denominator storage within one state.
+        owned = (effective_field(ws,1), last(first(incident_couplings(ws,1))), conditioned_constant(ws))
+        for q in owned
+            Base.GMP.MPZ.set!(denominator(q), BigInt(7))
+        end
+        check_construction_state(ws,L,Q,0.3,domain)
+        check_construction_state(other,L,Q,0.3,domain)
+        @test poly.fields == R.(L)
     end
 end
 
