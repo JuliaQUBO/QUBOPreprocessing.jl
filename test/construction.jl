@@ -71,7 +71,8 @@ function check_construction_state(ws, L, Q, offset, domain)
         @test Dict(j=>physical(q) for (j,q) in st.adjacency[i]) == expected
         @test st.degrees[i] == length(expected)
         for (j, pos) in st.adj_pos[i]
-            @test physical(st.adjacency[i][pos].second) == expected[j]
+            edge = st.adjacency[i][pos]
+            @test (edge.first => physical(edge.second)) == (j => expected[j])
         end
     end
     poly = QUBOPreprocessing._init_poly_state(ws._snapshot)

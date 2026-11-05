@@ -249,3 +249,81 @@ end
         @test !isfinite(hi) || exact <= R(hi)
     end
 end
+
+# A test-owned clock observes per-entry deadline polls independently of the
+# returned work count. Promotion may add one safety poll after copying the
+# payload; it must not repeat the local adjacency preparation.
+mutable struct IntegerPromotionPolls
+    calls::Int
+end
+function Base.:>=(::UInt64, deadline::IntegerPromotionPolls)
+    deadline.calls += 1
+    return false
+end
+
+@testset "promotion reuses local work within the original adjacency budget" begin
+    R = Rational{BigInt}
+    for degree in 1:3
+        n = degree + 1
+        L, Q = zeros(n), zeros(n,n)
+        Q[1,2:n] .= 2.0^123
+        function fixing_workspace(I)
+            ws = Workspace(fixture(collect(1:n),L,Q;domain=:spin);rules=:mixed)
+            I === Int128 && (ws._state.numeric = QUBOPreprocessing._regrid(ws._state,I,ws._state.shift))
+            return ws
+        end
+        promoted, wide = fixing_workspace(Int128), fixing_workspace(BigInt)
+        promoted_clock, wide_clock = IntegerPromotionPolls(0), IntegerPromotionPolls(0)
+        cp = checkpoint(promoted)
+        # Every incident edge is visited once, including at the exact budget.
+        refused = QUBOPreprocessing._fix!(promoted,1,-1;max_work=degree-1)
+        @test refused.stop_reason === :work_limit
+        @test refused.edge_visits == 0
+        @test eltype(promoted._state.fields) === Int128
+        result = QUBOPreprocessing._fix!(promoted,1,-1;max_work=degree,deadline_ns=promoted_clock)
+        control = QUBOPreprocessing._fix!(wide,1,-1;max_work=degree,deadline_ns=wide_clock)
+        @test result.stop_reason === control.stop_reason === :applied
+        @test result.edge_visits == control.edge_visits == degree
+        @test promoted_clock.calls <= wide_clock.calls + 1
+        @test promoted._state.promotions == 1
+        check_integer_objective(promoted,L,Q,1.0,0.0,:spin)
+        rollback!(promoted,cp)
+        check_integer_objective(promoted,L,Q,1.0,0.0,:spin)
+    end
+
+    # Eliminating x from Q*x*(y+z) creates one coupling between y and z.
+    # The budget is the two original edges plus two directed endpoint updates,
+    # with an explicit precharge that must survive promotion unchanged.
+    L = zeros(3)
+    Q = [0.0 2.0^123 2.0^123;zeros(2,3)]
+    function reduction_workspace(I)
+        ws = Workspace(fixture(collect(1:3),L,Q;domain=:spin);rules=:mixed)
+        I === Int128 && (ws._state.numeric = QUBOPreprocessing._regrid(ws._state,I,ws._state.shift))
+        return ws
+    end
+    promoted, wide = reduction_workspace(Int128), reduction_workspace(BigInt)
+    step = only(prove_elimination(promoted,1).certificate.steps)
+    @test step.constant_delta == -R(2.0^123)
+    @test step.quadratic_deltas == ((2,3,-R(2.0^123)),)
+    promoted_clock, wide_clock = IntegerPromotionPolls(0), IntegerPromotionPolls(0)
+    cp = checkpoint(promoted)
+    function apply_boundary(ws, clock; max_work)
+        QUBOPreprocessing._apply_reduction!(ws,1,Int8(4),step,step.constant_delta,
+            Pair{Int,R}[p for p in step.linear_deltas],
+            Tuple{Int,Int,R}[t for t in step.quadratic_deltas];
+            max_work,precharged_visits=7,deadline_ns=clock)
+    end
+    refused = apply_boundary(promoted,IntegerPromotionPolls(0);max_work=10)
+    @test refused.stop_reason === :work_limit
+    @test refused.edge_visits == 9
+    @test eltype(promoted._state.fields) === Int128
+    result = apply_boundary(promoted,promoted_clock;max_work=11)
+    control = apply_boundary(wide,wide_clock;max_work=11)
+    @test result.stop_reason === control.stop_reason === :applied
+    @test result.edge_visits == control.edge_visits == 11
+    @test promoted_clock.calls <= wide_clock.calls + 1
+    @test promoted._state.promotions == 1
+    check_integer_objective(promoted,L,Q,1.0,0.0,:spin)
+    rollback!(promoted,cp)
+    check_integer_objective(promoted,L,Q,1.0,0.0,:spin)
+end

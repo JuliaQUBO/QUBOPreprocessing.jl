@@ -441,8 +441,21 @@ function _fix_integer!(ws::Workspace, st::_Incremental, numeric::_IntegerState{I
             !all(t -> all(_grid_fits, t[2:4]), updated) ||
             !all(p -> _grid_fits(p.second), updated_dual))
         st.numeric = _regrid(st, BigInt, numeric.shift)
-        return _fix_integer!(ws, st, st.numeric, i, v; proof, max_work, deadline_ns)
+        _expired(deadline_ns) && return UpdateReport(:deadline, visits, 0)
     end
+    return _commit_integer_fix!(ws, st, st.numeric, i, v, proof, old, updated,
+        old_dual, updated_dual, constant, dual_constant, visits)
+end
+
+# Promotion preserves the grid, so prepared scratch remains valid. Convert the
+# saved undo values to the new payload type without repeating adjacency visits.
+function _commit_integer_fix!(ws::Workspace, st::_Incremental, numeric::_IntegerState{I},
+    i::Int, v::Int, proof, old, updated, old_dual, updated_dual,
+    constant::Integer, dual_constant::Integer, visits::Int) where {I<:Integer}
+    old = old isa Vector{_NeighborRecord{I}} ? old :
+        _NeighborRecord{I}[(j,I(field),I(lo),I(hi)) for (j,field,lo,hi) in old]
+    old_dual = old_dual isa Vector{Pair{Int,I}} ? old_dual :
+        Pair{Int,I}[j=>I(value) for (j,value) in old_dual]
     constant_i, dual_constant_i = I(constant), I(dual_constant)
     updated_i = _NeighborRecord{I}[(j,I(field),I(lo),I(hi)) for (j,field,lo,hi) in updated]
     updated_dual_i = Pair{Int,I}[j=>I(value) for (j,value) in updated_dual]
@@ -705,11 +718,27 @@ function _apply_integer_reduction!(ws::Workspace, st::_Incremental, numeric::_In
         pos = get(st.adj_pos[j], k, 0)
         fits &= _grid_fits((pos == 0 ? big(0) : BigInt(numeric.adjacency[j][pos].second)) + dq)
     end
+    prepared = (; u_free_edges, touched, merged_quad_deltas, old_fields, old_dual,
+        f_map, lo_map, hi_map, qsum_map, deg_map, grow_map, new_constant,
+        new_dual_constant, spin_const_delta, spin_field_deltas, spin_coupling_deltas)
     if I === Int128 && !fits
         st.numeric = _regrid(st, BigInt, numeric.shift)
-        return _apply_integer_reduction!(ws, st, st.numeric, u, status, proof,
-            const_delta, field_deltas, quad_deltas; max_work, deadline_ns, precharged_visits)
     end
+    return _commit_integer_reduction!(ws, st, st.numeric, u, status, proof,
+        prepared, visits; deadline_ns)
+end
+
+function _commit_integer_reduction!(ws::Workspace, st::_Incremental, numeric::_IntegerState{I},
+    u::Int, status::Int8, proof::_ProofRecord, prepared::NamedTuple, visits::Int;
+    deadline_ns=nothing) where {I<:Integer}
+    (; u_free_edges, touched, merged_quad_deltas, old_fields, old_dual,
+        f_map, lo_map, hi_map, qsum_map, deg_map, grow_map, new_constant,
+        new_dual_constant, spin_const_delta, spin_field_deltas, spin_coupling_deltas) = prepared
+    is_bool = ws._snapshot.domain === QT.BoolDomain
+    old_fields = old_fields isa Vector{_NeighborRecord{I}} ? old_fields :
+        _NeighborRecord{I}[(j,I(field),I(lo),I(hi)) for (j,field,lo,hi) in old_fields]
+    old_dual = old_dual isa Vector{_DualDegreeRecord{I}} ? old_dual :
+        _DualDegreeRecord{I}[(j,I(field),degree) for (j,field,degree) in old_dual]
     _expired(deadline_ns) && return UpdateReport(:deadline, visits, 0)
     st.serial == typemax(UInt64) && throw(ArgumentError("trail serial exhausted; reset workspace"))
     _reserve!(st.queue, length(st.queue) + length(touched))
