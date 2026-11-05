@@ -11,8 +11,10 @@
   values. Public rational queries, source-scale semantics, proofs and independent
   rational certificate replay are preserved. Cached strict-dominance and
   degree-three screening use integer arithmetic; expensive proof producers and
-  flow retain explicit rational conversion costs. Performance acceptance remains
-  pending matched measurements (Refs #93).
+  flow retain explicit rational conversion costs. Workspace-owned dyadic scalar
+  caches and guarded exact Float64 views avoid repeated rational construction in
+  eligible heuristic conversions. Paired performance evidence and remaining
+  acceptance criteria are recorded in #93.
 
 - Added package-owned `schedule!` policy dispatch and `PolicyScheduleReport`,
   preserving distinct legacy benchmark, middle and census behavior and exposing
