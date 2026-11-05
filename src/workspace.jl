@@ -187,7 +187,7 @@ function _incremental_integer(s::_Snapshot, rules::Symbol, degrees::Vector{Int},
     m_init = sum(degrees; init=0) ÷ 2
     numeric = _IntegerState{I}(adjacency, fields, constant, lower, upper,
         dual_fields, dual_constant, _UndoEntry{I}[], shift, 0, 0)
-    return _Incremental(numeric, _label_index_dict(s.labels), adj_pos,
+    return _Incremental(numeric, _dyadic_denominators(shift), _label_index_dict(s.labels), adj_pos,
         fill(Int8(2), n), queue, queued, 0, uuid4(), rules, 1,
         Int[], Int[], zeros(Int,n), 0, 0, 0, 0, 0, 0,
         degrees, copy(degrees), elim_queues, elim_queued, [1,1,1,1],

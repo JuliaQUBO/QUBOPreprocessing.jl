@@ -453,10 +453,10 @@ function _can_use_float_spin_heuristic(ws::Workspace, indices::Vector{Int}; dead
             total_abs += abs(hf)
         end
         for (j, q) in st.adjacency[i]
-            q = _physical(st, q)
             scanned += 1
             _poll_expired(scanned, deadline_ns) && return false
             (st.fixed[j] == 2 && !iszero(q)) || continue
+            q = _physical(st, q)
             jf = _float_spin_coupling(ws, q)
             (isfinite(jf) && abs(jf) >= _MIN_FLOAT_SPIN_COEFF) || return false
             total_abs += abs(jf)

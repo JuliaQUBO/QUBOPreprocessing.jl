@@ -46,10 +46,18 @@ const _DyadicDenominators = Vector{Union{Nothing,BigInt}}
 _dyadic_denominators(shift::Int) =
     fill!(Vector{Union{Nothing,BigInt}}(undef, shift + 3), nothing)
 
-# This cache is local to one construction/replay. Rational arithmetic treats
-# its input BigInts as read-only; never pass a cached denominator as the mutable
-# destination of a GMP operation. Public coefficient queries/export copy them.
+# Each construction/replay or workspace owns its cache. Rational arithmetic
+# treats these powers as read-only; never use one as a mutable GMP destination.
+# Public coefficient queries/export copy them. Grid extension grows the cache
+# lazily, geometrically, without replacing or modifying existing powers.
 @inline function _dyadic_denominator!(denominators::_DyadicDenominators, shift::Int)::BigInt
+    if shift >= length(denominators)
+        previous = length(denominators)
+        resize!(denominators, max(shift + 1, 2previous))
+        for i in previous+1:length(denominators)
+            denominators[i] = nothing
+        end
+    end
     den = denominators[shift + 1]
     if den === nothing
         den = shift == 0 ? BigInt(1) : BigInt(1) << shift
@@ -147,6 +155,7 @@ end
 # `3` relation-contracted and `4` locally eliminated.
 mutable struct _Incremental
     numeric::Union{_IntegerState{Int128},_IntegerState{BigInt}}
+    denominators::_DyadicDenominators
     labels::Dict{Any,Int}
     adj_pos::Vector{Dict{Int,Int}}
     fixed::Vector{Int8} # 2 denotes free in either source domain
@@ -210,6 +219,7 @@ end
 Base.propertynames(::_Incremental, private::Bool=false) =
     (fieldnames(_Incremental)..., _numeric_properties...)
 
+@inline _physical(st::_Incremental, q::Int128) = _from_dyadic_integer(q, st.shift, st.denominators)
 @inline _physical(st::_Incremental, q::Integer) = _from_dyadic_integer(q, st.shift)
 @inline _physical(st::_Incremental, q::_Exact) = q
 @inline _physical(q::Integer, shift::Int) = _from_dyadic_integer(q, shift)

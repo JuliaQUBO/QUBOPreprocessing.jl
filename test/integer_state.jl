@@ -490,3 +490,143 @@ end
         check_integer_objective(ws,Float64[],zeros(0,0),1.0,offset,domain)
     end
 end
+
+@testset "workspace physical denominators are exact, reused and owned" begin
+    R = Rational{BigInt}
+    L = [3/16,-5/16,7/16]
+    Q = [0.0 -3/32 5/32; zeros(2,3)]
+    for domain in (:bool,:spin)
+        model = fixture(collect(1:3),L,Q;domain,offset=1/32)
+        ws = Workspace(model;rules=:mixed)
+        st = ws._state
+        a = QUBOPreprocessing._physical(st,Int128(3))
+        b = QUBOPreprocessing._physical(st,Int128(-5))
+        @test denominator(a) === denominator(b)
+        for q in (typemin(Int128),typemax(Int128),Int128(0),Int128(1),Int128(-1),Int128(12))
+            value = QUBOPreprocessing._physical(st,q)
+            @test value == R(q)/(big(1)<<st.shift)
+            @test denominator(value) > 0 && gcd(numerator(value),denominator(value)) == 1
+        end
+        unit = R(1,big(1)<<st.shift)
+        @test (a+b,a-b,a*b,a//b,-a,abs(b)) ==
+            (-2unit,8unit,-15unit^2,R(-3,5),-3unit,5unit)
+        @test a == R(3)/(big(1)<<st.shift) && b == R(-5)/(big(1)<<st.shift)
+        copy_ws = deepcopy(ws)
+        other = Workspace(model;rules=:mixed)
+        copies = (copy_ws,other)
+        for owned in copies
+            c = QUBOPreprocessing._physical(owned._state,Int128(3))
+            @test c == a
+            @test owned._state.denominators !== st.denominators
+            @test denominator(c) !== denominator(a)
+        end
+        # Public rationals may be mutated by their owner without changing any
+        # workspace's cached powers, integer state, exports or reconstruction.
+        values = (effective_field(ws,1),last(first(incident_couplings(ws,1))),conditioned_constant(ws))
+        for value in values
+            Base.GMP.MPZ.set!(denominator(value),BigInt(7))
+        end
+        @test denominator(a) == big(1)<<st.shift
+        for owned in (ws,copies...)
+            check_integer_objective(owned,L,Q,1.0,1/32,domain)
+        end
+    end
+end
+
+@testset "physical denominator cache survives finer grids and rollback" begin
+    R = Rational{BigInt}
+    L = [1.0,0.0,0.0,2.0]
+    Q = [0.0 1.0 1.0 0.0; zeros(3,4)]
+    ws = Workspace(fixture(collect(1:4),L,Q;domain=:spin);rules=:mixed)
+    st = ws._state
+    root = checkpoint(ws)
+    assume!(ws,4,1)
+    conditioned = checkpoint(ws)
+    cache = st.denominators
+    one = denominator(QUBOPreprocessing._physical(st,Int128(1)))
+    @test eliminate_variable!(ws,1).stop_reason === :applied
+    @test st.shift == 1
+    proof = export_certificate(ws)
+    check_integer_objective(ws,L,Q,1.0,0.0,:spin)
+    # A finer grid need not allocate any new denominator until an adapter
+    # actually requests it; old rational/proof values remain in physical units.
+    for shift in (4,6)
+        old_length = length(cache)
+        QUBOPreprocessing._ensure_grid!(st,shift)
+        @test eltype(st.fields) === Int128
+        @test st.denominators === cache && length(cache) == old_length
+        value = QUBOPreprocessing._physical(st,Int128(1))
+        @test value == R(1,big(1)<<shift)
+        @test length(cache) >= 2old_length
+        @test cache[1] === one && one == 1
+        @test all(x === nothing || ispow2(x) for x in cache)
+        @test verify_certificate(ws,proof).valid
+        check_integer_objective(ws,L,Q,1.0,0.0,:spin)
+    end
+    rollback!(ws,conditioned)
+    @test st.denominators === cache && st.shift == 6
+    check_integer_objective(ws,L,Q,1.0,0.0,:spin)
+    # Promotion keeps the workspace cache but preserves the general BigInt
+    # adapter, rather than trying to narrow wide live or historical numerators.
+    QUBOPreprocessing._ensure_grid!(st,st.shift+130)
+    @test eltype(st.fields) === BigInt && st.denominators === cache
+    @test conditioned_constant(ws) == 2
+    @test QUBOPreprocessing._physical(st,st.fields[1]) == 1
+    rollback!(ws,root)
+    check_integer_objective(ws,L,Q,1.0,0.0,:spin)
+    for domain in (:bool,:spin)
+        tiny = nextfloat(0.0)
+        subnormal = Workspace(fixture([1],[tiny],zeros(1,1);domain);rules=:mixed)
+        @test eltype(subnormal._state.fields) === Int128
+        @test effective_field(subnormal,1) == R(1,big(1)<<1074)
+        check_integer_objective(subnormal,[tiny],zeros(1,1),1.0,0.0,domain)
+    end
+end
+
+@testset "filtered rational adapters preserve network values and work limits" begin
+    R = Rational{BigInt}
+    L = [0.25,-0.5,1.0]
+    Q = [0.0 -0.5 0.25; 0.0 0.0 -0.25; zeros(1,3)]
+    capacities(net) = Dict((u,e.to)=>e.cap for (u,edges) in enumerate(net.adj)
+                           for e in edges if !iszero(e.cap))
+    for domain in (:bool,:spin)
+        ws = Workspace(fixture(collect(1:3),L,Q;domain);rules=:mixed)
+        assume!(ws,3,1)
+        result = QUBOPreprocessing._build_implication_network(ws)
+        @test result[1:2] == (true,:ok)
+        @test result[5:6] == (6,4) # two free vertices, four adjacency entries;
+        h1,h2,j = domain === :bool ? (R(1,8),R(1,2),R(1,8)) : (R(1,2),R(3,4),R(1,2))
+        expected = Dict((7,2)=>h1,(1,8)=>h1,(7,3)=>h2,(4,8)=>h2,
+                        (1,3)=>j,(3,1)=>j,(2,4)=>j,(4,2)=>j)
+        @test capacities(result[3]) == expected
+        @test result[4] == (domain === :bool ? R(0) : R(-3,4))
+        @test QUBOPreprocessing._can_use_float_spin_heuristic(ws,[1,2])
+        for (budget,reason,graph,exact) in ((0,:work_limit,0,1),(2,:work_limit,2,3),
+                                           (3,:work_limit,3,3),(5,:work_limit,5,4),(6,:ok,6,4))
+            bounded = QUBOPreprocessing._build_implication_network(ws;max_work=budget)
+            @test (bounded[2],bounded[5],bounded[6]) == (reason,graph,exact)
+        end
+        for (budget,reason,graph,exact) in ((0,:verification_limit,0,0),(1,:verification_limit,1,1),
+                                           (2,:verification_limit,2,2),(3,:verification_limit,4,3),(4,:ok,6,4))
+            bounded = QUBOPreprocessing._build_implication_network(ws;max_exact_work=budget)
+            @test (bounded[2],bounded[5],bounded[6]) == (reason,graph,exact)
+        end
+        expired = QUBOPreprocessing._build_implication_network(ws;deadline_ns=UInt64(0))
+        @test (expired[2],expired[5],expired[6]) == (:deadline,0,1)
+        check_integer_objective(ws,L,Q,1.0,0.0,domain)
+        # Explicit stored zero edges are algebraically empty, but keep their
+        # original traversal/admission charges. Fixed and reverse edges also
+        # remain in this tiny graph, exercising all skipped-adapter filters.
+        zero_Q = copy(Q); zero_Q[1,2] = 0.0
+        zero_ws = Workspace(fixture(collect(1:3),L,zero_Q;domain);rules=:identity)
+        assume!(zero_ws,3,1)
+        before = QUBOPreprocessing._build_implication_network(zero_ws)
+        for (i,k) in ((1,2),(2,1))
+            push!(zero_ws._state.adjacency[i],k=>Int128(0))
+        end
+        after = QUBOPreprocessing._build_implication_network(zero_ws)
+        @test before[5:6] == (4,3) && after[5:6] == (6,4)
+        @test before[4] == after[4] && capacities(before[3]) == capacities(after[3])
+        @test QUBOPreprocessing._can_use_float_spin_heuristic(zero_ws,[1,2])
+    end
+end
