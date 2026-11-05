@@ -4146,7 +4146,8 @@ generation(r::BudgetedScheduleReport) = r.generation
 """
     schedule_budgeted!(ws; time_limit, allow_weak=false, enable_probing=true,
                        max_block_size=12, probe_rounds=8, guaranteed_relation_work=75_000,
-                       tie_break=:low)
+                       tie_break=:low, double_probe=false, contract_relations=false,
+                       on_family=nothing)
 
 Run every certified reduction family on `ws` under one wall-clock budget of
 `time_limit` seconds, instead of caller-chosen size gates. The budget counts from
@@ -4177,6 +4178,15 @@ stretch a call past its share.
 submodular/Max-Cut reductions, which keep at least one optimum; exact elimination
 may resolve ties in either mode. Returns a [`BudgetedScheduleReport`](@ref) with
 per-family time and removed variables.
+
+`double_probe` and `contract_relations` opt into the corresponding probing
+operations; both default to false, preserving the original budgeted policy.
+An optional `on_family(event)` function observes every completed family call.
+The event includes `family`, `time_s`, `freed`, `stop_reason`, and public
+`before_checkpoint`/`after_checkpoint` values. Callback time consumes the shared
+scheduling budget but is excluded from the family's own time. Callback exceptions
+propagate; already completed deductions are not rolled back. The callback must
+not mutate the workspace. The default performs no callback/checkpoint work.
 """
 function schedule_budgeted!(
     ws::Workspace;
@@ -4187,6 +4197,9 @@ function schedule_budgeted!(
     probe_rounds=8,
     guaranteed_relation_work=75_000,
     tie_break::Symbol=:low,
+    double_probe::Bool=false,
+    contract_relations::Bool=false,
+    on_family=nothing,
 )
     # Validate every option before any family can modify the workspace
     (time_limit isa Real && !(time_limit isa Bool) && isfinite(time_limit) && time_limit >= 0) ||
@@ -4199,6 +4212,7 @@ function schedule_budgeted!(
      0 <= guaranteed_relation_work <= typemax(Int)) ||
         throw(ArgumentError("guaranteed_relation_work must be a nonnegative machine-sized integer"))
     tie_break in (:low, :high) || throw(ArgumentError("tie_break must be :low or :high"))
+    (on_family === nothing || on_family isa Function) || throw(ArgumentError("on_family must be a function or nothing"))
     t0 = time_ns()
     # Saturate budgets too long to represent as a time_ns() deadline
     budget_ns = Float64(time_limit) * 1e9
@@ -4214,6 +4228,7 @@ function schedule_budgeted!(
     cut = Dict{Symbol,Bool}()
     function run_family!(family::Symbol, family_deadline::UInt64; relation_work_budget=typemax(Int))
         before = free_count()
+        before_checkpoint = on_family === nothing ? nothing : checkpoint(ws)
         t = time_ns()
         rep = if family === :cheap
             schedule_reductions!(
@@ -4235,15 +4250,19 @@ function schedule_budgeted!(
         elseif family === :maxcut
             apply_maxcut!(ws; allow_weak, deadline_ns=family_deadline)
         else
-            probe_variables!(ws; order=:coercive, max_rounds=probe_rounds, deadline_ns=family_deadline)
+            probe_variables!(ws; order=:coercive, max_rounds=probe_rounds,
+                             double_probe, contract_relations, deadline_ns=family_deadline)
         end
         freed = before - free_count()
+        elapsed_s = (time_ns() - t) / 1e9
         prev = get(stats, family, BudgetedFamilyRun(family, 0, 0.0, 0, :none))
-        stats[family] = BudgetedFamilyRun(family, prev.calls + 1, prev.time_s + (time_ns() - t) / 1e9,
+        stats[family] = BudgetedFamilyRun(family, prev.calls + 1, prev.time_s + elapsed_s,
                                           prev.freed + freed, rep.stop_reason)
         left[family] = free_count()
         # The cheap floor's relation limit leaves relation search to the budgeted passes
         cut[family] = rep.stop_reason === :deadline || (family === :cheap && rep.stop_reason === :work_limit)
+        on_family === nothing || on_family((; family, time_s=elapsed_s, freed,
+            stop_reason=rep.stop_reason, before_checkpoint, after_checkpoint=checkpoint(ws)))
         return freed
     end
     # A family has not finished on the current workspace if it never ran, its deadline

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Added package-owned `schedule!` policy dispatch and `PolicyScheduleReport`,
+  preserving distinct legacy benchmark, middle and census behavior and exposing
+  an opt-in dominance/low-degree `:cheap` policy with explicit skipped families.
+  Budgeted probing gains default-false `double_probe`/`contract_relations` options
+  and an optional charged diagnostic observer. Existing budgeted defaults and
+  caller defaults are unchanged; no universal short-budget advantage is claimed
+  (Refs #95; cheap policy interface only for #93).
+
 - Added opt-in `materialize(ws; normalization=:integer)` for exact Float64
   transport through primitive integer coefficients and an adjusted scale.
   Normalization includes the mapped constant, preserves the exact source proof

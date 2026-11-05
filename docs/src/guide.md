@@ -117,6 +117,41 @@ fixed_state = reconstruct(fixed_result, Int[])
 fixed_state.energy.value
 ```
 
+### Explicit scheduling policies
+
+[`schedule!`](@ref) centralizes caller policies on a mixed workspace and returns
+a [`PolicyScheduleReport`](@ref) with versioned effective settings, family
+calls/time/removed variables and explicitly skipped families:
+
+```julia
+ws = Workspace(model; rules=:mixed, integerize_scale=false)
+report = schedule!(ws; policy=:legacy_benchmark, allow_weak=false)
+```
+
+`:legacy_benchmark` preserves the historical single benchmark sequence and its
+original-size gates. `:legacy_middle` lifts relation/block/flow gates while
+retaining the probing gate. `:legacy_census` preserves the different census
+sequence, including conditional cascades and up to eight small-model outer
+rounds. Their `:policy_complete` result does not claim an all-family fixpoint.
+Dimensions are frozen at dispatch; `input_edges` optionally preserves a source
+representation's explicit-zero edge count used by an old caller's size gates.
+
+`:cheap` enables only dominance and low-degree elimination. Its
+`:cheap_quiescent` result names that limited guarantee; it skips relations,
+star-triangle/block elimination, flow/SCC, Max-Cut and probing. This opt-in policy
+does not establish a new integer-kernel performance result or an expensive-family
+fixpoint. `:budgeted` requires `time_limit` and uses the existing budgeted policy
+with unchanged defaults. Budgeted `double_probe` and `contract_relations` remain
+false unless explicitly requested for a comparison. All policy times exclude
+workspace construction, export and independent proof replay.
+
+An optional budgeted `on_family(event)` callback supports diagnostic call logs
+and checkpoint-based closure checks. Callback overhead consumes the budget;
+callback failures propagate after completed deductions, without rolling them
+back. Observers must not mutate the workspace. Keeping a legacy default is
+compatible with centralization: mixed short-budget results do not justify a
+universal noninferiority claim or a default replacement (Refs #95).
+
 ## [Explore assumptions and undo a branch](@id guide-branches)
 
 A branch decision has a different meaning from a deduction. For `x - 2x*y`,
