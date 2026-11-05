@@ -327,3 +327,166 @@ end
     rollback!(promoted,cp)
     check_integer_objective(promoted,L,Q,1.0,0.0,:spin)
 end
+
+# A test-owned clock injects a failure only after a real numeric replacement.
+# It does not depend on how many adjacency polls a kernel uses.
+mutable struct IntegerReplacementFailure
+    workspace::Workspace
+    original::Any
+    observed::Any
+    failure::Exception
+end
+function Base.:>=(::UInt64, clock::IntegerReplacementFailure)
+    if clock.workspace._state.numeric !== clock.original
+        clock.observed = clock.workspace._state.numeric
+        throw(clock.failure)
+    end
+    return false
+end
+
+@testset "failed integer transactions restore payload identity and original states" begin
+    R=Rational{BigInt}
+    # Both kernels replace their payload before committing. Exercise the
+    # exception boundary with an existing caller undo entry still live.
+    for operation in (:fix_promotion,:reduction_extension,:reduction_promotion)
+        if operation===:fix_promotion
+            L=[0.0,0.0,1.0]
+            Q=[0.0 2.0^125 0.0;zeros(2,3)]
+        elseif operation===:reduction_extension
+            L=[1.0,0.0,0.0,2.0]
+            Q=[0.0 1.0 1.0 0.0;zeros(3,4)]
+        else
+            L=[0.0,0.0,0.0,1.0]
+            Q=[0.0 2.0^123 2.0^123 0.0;zeros(3,4)]
+        end
+        n=length(L);@test n<=4
+        labels=collect(1:n)
+        ws=Workspace(fixture(labels,L,Q;domain=:spin);rules=:mixed)
+        root=checkpoint(ws)
+        assume!(ws,n,1)
+        # The conservative constructor reserves more headroom than needed for
+        # these current values. Narrow only after proving every value fits.
+        if eltype(ws._state.fields)===BigInt
+            ws._state.numeric=QUBOPreprocessing._regrid(ws._state,Int128,ws._state.shift)
+        end
+        @test eltype(ws._state.fields)===Int128
+        cp=checkpoint(ws);original=ws._state.numeric
+        failure=ErrorException("injected failure after $operation payload replacement")
+        clock=IntegerReplacementFailure(ws,original,nothing,failure)
+        step=operation===:fix_promotion ? nothing : only(prove_elimination(ws,1).certificate.steps)
+        function commit_with_clock(deadline)
+            if operation===:fix_promotion
+                return QUBOPreprocessing._fix!(ws,1,-1;deadline_ns=deadline)
+            end
+            return QUBOPreprocessing._apply_reduction!(ws,1,Int8(4),step,step.constant_delta,
+                Pair{Int,R}[p for p in step.linear_deltas],
+                Tuple{Int,Int,R}[t for t in step.quadratic_deltas];deadline_ns=deadline)
+        end
+        caught=try
+            commit_with_clock(clock)
+            nothing
+        catch err
+            err
+        end
+        @test caught===failure
+        @test clock.observed!==nothing
+        @test ws._state.numeric===original
+        @test checkpoint(ws)==cp
+        @test assumptions(ws)==[n=>1]
+        @test isempty(reductions(ws))
+        if operation===:reduction_extension
+            @test clock.observed.shift>original.shift
+            @test eltype(clock.observed.fields)===Int128
+        else
+            @test eltype(clock.observed.fields)===BigInt
+        end
+        check_integer_objective(ws,L,Q,1.0,0.0,:spin)
+        # The rejected attempt leaves both normal commit and historical rollback
+        # available; check all original-state energies through both operations.
+        @test commit_with_clock(nothing).stop_reason===:applied
+        check_integer_objective(ws,L,Q,1.0,0.0,:spin)
+        rollback!(ws,cp)
+        check_integer_objective(ws,L,Q,1.0,0.0,:spin)
+        rollback!(ws,root)
+        check_integer_objective(ws,L,Q,1.0,0.0,:spin)
+    end
+end
+
+@testset "overflowing grid extension preserves live and historical physical units" begin
+    L=[1.0,0.0,0.0,2.0]
+    Q=[0.0 1.0 1.0 0.0;zeros(3,4)]
+    ws=Workspace(fixture(collect(1:4),L,Q;domain=:spin);rules=:mixed)
+    root=checkpoint(ws);assume!(ws,4,1);conditioned=checkpoint(ws)
+    @test eliminate_variable!(ws,1).stop_reason===:applied
+    @test eltype(ws._state.fields)===Int128
+    @test any(e isa QUBOPreprocessing._UndoFix for e in ws._state.trail)
+    @test any(e isa QUBOPreprocessing._UndoReduction for e in ws._state.trail)
+    proof=export_certificate(ws)
+    gauge=domain_map(ws;domain=:bool,gauge=[-1,1,-1,1])
+    constant=conditioned_constant(ws;map=gauge)
+    old=ws._state.numeric
+    shift=old.shift+130
+    # No Int128 conversion can represent even the old unit coefficient on this
+    # grid. The operation must fall back from InexactError without partial edits.
+    @test_throws InexactError QUBOPreprocessing._regrid(ws._state,Int128,shift)
+    @test ws._state.numeric===old
+    QUBOPreprocessing._ensure_grid!(ws._state,shift)
+    @test eltype(ws._state.fields)===BigInt
+    @test ws._state.shift==shift
+    @test ws._state.promotions==1
+    @test conditioned_constant(ws;map=gauge)==constant
+    @test verify_certificate(ws,proof).valid
+    check_integer_objective(ws,L,Q,1.0,0.0,:spin)
+    rollback!(ws,conditioned)
+    @test assumptions(ws)==[4=>1]
+    check_integer_objective(ws,L,Q,1.0,0.0,:spin)
+    rollback!(ws,root)
+    @test isempty(assumptions(ws))
+    check_integer_objective(ws,L,Q,1.0,0.0,:spin)
+end
+
+@testset "integer coordinate adapters and uncached MaxCut weights match source rationals" begin
+    R=Rational{BigInt}
+    L=[-0.3,0.1,0.2]
+    Q=[0.0 0.1 -0.3;0.0 0.0 0.2;0.0 0.0 0.0]
+    for domain in (:bool,:spin),wide in (false,true)
+        ws=Workspace(fixture(collect(1:3),L,Q;domain);rules=:identity)
+        @test ws._state.lower===nothing && ws._state.upper===nothing
+        wide && QUBOPreprocessing._ensure_grid!(ws._state,ws._state.shift+130)
+        @test (eltype(ws._state.fields)===BigInt)==wide
+        for i in 1:3,(j,q) in ws._state.adjacency[i]
+            input=R(Q[min(i,j),max(i,j)])
+            @test QUBOPreprocessing._physical(q,ws._state.shift)==input
+            @test QUBOPreprocessing._spin_coupling(ws,q)==(domain===:bool ? input/4 : input)
+            @test QUBOPreprocessing._bool_coupling(ws,q)==(domain===:bool ? input : 4input)
+        end
+        for fixed in (false,true)
+            fixed && assume!(ws,3,1)
+            for i in (1,2),direction in (-1,1)
+                # Expand the original polynomial directly in canonical spin
+                # coordinates; no package field/cache supplies expected weights.
+                f=R(L[i])+(fixed ? R(Q[i,3]) : R(0))
+                active_q=[R(Q[min(i,j),max(i,j)]) for j in 1:3 if j!=i && !(fixed && j==3)]
+                h=domain===:bool ? f/2+sum(active_q;init=R(0))/4 : f
+                expected=abs(h)+sum(abs,active_q;init=R(0))/(domain===:bool ? 4 : 1)
+                result=QUBOPreprocessing._ws_mc_total_abs_weight(ws,i,direction)
+                @test result[1:2]==(true,:ok)
+                @test result[3]==expected
+            end
+            check_integer_objective(ws,L,Q,1.0,0.0,domain)
+        end
+    end
+end
+
+@testset "constant-only integer workspace has coherent empty-state metadata" begin
+    for offset in (0.0,0.3,nextfloat(0.0)),domain in (:bool,:spin)
+        ws=Workspace(fixture(Int[],Float64[],zeros(0,0);offset,domain);rules=:mixed)
+        @test isempty(ws._state.fields) && isempty(ws._state.adjacency)
+        # The stable topology owner must expose numeric payload properties even
+        # for empty models, so diagnostics can distinguish bounds from no bounds.
+        @test all(name in propertynames(ws._state) for name in
+                  (:numeric,:fields,:constant,:lower,:upper,:trail,:shift))
+        @test conditioned_constant(ws)==Rational{BigInt}(offset)
+        check_integer_objective(ws,Float64[],zeros(0,0),1.0,offset,domain)
+    end
+end
