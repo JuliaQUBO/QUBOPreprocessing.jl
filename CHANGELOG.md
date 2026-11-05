@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Added opt-in `materialize(ws; normalization=:integer)` for exact Float64
+  transport through primitive integer coefficients and an adjusted scale.
+  Normalization includes the mapped constant, preserves the exact source proof
+  and existing perturbation metadata, and rejects any integer or adjusted scale
+  that cannot round-trip exactly as finite Float64. It requires
+  `rounding=:none`; default exports and nearest-rounding behavior are unchanged.
+  This repairs some common-factor and exponent failures, not arbitrary
+  high-precision residuals or later solver-format transport (Refs #91).
+
 ## 0.2.1
 
 Budgeted scheduling, recorded approximate exports, deadline fixes and exact

@@ -62,9 +62,40 @@ transported exactly. The error names the coefficient and lists the reduction
 families present; the final state cannot identify which individual family first
 introduced its extra precision. Use
 `materialize(ws; coefficient_type=Rational{BigInt})` for an exact residual.
-Factoring a common denominator into the scale only helps Float64 transport when
-the resulting integer significands fit; rescaling cannot remove significant
-bits from arbitrary coefficient ratios.
+
+For a Float64 consumer, `materialize(ws; normalization=:integer)` can sometimes
+retain exactness by changing the common scale. After any coordinate map, it takes
+the common denominator ``D`` of all fields, couplings **and the constant**, and
+the positive gcd ``G`` of their integer numerators. It stores the primitive
+integers ``a_i = D q_i / G`` and scale ``\alpha' = \alpha G / D``. Every integer
+and the adjusted scale must round-trip exactly as finite Float64. Large even
+integers can be exact beyond ``2^{53}``; significant bits and exponent range
+determine acceptance. A nonzero adjusted scale cannot underflow to zero. The
+all-zero polynomial uses factor one and keeps the source scale.
+
+For example, fixing ``x=1`` in a Boolean model with ``L_y=3\cdot2^{51}``,
+``Q_{xy}=3/2`` and ``L_z=3/2`` produces fields
+``[3(2^{52}+1)/2, 3/2]``. The first field cannot be stored exactly as Float64.
+Integer normalization gives exact fields ``[2^{52}+1,1]`` and scale ``3/2``
+when the source scale is one. Similarly, a minimum-subnormal Boolean coupling
+mapped to spin has quarter-subnormal terms; source scale four lets normalization
+represent them as integer terms with a minimum-subnormal scale.
+
+Exact normalization keeps `status=:certified`, adds no perturbation, and retains
+any existing input perturbation. Its source snapshot and reduction proof retain
+their original coefficients and scale. A factor other than one sets
+`certificate.unchanged_representation=false`. The option also applies without
+reductions and is available as `materialize(ws, map; normalization=:integer)`.
+It currently requires `coefficient_type=Float64` and `rounding=:none`; the
+default `normalization=:none` preserves the existing transport behavior.
+
+This is a limited exact transport option. Factoring a denominator alone changes
+exponents, not significant bits. Fields ``[1,1+2^{-53}]`` have primitive
+numerator gcd one and still fail. The measured Culberson/Rudy residuals with
+58–124-bit primitive integers and gcd one remain unsupported by Float64; the
+wide constant-only case 9176 also fails because its adjusted scale does not fit
+exactly. Use rational transport for those residuals. Normalization does not
+certify later scale multiplication, solver arithmetic or QPLIB serialization.
 
 A Float64 solver can instead receive the explicit approximation
 `materialize(ws; rounding=:nearest)`. Each linear coefficient, coupling, and

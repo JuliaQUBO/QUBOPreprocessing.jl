@@ -1159,7 +1159,8 @@ function _transport_error(ws::Workspace, q::_Exact, kind::Symbol, i::Int, j::Int
         "Reduction-chain families: $chain. Fixings, eliminations and contractions add exact sums " *
         "of input coefficients; the final state cannot attribute this coefficient to one family. " *
         "Use coefficient_type=Rational{BigInt} for exact transport, rounding=:nearest for recorded " *
-        "finite Float64 rounding, or integerize_scale on input when an exact scaling is available."))
+        "finite Float64 rounding, normalization=:integer when its primitive integers and adjusted " *
+        "scale fit exactly, or integerize_scale on input when an exact scaling is available."))
 end
 
 # Rational{BigInt}'s ordinary floating conversion can pass through the ambient
@@ -1217,8 +1218,33 @@ function _with_export_perturbation(s::_Snapshot, error::_Exact)
         s.scale, s.offset, s.sense, s.domain, !iszero(max_perturbation), max_perturbation)
 end
 
+# Maintain the common denominator D and gcd G of the corresponding integer
+# numerators as each mapped term is included. The constant shares this basis.
+function _include_normalization_term(D::BigInt, G::BigInt, q::_Exact)
+    d = denominator(q)
+    next_D = lcm(D, d)
+    next_G = gcd(G * div(next_D, D), abs(numerator(q)) * div(next_D, d))
+    return next_D, next_G
+end
+
+function _integer_normalization_factor(ws::Workspace, free::Vector{Int}, map)
+    D, G = big(1), big(0)
+    for i in free
+        D, G = _include_normalization_term(D, G, _mapped_field(ws, i, map))
+        for (j, q) in ws._state.adjacency[i]
+            if i < j && ws._state.fixed[j] == 2
+                D, G = _include_normalization_term(D, G, _mapped_coupling(ws, i, j, q, map))
+            end
+        end
+    end
+    D, G = _include_normalization_term(D, G, _direct_mapped_constant(ws, map))
+    # There is no primitive gcd for the zero polynomial. Use the neutral factor
+    # so zero coefficients and the original finite scale remain unchanged.
+    return iszero(G) ? one(_Exact) : G // D
+end
+
 function _conditioned_export(ws::Workspace, ::Type{T}; map::Union{Nothing,DomainGaugeMap}=nothing,
-                             rounding::Symbol=:none) where T
+                             rounding::Symbol=:none, normalization::Symbol=:none) where T
     T in (Float64, _Exact) || throw(ArgumentError("supported transport: Float64 or Rational{BigInt}"))
     map === nothing || _validate_domain_map(ws, map; full=true)
     s, st = ws._snapshot, ws._state
@@ -1226,11 +1252,13 @@ function _conditioned_export(ws::Workspace, ::Type{T}; map::Union{Nothing,Domain
     _validate_label_copy(s.labels, snapshot.labels)
     owned_map = map === nothing ? nothing : deepcopy(map)
     free = findall(==(2), st.fixed)
+    factor = normalization === :integer ? _integer_normalization_factor(ws, free, owned_map) : one(_Exact)
     idxmap = index_map(ws)
     rounding_error = zero(_Exact)
     lin_vec = Vector{T}(undef, length(free))
     for (idx_f, i) in enumerate(free)
         q = _mapped_field(ws, i, owned_map)
+        normalization === :integer && (q /= factor)
         v = _transport(T, q; rounding, ws, kind=:linear, i)
         lin_vec[idx_f] = v
         rounding === :nearest && (rounding_error = max(rounding_error, abs(_Exact(v) - q)))
@@ -1242,6 +1270,7 @@ function _conditioned_export(ws::Workspace, ::Type{T}; map::Union{Nothing,Domain
         for (j, q) in st.adjacency[i]
             if i < j && st.fixed[j] == 2
                 mapped_q = _mapped_coupling(ws, i, j, q, owned_map)
+                normalization === :integer && (mapped_q /= factor)
                 v = _transport(T, mapped_q; rounding, ws, kind=:quadratic, i, j)
                 push!(quad_vec, (ii, idxmap[j], v))
                 rounding === :nearest && (rounding_error = max(rounding_error, abs(_Exact(v) - mapped_q)))
@@ -1252,14 +1281,17 @@ function _conditioned_export(ws::Workspace, ::Type{T}; map::Union{Nothing,Domain
     scope = _caller_scope(ws)
     proof = _export_certificate(ws,snapshot;map=owned_map)
     steps = proof === nothing ? () : proof.steps
-    unchanged = isempty(st.fixes) && !s.perturbed && (owned_map === nothing ||
+    unchanged = isone(factor) && isempty(st.fixes) && !s.perturbed && (owned_map === nothing ||
         (owned_map.target_domain === owned_map.source_domain && owned_map._identity_gauge))
     c_export = _direct_mapped_constant(ws, owned_map)
+    normalization === :integer && (c_export /= factor)
     c_transport = _transport(T, c_export; rounding, ws, kind=:constant)
     rounding === :nearest && (rounding_error = max(rounding_error, abs(_Exact(c_transport) - c_export)))
-    # The scale is copied exactly. Only stored coefficients and the constant
-    # may be rounded, so their errors share the original objective's units.
-    scale_transport = _transport(T, _Exact(s.scale); ws, kind=:scale)
+    # The exact positive normalization factor preserves effective coefficients,
+    # scale sign and objective sense. The adjusted scale is never rounded.
+    adjusted_scale = normalization === :integer ? _Exact(s.scale) * factor : _Exact(s.scale)
+    scale_transport = _transport(T, adjusted_scale; ws, kind=:scale)
+    normalization === :integer && iszero(s.scale) && (scale_transport = s.scale)
     rounded = !iszero(rounding_error)
     if rounded
         # Keep the proof's source metadata unchanged: it certifies the exact

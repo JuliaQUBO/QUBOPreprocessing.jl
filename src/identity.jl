@@ -623,10 +623,10 @@ Base.propertynames(::ExportResult, private::Bool=false) =
               (:generation, :status, :certificate, :perturbed, :max_perturbation)
 
 """
-    materialize(ws; coefficient_type=Float64, rounding=:none, map=nothing)
-    materialize(ws, map::DomainGaugeMap; coefficient_type=Float64, rounding=:none)
+    materialize(ws; coefficient_type=Float64, rounding=:none, normalization=:none, map=nothing)
+    materialize(ws, map::DomainGaugeMap; coefficient_type=Float64, rounding=:none, normalization=:none)
 
-Explicitly capture an owned export. Without fixings or a coordinate `map`, this
+Explicitly capture an owned export. With default normalization and without fixings or a coordinate `map`, this
 is the Float64 identity export (`certificate.unchanged_representation == !ws.perturbed`).
 With caller assumptions, certified deductions or a [`DomainGaugeMap`](@ref), return a
 [`ConditionedExport`](@ref) with the complete proof chain when present: Float64
@@ -646,14 +646,32 @@ coefficient bound, not an objective-error or optimality certificate. The reducti
 proof still describes the exact residual; reconstruction uses the historical
 source objective rather than the rounded solver objective. The scale is never
 rounded, and a nonfinite rounded coefficient still raises `ArgumentError`.
+
+With `coefficient_type=Float64` and `rounding=:none`, `normalization=:integer`
+factors all mapped coefficients, including the constant, into primitive integers
+and a common positive rational factor absorbed into the scale. Every integer and
+the adjusted scale must be exactly representable as finite Float64; otherwise the
+call raises `ArgumentError`. An all-zero residual uses factor one and retains the
+source scale. Exact normalization adds no perturbation, preserves the historical
+source and proof, and sets `unchanged_representation=false` when the factor is
+not one. The default `normalization=:none` retains the stored coefficients/scale.
 """
-function materialize(ws::Workspace; coefficient_type=Float64, rounding=:none, map=nothing)
+function materialize(ws::Workspace; coefficient_type=Float64, rounding=:none,
+                     normalization=:none, map=nothing)
     rounding in (:none, :nearest) || throw(ArgumentError("rounding must be :none or :nearest"))
     rounding === :none || coefficient_type === Float64 ||
         throw(ArgumentError("rounding=:nearest requires coefficient_type=Float64"))
+    normalization in (:none, :integer) ||
+        throw(ArgumentError("normalization must be :none or :integer"))
+    if normalization === :integer
+        coefficient_type === Float64 ||
+            throw(ArgumentError("normalization=:integer requires coefficient_type=Float64"))
+        rounding === :none ||
+            throw(ArgumentError("normalization=:integer requires rounding=:none"))
+    end
     map === nothing || _validate_domain_map(ws, map)
-    if !isempty(ws._state.fixes) || map !== nothing
-        return _conditioned_export(ws, coefficient_type; map, rounding)
+    if !isempty(ws._state.fixes) || map !== nothing || normalization === :integer
+        return _conditioned_export(ws, coefficient_type; map, rounding, normalization)
     end
     coefficient_type === Float64 || throw(ArgumentError("only Float64 identity transport is supported"))
     snapshot = deepcopy(ws._snapshot)

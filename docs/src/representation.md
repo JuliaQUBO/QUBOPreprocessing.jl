@@ -135,7 +135,12 @@ mapped_state = map_state(smap, state)
 Ordinary floating-point casting is not itself a certificate: `materialize(ws, map)`
 requires every converted coefficient and constant to be exactly representable in
 `Float64`, or it abstains with `ArgumentError`; pass
-`coefficient_type=Rational{BigInt}` for verified exact transport.
+`coefficient_type=Rational{BigInt}` for verified exact transport. The opt-in
+`materialize(ws, map; normalization=:integer)` instead tries primitive integer
+coefficients with an adjusted common scale, checking both exactly as finite
+Float64. It includes the mapped constant and preserves reconstruction against
+the historical source. The [certificate reference](@ref "Exact residuals and recorded solver rounding")
+explains the cases it can repair and those that still require rational transport.
 
 ## Reconstruction and numerical evaluation
 

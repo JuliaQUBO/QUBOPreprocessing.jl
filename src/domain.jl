@@ -288,8 +288,9 @@ end
 _validate_domain_map(::Workspace, m; full::Bool=false) =
     throw(ArgumentError("expected a DomainGaugeMap; got $(typeof(m))"))
 
-materialize(ws::Workspace, map::DomainGaugeMap; coefficient_type=Float64, rounding=:none) =
-    materialize(ws; coefficient_type, rounding, map)
+materialize(ws::Workspace, map::DomainGaugeMap; coefficient_type=Float64, rounding=:none,
+            normalization=:none) =
+    materialize(ws; coefficient_type, rounding, normalization, map)
 
 function _check_domain_scalar(v, dom::Symbol)
     low = dom === :bool ? 0 : -1
