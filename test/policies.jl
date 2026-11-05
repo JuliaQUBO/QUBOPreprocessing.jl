@@ -176,3 +176,124 @@ end
     @test report.elapsed_s>=callback_ns[]/1e9
     @test report.elapsed_s>=sum(f.time_s for f in report.families)+callback_ns[]/1e9
 end
+
+
+@testset "Census stops an unproductive second round before probing" begin
+    # Metadata callback only: a productive first roof call justifies another
+    # outer round, whose completed zero-deduction flow calls must stop before
+    # a second probe. No model with these synthetic deductions is constructed.
+    calls=Symbol[]
+    function run(family)
+        push!(calls,family)
+        return family===:roof_duality && count(==(:roof_duality),calls)==1 ? 1 : 0
+    end
+    rounds=QUBOPreprocessing._run_legacy_policy!(run,()->true,:legacy_census,
+        QUBOPreprocessing._legacy_policy_settings(:legacy_census,5,10))
+    expected=[:reductions,:roof_duality,:submodular_cut,:maxcut,:reductions,
+              :probing,:roof_duality,:submodular_cut,:maxcut]
+    @test calls==expected
+    @test rounds==2
+    @test count(==(:probing),calls)==1
+    @test count(==(:reductions),calls)==2
+end
+
+@testset "Unsolved strong policy executes and aggregates every enabled flow family" begin
+    # The antiferromagnetic K5 has 20 ground states: every variable and every
+    # pair product vary across them. Strong persistency cannot fix a variable
+    # or contract a pair. Degree four excludes low-degree elimination. The
+    # public input_edges override below is synthetic gate context only; it
+    # disables blocks/probing without allocating a large graph.
+    n=5
+    pairs=[(i,j) for i in 1:n for j in i+1:n]
+    model=QT.Model{Int,Float64,Int}(
+        QT.VariableMap{Int}(Dict(i=>i for i in 1:n),collect(1:n)),
+        QT.Form{Float64}(n,QT.DenseLinearForm{Float64}(zeros(n)),
+            QT.DictQuadraticForm{Float64}(Dict(p=>1.0 for p in pairs)),
+            0.5,0.125;sense=:min,domain=:spin))
+    R=Rational{BigInt}
+    # Independent original-coordinate polynomial, including physical scale
+    # and offset. It uses no package objective or persistency implementation.
+    original_energy(s)=R(1//2)*(R(1//8)+sum(s[i]*s[j] for (i,j) in pairs))
+    states=[[isodd(mask >> (i-1)) ? 1 : -1 for i in 1:n] for mask in 0:31]
+    energies=original_energy.(states)
+    best=minimum(energies)
+    optima=states[findall(==(best),energies)]
+    @test best==-15//16
+    @test length(optima)==20
+    for i in 1:n
+        @test Set(s[i] for s in optima)==Set((-1,1))
+    end
+    for (i,j) in pairs
+        @test Set(s[i]*s[j] for s in optima)==Set((-1,1))
+    end
+    input_n,input_L,input_Q,input_scale,input_offset=QT.qubo(model,:dict;sense=:min,domain=:spin)
+    input_snapshot=(input_n,Dict(input_L),Dict(input_Q),input_scale,input_offset)
+    ws=Workspace(model;rules=:mixed,integerize_scale=false)
+    before_generation=generation(ws)
+    exact_before=policy_exact_state(ws)
+    report=schedule!(ws;policy=:legacy_benchmark,allow_weak=false,input_edges=10001)
+    @test report.policy===:legacy_benchmark && report.policy_version==1
+    @test report.settings.initial_variables==5 && report.settings.initial_edges==10001
+    @test !report.settings.enable_blocks && report.settings.enable_flow && !report.settings.enable_probing
+    @test !report.settings.allow_weak && report.settings.tie_break===:low
+    @test !report.settings.double_probe && !report.settings.contract_relations
+    @test report.settings.relation_work_budget==typemax(Int)
+    @test report.stop_reason===:policy_complete && report.passes==1
+    @test report.initial_variables==report.residual_variables==5 && report.deductions==0
+    @test [f.family for f in report.families]==[:reductions,:roof_duality,:submodular_cut,:maxcut]
+    @test [f.calls for f in report.families]==[2,1,1,1]
+    @test all(f.freed==0 && isfinite(f.time_s) && f.time_s>=0 for f in report.families)
+    @test sum(f.freed for f in report.families)==report.deductions
+    @test report.skipped_families==[:roof_scc,:blocks,:probing]
+    @test generation(report)==before_generation
+    @test policy_exact_state(ws)==exact_before
+    @test export_certificate(ws)===nothing
+    @test isempty(assumptions(ws))
+    after_n,after_L,after_Q,after_scale,after_offset=QT.qubo(model,:dict;sense=:min,domain=:spin)
+    @test (after_n,Dict(after_L),Dict(after_Q),after_scale,after_offset)==input_snapshot
+
+    # Verify the exact residual and reconstruction on all 32 assignments in
+    # original coordinates, independently of package objective evaluation.
+    mat=materialize(ws;coefficient_type=R,map=domain_map(ws;domain=:bool))
+    rn,L,Q,scale,offset=QT.qubo(export_model(mat),:dict;sense=:min,domain=:bool)
+    @test rn==5 && length(Q)==10
+    residual_energies=R[]
+    for mask in 0:31
+        b=[Int(isodd(mask >> (i-1))) for i in 1:rn]
+        s=reconstruct(mat,b).state
+        e=R(scale)*(R(offset)+sum(R(c)*b[i] for (i,c) in L)+
+                   sum(R(c)*b[i]*b[j] for ((i,j),c) in Q))
+        @test all(x in (-1,1) for x in s)
+        @test e==original_energy(s)
+        push!(residual_energies,e)
+    end
+    @test sort(residual_energies)==sort(energies)
+
+    # A separate isolated unary variable forces one independently justified
+    # strong fixing while leaving the same frustrated K5 residual. This gives
+    # the repeated family report a real deduction and retained proof to audit.
+    proof_model=QT.Model{Int,Float64,Int}(
+        QT.VariableMap{Int}(Dict(i=>i for i in 1:6),collect(1:6)),
+        QT.Form{Float64}(6,QT.DenseLinearForm{Float64}([0,0,0,0,0,3]),
+            QT.DictQuadraticForm{Float64}(Dict(p=>1.0 for p in pairs)),
+            0.5,0.125;sense=:min,domain=:spin))
+    proof_ws=Workspace(proof_model;rules=:mixed,integerize_scale=false)
+    proved=schedule!(proof_ws;policy=:legacy_benchmark,allow_weak=false,input_edges=10001)
+    @test proved.initial_variables==6 && proved.residual_variables==5 && proved.deductions==1
+    @test [f.calls for f in proved.families]==[2,1,1,1]
+    @test [f.freed for f in proved.families]==[1,0,0,0]
+    cert=export_certificate(proof_ws)
+    @test cert!==nothing && length(cert.steps)==1 && isempty(cert.assumptions)
+    @test verify_certificate(proof_ws,cert).valid
+    proof_mat=materialize(proof_ws;coefficient_type=R,map=domain_map(proof_ws;domain=:bool))
+    pn,pL,pQ,pscale,poffset=QT.qubo(export_model(proof_mat),:dict;sense=:min,domain=:bool)
+    @test pn==5
+    for mask in 0:31
+        b=[Int(isodd(mask >> (i-1))) for i in 1:pn]
+        s=reconstruct(proof_mat,b).state
+        e=R(pscale)*(R(poffset)+sum(R(c)*b[i] for (i,c) in pL)+
+                    sum(R(c)*b[i]*b[j] for ((i,j),c) in pQ))
+        @test s[6]==-1
+        @test e==original_energy(s)-3//2
+    end
+end
