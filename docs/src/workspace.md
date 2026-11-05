@@ -113,12 +113,16 @@ n original positions, returning zero for fixed variables and compact positive
 indices for free variables. The source's original label order is preserved.
 
 `materialize` and `export_model` are explicit O(n+m) boundaries. With no
-fixings the original bit-preserving identity export is retained. Under
+fixings, coordinate map or normalization, the original bit-preserving identity export is retained. Under
 caller or inferred fixings, default Float64 export requires **every** transformed coefficient
 and constant to be exactly representable, otherwise it raises `ArgumentError`.
 Use `materialize(ws; coefficient_type=Rational{BigInt})` for the exact residual;
-a solver must explicitly support that type. This conservative rule does not
-silently round, rescale or claim a heuristic fallback is certified. Original
+a solver must explicitly support that type. Alternatively, explicitly request
+`materialize(ws; normalization=:integer)` to factor all mapped coefficients and
+the constant into primitive integers and an adjusted common scale. It succeeds
+only when every integer and the scale fit exactly as finite Float64; it adds no
+perturbation. See [exact residuals and recorded solver rounding](@ref "Exact residuals and recorded solver rounding")
+for examples and limits. Original
 reconstruction still reports ordinary Float64 energy with a finite flag, not
 an exact energy or proof that the supplied solution is optimal.
 
