@@ -139,3 +139,40 @@ end
     @test_throws ArgumentError schedule!(b;policy=:budgeted)
     @test_throws ArgumentError schedule_budgeted!(b;time_limit=0,on_family=4)
 end
+
+@testset "Observer failures preserve committed progress and consume shared time" begin
+    ws=Workspace(policy_tiny_model(:bool,:min);rules=:mixed)
+    before=checkpoint(ws)
+    observed=Ref{Any}(nothing)
+    failure=ErrorException("observer failure after committed family")
+    caught=try
+        schedule_budgeted!(ws;time_limit=10,on_family=e->(observed[]=e;throw(failure)))
+        nothing
+    catch err
+        err
+    end
+    @test caught===failure
+    @test observed[].freed>0
+    @test checkpoint(ws)==observed[].after_checkpoint!=before
+    @test verify_certificate(ws,export_certificate(ws)).valid
+
+    n=5
+    vm=QT.VariableMap{Int}(Dict(i=>i for i in 1:n),collect(1:n))
+    model=QT.Model{Int,Float64,Int}(vm,QT.Form{Float64}(n,
+        QT.DenseLinearForm{Float64}(zeros(n)),
+        QT.DictQuadraticForm{Float64}(Dict((i,j)=>1.0 for i in 1:n for j in i+1:n)),
+        1.0,0.0;sense=:min,domain=:spin))
+    events=Any[];callback_ns=Ref(UInt64(0))
+    report=schedule_budgeted!(Workspace(model;rules=:mixed);time_limit=0.1,
+        on_family=e->begin
+            push!(events,e)
+            start=time_ns()
+            sleep(0.15) # Lower bound only: no fragile wall-clock upper bound.
+            callback_ns[]+=time_ns()-start
+        end)
+    @test report.stop_reason===:deadline
+    @test report.residual_variables>0
+    @test length(events)==1 && only(events).family===:cheap
+    @test report.elapsed_s>=callback_ns[]/1e9
+    @test report.elapsed_s>=sum(f.time_s for f in report.families)+callback_ns[]/1e9
+end
