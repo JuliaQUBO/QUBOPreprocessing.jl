@@ -66,10 +66,15 @@ _dyadic_denominators(shift::Int) =
     return den
 end
 
+# Inputs are already normalized: den_shift is nonnegative and num is odd
+# when den_shift is positive (or num == 0 with den_shift == 0).
+@inline function _from_normalized_dyadic(num::Int128, den_shift::Int, denominators::_DyadicDenominators)::_Exact
+    return Base.unsafe_rational(BigInt, BigInt(num), _dyadic_denominator!(denominators, den_shift))
+end
+
 @inline function _from_dyadic_integer(q::Int128, shift::Int, denominators::_DyadicDenominators)::_Exact
     common = iszero(q) ? shift : min(trailing_zeros(q), shift)
-    den = _dyadic_denominator!(denominators, shift - common)
-    return Base.unsafe_rational(BigInt, BigInt(q >> common), den)
+    return _from_normalized_dyadic(q >> common, shift - common, denominators)
 end
 
 @inline function _dyadic_integer(v::Float64, shift::Int)::Int128
@@ -220,29 +225,32 @@ end
 Base.propertynames(::_Incremental, private::Bool=false) =
     (fieldnames(_Incremental)..., _numeric_properties...)
 
-# The three scalar cells (-1, 0, +1) are private to this workspace. Their
-# numerator and denominator BigInts are read-only, just like cached powers.
-# Physical constants are grid-invariant and survive numeric replacement/undo.
-@inline function _physical_constant!(st::_Incremental, index::Int)::_Exact
+# The 31 workspace-owned cells use canonical num/2^den_shift keys: integers
+# -7:7, then odd numerators -7:2:7 at den_shift 1 and 2. Both BigInts remain
+# read-only. Physical keys survive grid changes, numeric replacement and undo.
+@inline function _physical_constant!(st::_Incremental, index::Int, num::Int128, den_shift::Int)::_Exact
     value = st.physical_constants[index]
     if value === nothing
-        value = _from_dyadic_integer(Int128(index - 2), 0, st.denominators)
+        value = _from_normalized_dyadic(num, den_shift, st.denominators)
         st.physical_constants[index] = value
     end
     return value
 end
 
 @inline function _physical(st::_Incremental, q::Int128)
-    iszero(q) && return _physical_constant!(st, 2)
+    iszero(q) && return _physical_constant!(st, 8, Int128(0), 0)
     shift = st.shift
-    # A positive unit must fit before forming its negative. In particular,
-    # neither shifting into the sign bit nor negating typemin(Int128) is safe.
-    if shift < 127
-        unit = Int128(1) << shift
-        q == unit && return _physical_constant!(st, 3)
-        q == -unit && return _physical_constant!(st, 1)
+    common = min(trailing_zeros(q), shift)
+    num = q >> common
+    den_shift = shift - common
+    # Normalize without abs/negation or forming a sign-bit unit. Compare the
+    # Int128 numerator before narrowing it, including at typemin(Int128).
+    if den_shift <= 2 && -7 <= num <= 7
+        n = Int(num)
+        index = den_shift == 0 ? n + 8 : 15 + 8*(den_shift - 1) + (n + 9) ÷ 2
+        return _physical_constant!(st, index, num, den_shift)
     end
-    return _from_dyadic_integer(q, shift, st.denominators)
+    return _from_normalized_dyadic(num, den_shift, st.denominators)
 end
 @inline _physical(st::_Incremental, q::Integer) = _from_dyadic_integer(q, st.shift)
 @inline _physical(st::_Incremental, q::_Exact) = q

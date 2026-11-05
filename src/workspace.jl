@@ -188,7 +188,7 @@ function _incremental_integer(s::_Snapshot, rules::Symbol, degrees::Vector{Int},
     numeric = _IntegerState{I}(adjacency, fields, constant, lower, upper,
         dual_fields, dual_constant, _UndoEntry{I}[], shift, 0, 0)
     return _Incremental(numeric, _dyadic_denominators(shift),
-        Union{Nothing,_Exact}[nothing,nothing,nothing], _label_index_dict(s.labels), adj_pos,
+        fill!(Vector{Union{Nothing,_Exact}}(undef,31),nothing), _label_index_dict(s.labels), adj_pos,
         fill(Int8(2), n), queue, queued, 0, uuid4(), rules, 1,
         Int[], Int[], zeros(Int,n), 0, 0, 0, 0, 0, 0,
         degrees, copy(degrees), elim_queues, elim_queued, [1,1,1,1],

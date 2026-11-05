@@ -635,7 +635,7 @@ end
     R = Rational{BigInt}
     ws = Workspace(fixture([1],[0.0],zeros(1,1);domain=:spin);rules=:mixed)
     st = ws._state
-    @test length(st.physical_constants) == 3 && all(isnothing,st.physical_constants)
+    @test length(st.physical_constants) == 31 && all(isnothing,st.physical_constants)
     constants = Tuple(QUBOPreprocessing._physical(st,Int128(k)) for k in (-1,0,1))
     @test constants == (R(-1),R(0),R(1))
     for shift in (0,1,2,63,126,127,128,1074)
@@ -654,7 +654,7 @@ end
         elseif shift == 127
             minus_one = QUBOPreprocessing._physical(st,typemin(Int128))
             @test minus_one == -1
-            @test numerator(minus_one) !== numerator(constants[1]) # safe general path
+            @test minus_one === constants[1] # canonical physical value on the finer grid
         end
         @test constants == (R(-1),R(0),R(1))
         check_integer_objective(ws,[0.0],zeros(1,1),1.0,0.0,:spin)
@@ -673,6 +673,7 @@ end
     ws = Workspace(fixture(collect(1:4),L,Q;domain=:spin);rules=:mixed)
     st = ws._state
     constants = Tuple(QUBOPreprocessing._physical(st,Int128(k)) for k in (-1,0,1))
+    expanded = Dict(R(k)=>QUBOPreprocessing._physical(st,Int128(k)) for k in (-4,-2,2,4))
     pool = st.physical_constants
     root = checkpoint(ws)
     assume!(ws,4,1)
@@ -686,6 +687,15 @@ end
         for k in (-1,0,1)
             @test QUBOPreprocessing._physical(st,Int128(k)*(Int128(1)<<shift)) === constants[k+2]
         end
+        for value in (R(-4),R(-2),R(-1,2),R(-1,4),R(1,4),R(1,2),R(2),R(4))
+            actual = QUBOPreprocessing._physical(st,Int128(value*(big(1)<<shift)))
+            @test actual == value
+            if haskey(expanded,value)
+                @test actual === expanded[value]
+            else
+                expanded[value] = actual
+            end
+        end
         @test verify_certificate(ws,proof).valid
         check_integer_objective(ws,L,Q,1.0,0.0,:spin)
     end
@@ -697,6 +707,7 @@ end
     @test QUBOPreprocessing._physical(st,Int128(0)) === constants[2]
     @test QUBOPreprocessing._physical(st,st.constant) == 2
     rollback!(ws,root)
+    @test all(value==key for (key,value) in expanded)
     @test constants == (R(-1),R(0),R(1))
     check_integer_objective(ws,L,Q,1.0,0.0,:spin)
 end
@@ -705,14 +716,15 @@ end
     R = Rational{BigInt}
     poison_owned!(q) = (Base.GMP.MPZ.set!(numerator(q),BigInt(777));
                         Base.GMP.MPZ.set!(denominator(q),BigInt(7)))
-    L = [0.0,0.0,0.0,-1.0]
-    Q = [0.0 1.0 -1.0 0.0; zeros(3,4)]
-    for domain in (:bool,:spin)
-        model = fixture(collect(1:4),L,Q;domain,offset=1.0)
+    for domain in (:bool,:spin),gain in (1.0,2.0,4.0,0.5,0.25)
+        L = [0.0,0.0,0.0,-gain]
+        Q = [0.0 gain -gain 0.0; zeros(3,4)]
+        model = fixture(collect(1:4),L,Q;domain,offset=gain)
         ws = Workspace(model;rules=:dominance)
         st = ws._state
-        unit = Int128(1)<<st.shift
+        unit = Int128(R(gain)*(big(1)<<st.shift))
         constants = Tuple(QUBOPreprocessing._physical(st,Int128(k)*unit) for k in (-1,0,1))
+        @test constants == (-R(gain),R(0),R(gain))
         other = Workspace(model;rules=:dominance)
         copied = deepcopy(ws)
         for owner in (other,copied),k in (-1,0,1)
@@ -727,7 +739,7 @@ end
         @test attempt.certificate !== nothing && verify_certificate(ws,attempt.certificate).valid
         poison_owned!(only(attempt.certificate.steps).lower)
         @test verify_certificate(ws,prove_dominance(ws,4).certificate).valid
-        @test constants == (R(-1),R(0),R(1))
+        @test constants == (-R(gain),R(0),R(gain))
         report = propagate!(ws)
         @test report.deductions == 1
         raw = st.trail[only(st.fixes)].proof
@@ -744,7 +756,7 @@ end
             poison_owned!(q)
         end
         fresh = export_model(result)
-        @test linear(fresh)[1] == 0 && quadratic(fresh)[1,2] == 1 && quadratic(fresh)[1,3] == -1
+        @test linear(fresh)[1] == 0 && quadratic(fresh)[1,2] == gain && quadratic(fresh)[1,3] == -gain
         @test QT.offset(fresh) == 0 && QT.scale(fresh) == 1
         # Certificate exports, materialized proof chains and reduction queries
         # all pass through owned-copy paths, even when raw trail bounds intern.
@@ -757,15 +769,102 @@ end
             end
         end
         @test verify_certificate(ws,export_certificate(ws)).valid
-        @test constants == (R(-1),R(0),R(1))
-        check_integer_objective(ws,L,Q,1.0,1.0,domain)
+        @test constants == (-R(gain),R(0),R(gain))
+        check_integer_objective(ws,L,Q,1.0,gain,domain)
         for owner in (other,copied)
-            check_integer_objective(owner,L,Q,1.0,1.0,domain)
+            check_integer_objective(owner,L,Q,1.0,gain,domain)
         end
         pool = st.physical_constants
         reset!(ws,model)
         @test ws._state.physical_constants !== pool && all(isnothing,ws._state.physical_constants)
         @test numerator(QUBOPreprocessing._physical(ws._state,unit)) !== numerator(constants[3])
-        check_integer_objective(ws,L,Q,1.0,1.0,domain)
+        check_integer_objective(ws,L,Q,1.0,gain,domain)
     end
+end
+
+@testset "canonical small dyadic membership and normalization share physical keys" begin
+    R = Rational{BigInt}
+    values = R[R(n,big(1)<<d) for d in 0:2 for n in -7:7 if d==0 || isodd(n)]
+    @test length(unique(values)) == 31
+    ws = Workspace(fixture([1],[0.0],zeros(1,1);domain=:spin);rules=:mixed)
+    st = ws._state
+    @test length(st.physical_constants) == 31 && all(isnothing,st.physical_constants)
+    QUBOPreprocessing._ensure_grid!(st,2)
+    interned = Dict(value=>QUBOPreprocessing._physical(st,Int128(4value)) for value in values)
+    @test count(!isnothing,st.physical_constants) == 31
+    @test Set(st.physical_constants) == Set(values)
+    for shift in (2,3,20,120,126,127,128,129,130,1074)
+        QUBOPreprocessing._ensure_grid!(st,shift) # zero state stays Int128
+        @test eltype(st.fields) === Int128
+        for value in values
+            numerator_on_grid = value*(big(1)<<shift)
+            if denominator(numerator_on_grid)==1 && typemin(Int128)<=numerator(numerator_on_grid)<=typemax(Int128)
+                actual = QUBOPreprocessing._physical(st,Int128(numerator_on_grid))
+                @test actual == value
+                @test actual === interned[value]
+                @test gcd(numerator(actual),denominator(actual)) == 1
+            end
+        end
+        for q in (typemin(Int128),typemax(Int128),Int128(-8),Int128(8),Int128(-1),Int128(1))
+            expected = R(q)/(big(1)<<shift)
+            first = QUBOPreprocessing._physical(st,q)
+            second = QUBOPreprocessing._physical(st,q)
+            @test first == second == expected
+            if expected in values
+                @test first === interned[expected]
+            else
+                @test numerator(first) !== numerator(second)
+            end
+        end
+        if shift in (127,128,129)
+            expected = R(-1,big(1)<<(shift-127))
+            @test QUBOPreprocessing._physical(st,typemin(Int128)) === interned[expected]
+        elseif shift == 130
+            first = QUBOPreprocessing._physical(st,typemin(Int128))
+            second = QUBOPreprocessing._physical(st,typemin(Int128))
+            @test first == second == R(-1,8)
+            @test numerator(first) !== numerator(second)
+        end
+        @test all(value==key for (key,value) in interned)
+    end
+    # Integer and half grids admit only the corresponding subset, including
+    # representations whose raw numerator exceeds7 but normalizes into S.
+    for shift in (0,1)
+        low = Workspace(fixture([1],[0.0],zeros(1,1);domain=:spin);rules=:mixed)
+        QUBOPreprocessing._ensure_grid!(low._state,shift)
+        for q in Int128.(-16:16)
+            expected = R(q)/(big(1)<<shift)
+            first = QUBOPreprocessing._physical(low._state,q)
+            second = QUBOPreprocessing._physical(low._state,q)
+            @test first == second == expected
+            @test (numerator(first) === numerator(second)) == (expected in values)
+        end
+    end
+    # Denominator and numerator bounds are exact: represented0.1, eighths and
+    # integers8 stay on the previous conversion path, with no approximation.
+    for coefficient in (0.1,-0.1,0.125,-0.125,8.0,-8.0)
+        fallback = Workspace(fixture([1],[coefficient],zeros(1,1);domain=:spin);rules=:mixed)
+        q = only(fallback._state.fields)
+        first = QUBOPreprocessing._physical(fallback._state,q)
+        second = QUBOPreprocessing._physical(fallback._state,q)
+        @test first == second == R(coefficient)
+        @test numerator(first) !== numerator(second)
+        @test all(isnothing,fallback._state.physical_constants)
+        check_integer_objective(fallback,[coefficient],zeros(1,1),1.0,0.0,:spin)
+    end
+    copied = deepcopy(ws)
+    @test copied._state.physical_constants !== st.physical_constants
+    for value in values
+        position = findfirst(==(value),st.physical_constants)
+        other = copied._state.physical_constants[position]
+        @test other == value
+        @test numerator(other) !== numerator(interned[value])
+        @test denominator(other) !== denominator(interned[value])
+    end
+    # Generic BigInt dispatch remains exact without populating the small pool.
+    wide = Workspace(fixture([1],[0.0],zeros(1,1);domain=:spin);rules=:mixed)
+    for q in (big(0),big(2),big(-4),big(1)<<200)
+        @test QUBOPreprocessing._physical(wide._state,q) == R(q)
+    end
+    @test all(isnothing,wide._state.physical_constants)
 end
