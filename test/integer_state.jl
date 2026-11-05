@@ -868,3 +868,206 @@ end
     end
     @test all(isnothing,wide._state.physical_constants)
 end
+
+
+@testset "physical Float view preserves rational conversion bits in public contexts" begin
+    R = Rational{BigInt}
+    bits(x) = reinterpret(UInt64,x)
+    bound = Int128(1) << 53
+    # Explicit numerical boundaries: exactly represented normals, precision
+    # loss, typemin normalization, subnormals, overflow and represented0.1.
+    samples = Tuple{Int128,Int}[
+        (0,0),(0,1075),(1,0),(-1,0),(3,1),(-7,2),
+        (bound-1,0),(bound,53),(bound+1,0),(-bound-1,53),
+        (typemax(Int128),0),(typemin(Int128),0),
+        (typemin(Int128),127),(typemin(Int128),128),
+        (typemin(Int128),129),(typemin(Int128),130),
+        (typemin(Int128),1202),(1,1021),(-1,1021),
+        (1,1022),(-1,1022),(3,1074),(-3,1074),
+        (1,1075),(-1,1075),(1,1200),(-1,1200),
+        (Int128(numerator(R(0.1))),55),(bound+11,1075),
+    ]
+    saved_ftz = get_zero_subnormals()
+    try
+        for ftz in (false,true)
+            set_zero_subnormals(ftz)
+            @test get_zero_subnormals() == ftz
+            for p in (24,32,53,64,256), mode in (RoundNearest,RoundUp,RoundDown,RoundToZero)
+                setprecision(BigFloat,p) do
+                    setrounding(BigFloat,mode) do
+                        ws = Workspace(fixture([1],[0.0],zeros(1,1);domain=:spin);rules=:mixed)
+                        st = ws._state
+                        for shift in sort!(unique(last.(samples)))
+                            QUBOPreprocessing._ensure_grid!(st,shift)
+                            for (q,s) in samples
+                                s == shift || continue
+                                exact = R(BigInt(q),big(1)<<s)
+                                expected = Float64(exact)
+                                actual = QUBOPreprocessing._physical_float(st,q)
+                                @test bits(actual) == bits(expected)
+                                # BigInt and exact inputs retain the general
+                                # rational conversion, including context rounding.
+                                @test bits(QUBOPreprocessing._physical_float(st,BigInt(q))) == bits(expected)
+                                @test bits(QUBOPreprocessing._physical_float(st,exact)) == bits(expected)
+                                if typemin(Int64) <= q <= typemax(Int64)
+                                    @test bits(QUBOPreprocessing._physical_float(st,Int64(q))) == bits(expected)
+                                end
+                            end
+                        end
+                        for (q,shift) in ((big(1)<<1100,0),(-(big(1)<<1100),0),
+                                          (big(1),20000),(big(-1),20000))
+                            wide = Workspace(fixture([1],[0.0],zeros(1,1);domain=:spin);rules=:mixed)
+                            QUBOPreprocessing._ensure_grid!(wide._state,shift)
+                            @test wide._state.shift == shift
+                            @test bits(QUBOPreprocessing._physical_float(wide._state,q)) == bits(Float64(R(q,big(1)<<shift)))
+                        end
+                    end
+                end
+            end
+        end
+    finally
+        set_zero_subnormals(saved_ftz)
+    end
+    @test get_zero_subnormals() == saved_ftz
+end
+
+@testset "integer Float coupling keeps raw conversion before Bool quarter scaling" begin
+    R = Rational{BigInt}
+    bits(x) = reinterpret(UInt64,x)
+    saved_ftz = get_zero_subnormals()
+    try
+        for ftz in (false,true)
+            set_zero_subnormals(ftz)
+            for p in (24,32,53,64,256), mode in (RoundNearest,RoundUp,RoundDown,RoundToZero)
+                setprecision(BigFloat,p) do
+                    setrounding(BigFloat,mode) do
+                        for domain in (:bool,:spin)
+                            ws = Workspace(fixture([1],[0.0],zeros(1,1);domain);rules=:mixed)
+                            for (q,shift) in ((Int128(0),2),(Int128(-3),2),
+                                              (Int128(numerator(R(0.1))),55),
+                                              (Int128(9007199254741003),1075),
+                                              (typemin(Int128),1202))
+                                QUBOPreprocessing._ensure_grid!(ws._state,shift)
+                                raw = R(q,big(1)<<ws._state.shift)
+                                expected = domain === :bool ? 0.25*Float64(raw) : Float64(raw)
+                                @test bits(QUBOPreprocessing._float_spin_coupling(ws,q)) == bits(expected)
+                                @test bits(QUBOPreprocessing._float_spin_coupling(ws,BigInt(q))) == bits(expected)
+                                @test bits(QUBOPreprocessing._float_spin_coupling(ws,raw)) == bits(expected)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    finally
+        set_zero_subnormals(saved_ftz)
+    end
+    @test get_zero_subnormals() == saved_ftz
+    # These two expressions differ by one subnormal unit: do not commute
+    # Bool scaling with the raw Float64 conversion.
+    try
+        set_zero_subnormals(false)
+        setprecision(BigFloat,256) do
+            setrounding(BigFloat,RoundNearest) do
+                raw = R(9007199254741003,big(1)<<1075)
+                @test bits(0.25*Float64(raw)) != bits(Float64(raw/4))
+            end
+        end
+    finally
+        set_zero_subnormals(saved_ftz)
+    end
+end
+
+@testset "Float consumers agree with original three-variable objectives and undo" begin
+    R = Rational{BigInt}
+    bits(x) = reinterpret(UInt64,x)
+    L = [0.0,1.0,-2.0]
+    Q = [0.0 1.0 -0.5; 0.0 0.0 0.25; 0.0 0.0 0.0]
+    for domain in (:bool,:spin), sense in (:min,:max)
+        ws = Workspace(fixture([1,2,3],L,Q;domain,sense);rules=:mixed)
+        cp = checkpoint(ws)
+        initial = (copy(ws._state.fields),copy(ws._state.dual_fields),ws._state.constant)
+        for conditioned in (false,true)
+            conditioned && assume!(ws,3,1)
+            free = conditioned ? [1,2] : [1,2,3]
+            witness = domain === :bool ? [0,1,conditioned ? 1 : 0] : [-1,1,conditioned ? 1 : -1]
+            @test QUBOPreprocessing._can_use_float_spin_heuristic(ws,free)
+            actual = QUBOPreprocessing._try_build_float_spin_subproblem(ws,free)
+            @test actual !== nothing
+            h,adj,l1 = actual
+            for i in 1:3
+                if i in free
+                    # Condition the original scalar polynomial independently,
+                    # then apply x=(s+1)/2 only for a native Bool objective.
+                    field = R(L[i]) + (conditioned ? R(Q[i,3]) : R(0))
+                    neighbors = [(j,R(Q[min(i,j),max(i,j)])) for j in free if j != i && !iszero(Q[min(i,j),max(i,j)])]
+                    spinfield = domain === :bool ? field/2 + sum((q/4 for (_,q) in neighbors);init=R(0)) : field
+                    expected_adj = [(j,domain === :bool ? 0.25*Float64(q) : Float64(q)) for (j,q) in neighbors]
+                    @test bits(h[i]) == bits(Float64(spinfield))
+                    @test [(j,bits(q)) for (j,q) in adj[i]] == [(j,bits(q)) for (j,q) in expected_adj]
+                    expected_l1 = 0.0
+                    for (_,q) in expected_adj
+                        expected_l1 += abs(q)
+                    end
+                    @test bits(l1[i]) == bits(expected_l1)
+                else
+                    @test iszero(h[i]) && isempty(adj[i]) && iszero(l1[i])
+                end
+            end
+            # Ratios from this polynomial give distinct rankings, including
+            # the zero conditioned Bool field and min/max sign placement.
+            coercive = conditioned ? [2,1] : [3,2,1]
+            extremal = sense === :min ? copy(free) : reverse(free)
+            @test QUBOPreprocessing._order_probing_candidates!(ws,copy(free),witness,:coercive) == coercive
+            @test QUBOPreprocessing._order_probing_candidates!(ws,copy(free),witness,:extremal) == extremal
+            feasible = [x for x in states(3,domain) if !conditioned || x[3] == 1]
+            energies = [reference(L,Q,1.0,0.0,x,R) for x in feasible]
+            optimum = (sense === :min ? minimum : maximum)(energies)
+            for gauge in (-1,1)
+                map = domain_map(ws;domain=:spin,gauge=fill(gauge,3))
+                mapped = coercive_field_witness(ws;map,polish=true,sequential=true,max_flips=8)
+                original = lift_state(map,mapped)
+                @test original in feasible
+                @test reference(L,Q,1.0,0.0,original,R) == optimum
+            end
+            check_integer_objective(ws,L,Q,1.0,0.0,domain)
+        end
+        rollback!(ws,cp)
+        @test isempty(assumptions(ws))
+        @test (ws._state.fields,ws._state.dual_fields,ws._state.constant) == initial
+        check_integer_objective(ws,L,Q,1.0,0.0,domain)
+    end
+end
+
+@testset "Float eligibility rejects underflowed nonzero fields before conversion" begin
+    R = Rational{BigInt}
+    saved_ftz = get_zero_subnormals()
+    try
+        # Construct native subnormal inputs before enabling FTZ: fixture
+        # creation must not erase a coefficient before the consumer sees it.
+        set_zero_subnormals(false)
+        fixtures = [begin
+            coefficient = sign*nextfloat(0.0)
+            ws = Workspace(fixture([1],[coefficient],zeros(1,1);domain);rules=:mixed)
+            exactfield = domain === :bool ? R(coefficient)/2 : R(coefficient)
+            (ws,exactfield)
+        end for domain in (:bool,:spin) for sign in (-1,1)]
+        for ftz in (false,true)
+            set_zero_subnormals(ftz)
+            for p in (24,53,256), mode in (RoundNearest,RoundUp,RoundDown,RoundToZero)
+                setprecision(BigFloat,p) do
+                    setrounding(BigFloat,mode) do
+                        for (ws,exactfield) in fixtures
+                            @test !iszero(exactfield)
+                            @test !QUBOPreprocessing._can_use_float_spin_heuristic(ws,[1])
+                            @test QUBOPreprocessing._try_build_float_spin_subproblem(ws,[1]) === nothing
+                        end
+                    end
+                end
+            end
+        end
+    finally
+        set_zero_subnormals(saved_ftz)
+    end
+    @test get_zero_subnormals() == saved_ftz
+end

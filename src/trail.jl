@@ -256,6 +256,25 @@ end
 @inline _physical(st::_Incremental, q::_Exact) = q
 @inline _physical(q::Integer, shift::Int) = _from_dyadic_integer(q, shift)
 
+# Float-only consumers can avoid constructing a rational when the normalized
+# dyadic is exactly representable as a normal binary64. Keep the old conversion
+# for low BigFloat precision, where Rational{BigInt} conversion can round first,
+# and for near/subnormal results, which can depend on the caller's FTZ setting.
+@inline function _physical_float(st::_Incremental, q::Int128)
+    iszero(q) && return 0.0
+    shift = st.shift
+    common = min(trailing_zeros(q), shift)
+    num = q >> common
+    den_shift = shift - common
+    if 0 <= den_shift <= 1021 && -(Int128(1) << 53) <= num <= (Int128(1) << 53) &&
+       precision(BigFloat) >= 53
+        return ldexp(Float64(Int64(num)), -den_shift)
+    end
+    return Float64(_physical(st, q))
+end
+@inline _physical_float(st::_Incremental, q::Integer) = Float64(_physical(st, q))
+@inline _physical_float(st::_Incremental, q::_Exact) = Float64(q)
+
 function _grid_shift(q::_Exact)
     d = denominator(q)
     ispow2(d) || throw(ArgumentError("integer workspace requires dyadic reduction coefficients"))

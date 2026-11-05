@@ -438,6 +438,12 @@ const _MIN_FLOAT_SPIN_COEFF = floatmin(Float64) * 1e16
 @inline _float_spin_coupling(ws::Workspace, q::_Exact) =
     ws._snapshot.domain === QT.SpinDomain ? Float64(q) : 0.25 * Float64(q)
 
+@inline _float_spin_coupling(ws::Workspace, q::Integer) =
+    ws._snapshot.domain === QT.SpinDomain ? _physical_float(ws._state, q) : 0.25 * _physical_float(ws._state, q)
+
+@inline _spin_field_numerator(ws::Workspace, i::Int) =
+    ws._snapshot.domain === QT.SpinDomain ? ws._state.fields[i] : ws._state.dual_fields[i]
+
 function _can_use_float_spin_heuristic(ws::Workspace, indices::Vector{Int}; deadline_ns=nothing)
     st = ws._state
     total_abs = 0.0
@@ -446,9 +452,9 @@ function _can_use_float_spin_heuristic(ws::Workspace, indices::Vector{Int}; dead
         scanned += 1
         # On expiry the answer is false; callers check the deadline before the exact path
         _poll_expired(scanned, deadline_ns) && return false
-        h_ex = _spin_field(ws, i)
-        if !iszero(h_ex)
-            hf = Float64(h_ex)
+        h_raw = _spin_field_numerator(ws, i)
+        if !iszero(h_raw)
+            hf = _physical_float(st, h_raw)
             (isfinite(hf) && abs(hf) >= _MIN_FLOAT_SPIN_COEFF) || return false
             total_abs += abs(hf)
         end
@@ -456,7 +462,6 @@ function _can_use_float_spin_heuristic(ws::Workspace, indices::Vector{Int}; dead
             scanned += 1
             _poll_expired(scanned, deadline_ns) && return false
             (st.fixed[j] == 2 && !iszero(q)) || continue
-            q = _physical(st, q)
             jf = _float_spin_coupling(ws, q)
             (isfinite(jf) && abs(jf) >= _MIN_FLOAT_SPIN_COEFF) || return false
             total_abs += abs(jf)
@@ -476,9 +481,9 @@ function _try_build_float_spin_subproblem(ws::Workspace, free_vars::Vector{Int};
     @inbounds for i in free_vars
         scanned += 1
         _poll_expired(scanned, deadline_ns) && return nothing
-        h_ex = _spin_field(ws, i)
-        if !iszero(h_ex)
-            hf = Float64(h_ex)
+        h_raw = _spin_field_numerator(ws, i)
+        if !iszero(h_raw)
+            hf = _physical_float(st, h_raw)
             (isfinite(hf) && abs(hf) >= _MIN_FLOAT_SPIN_COEFF) || return nothing
             h_f[i] = hf
             total_abs += abs(hf)
@@ -487,7 +492,6 @@ function _try_build_float_spin_subproblem(ws::Workspace, free_vars::Vector{Int};
         sizehint!(ai, length(st.adjacency[i]))
         l1 = 0.0
         for (j, q) in st.adjacency[i]
-            q = _physical(st, q)
             scanned += 1
             _poll_expired(scanned, deadline_ns) && return nothing
             (st.fixed[j] == 2 && !iszero(q)) || continue
@@ -995,10 +999,9 @@ function _order_probing_candidates!(
             @inbounds for i in cand_indices
                 polled += 1
                 _poll_expired(polled, deadline_ns) && return cand_indices
-                abs_h = _canon_zero(abs(Float64(_spin_field(ws, i))))
+                abs_h = _canon_zero(abs(_physical_float(st, _spin_field_numerator(ws, i))))
                 l1 = 0.0
                 for (j, q) in st.adjacency[i]
-                    q = _physical(st, q)
                     polled += 1
                     _poll_expired(polled, deadline_ns) && return cand_indices
                     (st.fixed[j] == 2 && !iszero(q)) || continue
@@ -1019,13 +1022,12 @@ function _order_probing_candidates!(
             @inbounds for i in cand_indices
                 polled += 1
                 _poll_expired(polled, deadline_ns) && return cand_indices
-                h_i = _canon_zero(Float64(_spin_field(ws, i)))
+                h_i = _canon_zero(_physical_float(st, _spin_field_numerator(ws, i)))
                 s_i = is_bool ? (2 * w_vec[i] - 1) : w_vec[i]
                 fav_h = _canon_zero((-direction * s_i) * h_i)
                 l1 = 0.0
                 eff_h = h_i
                 for (j, q) in st.adjacency[i]
-                    q = _physical(st, q)
                     polled += 1
                     _poll_expired(polled, deadline_ns) && return cand_indices
                     (st.fixed[j] == 2 && !iszero(q)) || continue
