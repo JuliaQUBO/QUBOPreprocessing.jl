@@ -34,11 +34,11 @@ function check_engine(ws,labels,L,Q,scale,offset,domain,sense)
                 b += domain === :bool ? max(0,q) : abs(q)
             end
         end
-        @test st.fields[i] == field
-        @test st.lower[i] == field+a
-        @test st.upper[i] == field+b
+        @test Rational{BigInt}(st.fields[i]) / (big(1)<<st.shift) == field
+        @test Rational{BigInt}(st.lower[i]) / (big(1)<<st.shift) == field+a
+        @test Rational{BigInt}(st.upper[i]) / (big(1)<<st.shift) == field+b
     end
-    @test st.constant == c
+    @test Rational{BigInt}(st.constant) / (big(1)<<st.shift) == c
     callers = Dict(assumptions(ws))
     scope = Tuple(i=>callers[labels[i]] for i in 1:n if haskey(callers,labels[i]))
     optima = oracle_optima(L,Q,scale,offset,domain,sense,scope)
@@ -158,7 +158,7 @@ end
     c = export_certificate(ws)
     @test c.steps[1].scope_length == 1
     @test c.steps[1].constant == 0
-    @test ws._state.constant == 2
+    @test Rational{BigInt}(ws._state.constant) / (big(1)<<ws._state.shift) == 2
     @test verify_certificate(ws,c).valid
     propagate!(ws)
     c = export_certificate(ws)

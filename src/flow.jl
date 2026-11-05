@@ -650,6 +650,7 @@ function _build_implication_network(
             end
         end
         for (v, q) in st.adjacency[u]
+            q = _physical(st, q)
             _expired(deadline_ns) && return (false, :deadline, nothing, _Exact(0), graph_work, exact_work)
             graph_work < max_work || return (false, :work_limit, nothing, _Exact(0), graph_work, exact_work)
             graph_work += 1
@@ -770,6 +771,7 @@ function _recognize_component_indices(
             return SubmodularComponent{V}(vars, comp_indices, false, false, :work_limit, Int[], work)
         work += 1
         for (v, q) in st.adjacency[u]
+            q = _physical(st, q)
             _expired(deadline_ns) &&
                 return SubmodularComponent{V}(vars, comp_indices, false, false, :deadline, Int[], work)
             work < max_work ||
@@ -796,6 +798,7 @@ function _recognize_component_indices(
             u = queue[head]
             head += 1
             for (v, q) in st.adjacency[u]
+                q = _physical(st, q)
                 _expired(deadline_ns) &&
                     return SubmodularComponent{V}(vars, comp_indices, true, false, :deadline, Int[], work)
                 work < max_work ||
@@ -885,6 +888,7 @@ function recognize_submodular_components(
             u = queue[head]
             head += 1
             for (v, q) in st.adjacency[u]
+                q = _physical(st, q)
                 _expired(deadline_ns) && return (SubmodularComponent{V}[], :deadline, work)
                 work < max_work || return (SubmodularComponent{V}[], :work_limit, work)
                 work += 1
@@ -948,6 +952,7 @@ function _build_submodular_cut_network(
             end
         end
         for (v, q) in st.adjacency[u]
+            q = _physical(st, q)
             _expired(deadline_ns) && return (false, :deadline, nothing, _Exact(0), graph_work, exact_work)
             graph_work < max_work || return (false, :work_limit, nothing, _Exact(0), graph_work, exact_work)
             graph_work += 1

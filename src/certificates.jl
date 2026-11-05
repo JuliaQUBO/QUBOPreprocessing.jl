@@ -812,6 +812,7 @@ function _marginal_dominance_witness(
         u = comp[head]
         head += 1
         for (w, q) in st.adjacency[u]
+            q = _physical(st, q)
             _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, 1, exact_work)
             visits < max_work || return (nothing, :work_limit, :exact, visits, 1, exact_work)
             visits += 1
@@ -835,6 +836,7 @@ function _marginal_dominance_witness(
     for a in 1:length(all_nodes)
         u = all_nodes[a]
         for (w, q) in st.adjacency[u]
+            q = _physical(st, q)
             st.fixed[w] == 2 && u < w && !iszero(q) || continue
             b = findfirst(==(w), all_nodes)
             b !== nothing && push!(sub_edges, (a, b, q))
@@ -854,7 +856,7 @@ function _marginal_dominance_witness(
             end
             e = _Exact(0)
             for a in 1:length(all_nodes)
-                e += st.fields[all_nodes[a]] * vals[a]
+                e += _physical(st, st.fields[all_nodes[a]]) * vals[a]
             end
             for (a, b, q) in sub_edges
                 e += q * vals[a] * vals[b]
@@ -923,7 +925,7 @@ function _dominance_witness(ws::Workspace, i::Int; map::Union{Nothing,DomainGaug
     low_target = target_dom === QT.BoolDomain ? 0 : -1
     gauged_bool = map !== nothing && map.target_domain === :bool && !map._identity_gauge
     init_field = if map === nothing
-        direction * st.fields[i]
+        direction * _physical(st, st.fields[i])
     elseif map.target_domain === :spin
         direction * map.gauge[i] * _spin_field(ws, i)
     elseif !gauged_bool
@@ -931,15 +933,17 @@ function _dominance_witness(ws::Workspace, i::Int; map::Union{Nothing,DomainGaug
     else
         2 * direction * map.gauge[i] * _spin_field(ws, i)
     end
-    lo, hi = _enclose(init_field)
+    lo, hi = map === nothing ? _enclose_grid(st, direction * st.fields[i]) : _enclose(init_field)
     lo_in, hi_in = hi, lo
     visits = 0
     for (j,q) in st.adjacency[i]
+        q_raw = q
+        map === nothing || (q = _physical(st, q))
         _expired(deadline_ns) && return (nothing,:deadline,:interval,visits,0,0)
         visits += 1
         st.fixed[j] == 2 || continue
         if map === nothing
-            q_lo, q_hi = _enclose(q)
+            q_lo, q_hi = _enclose_grid(st, q_raw)
             c_lo, c_hi = direction >= 0 ? (q_lo, q_hi) : (-q_hi, -q_lo)
             if s.domain === QT.BoolDomain
                 a, b = min(0.0, c_lo), max(0.0, c_hi)
@@ -995,10 +999,12 @@ function _dominance_witness(ws::Workspace, i::Int; map::Union{Nothing,DomainGaug
     # both passes, including fixed neighbors skipped by arithmetic.
     degree <= max_work - visits || return (nothing,:work_limit,:interval,visits,0,0)
     degree < max_exact_work || return (nothing,:verification_limit,:interval,visits,0,0)
-    lower = init_field
+    lower = map === nothing ? direction * BigInt(st.fields[i]) : init_field
     upper = lower
     exact_work = 1
     for (j,q) in st.adjacency[i]
+        q_raw = q
+        map === nothing || (q = _physical(st, q))
         _expired(deadline_ns) && return (nothing,:deadline,:exact,visits,1,exact_work)
         visits += 1
         st.fixed[j] == 2 || continue
@@ -1026,7 +1032,8 @@ function _dominance_witness(ws::Workspace, i::Int; map::Union{Nothing,DomainGaug
     if mapped_val !== nothing && (req_mapped === nothing || mapped_val == req_mapped)
         val = map === nothing ? mapped_val : _lift_index_value(map, i, mapped_val)
         c_val = _mapped_constant(ws, map)
-        step = DominanceStep(i,val,deepcopy(lower),deepcopy(upper),deepcopy(c_val),predecessors,:exact,scope_length,:strong)
+        step = DominanceStep(i,val, map === nothing ? _physical(st, lower) : deepcopy(lower),
+            map === nothing ? _physical(st, upper) : deepcopy(upper),deepcopy(c_val),predecessors,:exact,scope_length,:strong)
         return (step,:proved,:exact,visits,1,exact_work)
     end
     allow_weak || return (nothing,:not_strict,:exact,visits,1,exact_work)
@@ -1039,7 +1046,8 @@ function _dominance_witness(ws::Workspace, i::Int; map::Union{Nothing,DomainGaug
     if weak_mapped !== nothing
         val = map === nothing ? weak_mapped : _lift_index_value(map, i, weak_mapped)
         c_val = _mapped_constant(ws, map)
-        step = DominanceStep(i,val,deepcopy(lower),deepcopy(upper),deepcopy(c_val),predecessors,:exact,scope_length,:weak)
+        step = DominanceStep(i,val, map === nothing ? _physical(st, lower) : deepcopy(lower),
+            map === nothing ? _physical(st, upper) : deepcopy(upper),deepcopy(c_val),predecessors,:exact,scope_length,:weak)
         return (step,:proved,:exact,visits,1,exact_work)
     end
     return _marginal_dominance_witness(
@@ -1050,10 +1058,11 @@ end
 
 function _relation_deltas(ws::Workspace, u::Int, v::Int, orig_σ::Int)
     st, s = ws._state, ws._snapshot
-    f_u = st.fields[u]
+    f_u = _physical(st, st.fields[u])
     q_uv = _Exact(0)
     other_edges = Pair{Int,_Exact}[]
     for (w, q) in st.adjacency[u]
+        q = _physical(st, q)
         st.fixed[w] == 2 || continue
         if w == v
             q_uv = q
@@ -1124,6 +1133,7 @@ function _relation_witness(ws::Workspace, u::Int, v::Int;
     visits = 0
     is_spin_dom = s.domain === QT.SpinDomain
     for (w, q) in st.adjacency[u]
+        q = _physical(st, q)
         _expired(deadline_ns) && return (nothing, :deadline, :interval, visits, 0, 0)
         visits += 1
         st.fixed[w] == 2 || continue
@@ -1144,7 +1154,7 @@ function _relation_witness(ws::Workspace, u::Int, v::Int;
             rad_other_lo = _prevfloat_finite(rad_other_lo + m_in)
             pos_vw = get(st.adj_pos[v], w, 0)
             if pos_vw != 0
-                q_vw = st.adjacency[v][pos_vw].second
+                q_vw = _physical(st, st.adjacency[v][pos_vw].second)
                 if !iszero(q_vw)
                     qv_lo, qv_hi = _enclose(q_vw)
                     if !is_spin_dom
@@ -1185,8 +1195,8 @@ function _relation_witness(ws::Workspace, u::Int, v::Int;
     has_summary = st.lower !== nothing && st.upper !== nothing
     rad_v_other_lo = 0.0
     if has_summary
-        up_v_lo, _ = _enclose(st.upper[v])
-        _, lo_v_hi = _enclose(st.lower[v])
+        up_v_lo, _ = _enclose(_physical(st, st.upper[v]))
+        _, lo_v_hi = _enclose(_physical(st, st.lower[v]))
         scale_inv = is_spin_dom ? 0.5 : 0.25
         tot_v_lo = _prevfloat_finite(scale_inv * _prevfloat_finite(up_v_lo - lo_v_hi))
         j_abs_hi = max(abs(j_uv_lo), abs(j_uv_hi))
@@ -1240,6 +1250,7 @@ function _relation_witness(ws::Workspace, u::Int, v::Int;
     center_exact = _Exact(0)
     exact_work = 1
     for (w, q) in st.adjacency[u]
+        q = _physical(st, q)
         _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, 1, exact_work)
         visits += 1
         st.fixed[w] == 2 || continue
@@ -1288,6 +1299,7 @@ function _relation_witness(ws::Workspace, u::Int, v::Int;
         diff_pos = rad_u_other
         diff_neg = rad_u_other
         for (w, q) in st.adjacency[v]
+            q = _physical(st, q)
             _expired(deadline_ns) && return (nothing, :deadline, err_method, visits, 1, exact_work)
             visits += 1
             st.fixed[w] == 2 || continue
@@ -1297,7 +1309,7 @@ function _relation_witness(ws::Workspace, u::Int, v::Int;
                 rad_v_other += abs(J_vw)
                 if coflip_ok
                     pos_uw = get(st.adj_pos[u], w, 0)
-                    q_uw = pos_uw == 0 ? _Exact(0) : st.adjacency[u][pos_uw].second
+                    q_uw = pos_uw == 0 ? _Exact(0) : _physical(st, st.adjacency[u][pos_uw].second)
                     if !iszero(q_uw)
                         J_uw = direction * (g_u * g_w) * _spin_coupling(ws, q_uw)
                         diff_pos += abs(J_uw - J_vw) - abs(J_uw)
@@ -1436,6 +1448,7 @@ function _elimination_witness(ws::Workspace, u::Int;
     visits = 0
     free_edges = Pair{Int,_Exact}[]
     for (w, q) in st.adjacency[u]
+        q = _physical(st, q)
         _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, 0)
         visits += 1
         if st.fixed[w] == 2 && !iszero(q)
@@ -1457,7 +1470,7 @@ function _elimination_witness(ws::Workspace, u::Int;
     end
     neighbors = Tuple(p.first for p in free_edges)
     couplings = Tuple(p.second for p in free_edges)
-    f_u = st.fields[u]
+    f_u = _physical(st, st.fields[u])
     phi = Vector{_Exact}(undef, num_states)
     tbl = Vector{Int}(undef, num_states)
     unique_argmin = true
@@ -1549,6 +1562,7 @@ function _block_elimination_witness(
         adj_len = length(st.adjacency[u])
         adj_len <= max_work - visits || return (nothing, :work_limit, :exact, visits, 0)
         for (w, q) in st.adjacency[u]
+            q = _physical(st, q)
             _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, 0)
             visits += 1
             (st.fixed[w] == 2 && !iszero(q)) || continue
@@ -1614,7 +1628,7 @@ function _block_elimination_witness(
     exact_work = 0
     for idx in 1:num_sep_states
         for r in 1:k
-            lv = st.fields[B[r]]
+            lv = _physical(st, st.fields[B[r]])
             for b in 1:d
                 z_b = (((idx - 1) >> (b - 1)) & 1) == 1 ? 1 : low_orig
                 lv += sep_couplings[r, b] * z_b
@@ -1659,7 +1673,7 @@ function _block_elimination_witness(
     block_tuple = Tuple(B)
     tables_tuple = Tuple(Tuple(tables[r]) for r in 1:k)
     phi_tuple = Tuple(deepcopy(v) for v in phi)
-    c_base = deepcopy(st.constant)
+    c_base = deepcopy(_physical(st, st.constant))
     steps = Vector{EliminationStep}(undef, k)
     for r in 1:(k - 1)
         bw_r = _BlockEliminationWitness(block_tuple, r, tables_tuple, phi_tuple)
@@ -1815,7 +1829,7 @@ function _build_probing_pair_step_from_branches(
         _ProbingPairWitness(i, 1, bsteps_high, i, low_orig, bsteps_low) :
         _ProbingPairWitness(i, low_orig, bsteps_low, i, 1, bsteps_high)
     return RelationStep(
-        u, i, orig_σ, orig_σ, deepcopy(lo_p), deepcopy(hi_p), deepcopy(st.constant),
+        u, i, orig_σ, orig_σ, deepcopy(lo_p), deepcopy(hi_p), deepcopy(_physical(st, st.constant)),
         st.proof_count, :probing_pair, length(st.callers), :strong, wit,
     )
 end
@@ -1860,7 +1874,7 @@ function _run_trial_dominance_branch!(
                 if map === nothing && st.lower !== nothing && st.upper !== nothing
                     deg_u = length(st.adjacency[u])
                     if deg_u <= max_work - visits
-                        lo_u, hi_u = direction > 0 ? (st.lower[u], st.upper[u]) : (-st.upper[u], -st.lower[u])
+                        lo_u, hi_u = direction > 0 ? (_physical(st, st.lower[u]), _physical(st, st.upper[u])) : (-_physical(st, st.upper[u]), -_physical(st, st.lower[u]))
                         if !(lo_u > 0 || hi_u < 0)
                             _, lo_u_hi = _enclose(lo_u)
                             hi_u_lo, _ = _enclose(hi_u)
@@ -1934,6 +1948,7 @@ function _double_probe_witness_for_var(
         next_f = Int[]
         for u in frontier
             for (w, q) in st.adjacency[u]
+                q = _physical(st, q)
                 (st.fixed[w] == 2 && !iszero(q) && !(w in seen)) || continue
                 push!(seen, w)
                 push!(ball, w)
@@ -2036,14 +2051,15 @@ function _probing_witness(
     if _w_energy_ref !== nothing && _w_energy_ref[] !== nothing
         w_energy = _w_energy_ref[]::_Exact
     else
-        w_energy = st.constant
+        w_energy = _physical(st, st.constant)
         for u in 1:n
             st.fixed[u] == 2 || continue
             _expired(deadline_ns) && return (nothing, :deadline, :none, visits, 0, exact_work)
             exact_work < max_exact_work || return (nothing, :verification_limit, :none, visits, 0, exact_work)
-            w_energy += st.fields[u] * w_vec[u]
+            w_energy += _physical(st, st.fields[u]) * w_vec[u]
             exact_work += 1
             for (v, q) in st.adjacency[u]
+                q = _physical(st, q)
                 _expired(deadline_ns) && return (nothing, :deadline, :none, visits, 0, exact_work)
                 visits < max_work || return (nothing, :work_limit, :none, visits, 0, exact_work)
                 visits += 1
@@ -2079,7 +2095,7 @@ function _probing_witness(
                 if map === nothing && st.lower !== nothing && st.upper !== nothing
                     deg_u = length(st.adjacency[u])
                     if deg_u <= max_work - visits
-                        lo_u, hi_u = direction > 0 ? (st.lower[u], st.upper[u]) : (-st.upper[u], -st.lower[u])
+                        lo_u, hi_u = direction > 0 ? (_physical(st, st.lower[u]), _physical(st, st.upper[u])) : (-_physical(st, st.upper[u]), -_physical(st, st.lower[u]))
                         if !(lo_u > 0 || hi_u < 0)
                             _, lo_u_hi = _enclose(lo_u)
                             hi_u_lo, _ = _enclose(hi_u)
@@ -2159,9 +2175,9 @@ function _probing_witness(
             if use_vertex_sums
                 visits += length(st.adjacency[u])
                 if st.degrees[u] > 0
-                    up_lo, up_hi = _enclose(st.upper[u])
-                    lo_lo, lo_hi = _enclose(st.lower[u])
-                    fld_lo, fld_hi = _enclose(st.fields[u])
+                    up_lo, up_hi = _enclose(_physical(st, st.upper[u]))
+                    lo_lo, lo_hi = _enclose(_physical(st, st.lower[u]))
+                    fld_lo, fld_hi = _enclose(_physical(st, st.fields[u]))
                     diff_lo = _max_nan(0.0, _prevfloat_finite(up_lo - lo_hi))
                     diff_hi = _max_nan(0.0, _nextfloat_finite(up_hi - lo_lo))
                     if !is_spin_dom
@@ -2172,7 +2188,7 @@ function _probing_witness(
                         add_qb = _prevfloat_finite(0.5 * neg_qb_lo)
                         add_qb_hi = _nextfloat_finite(0.5 * neg_qb_hi)
                     else
-                        df_lo, df_hi = _enclose(st.dual_fields[u])
+                        df_lo, df_hi = _enclose(_physical(st, st.dual_fields[u]))
                         m_j_hi = _nextfloat_finite(0.25 * diff_hi)
                         m_j_lo = _prevfloat_finite(0.25 * diff_lo)
                         two_fld_lo = _prevfloat_finite(2.0 * fld_lo)
@@ -2193,6 +2209,7 @@ function _probing_witness(
                 end
             else
                 for (v, q) in st.adjacency[u]
+                    q = _physical(st, q)
                     _expired(deadline_ns) && return (nothing, :deadline, :interval, visits, fallbacks, exact_work)
                     visits < max_work || return (nothing, :work_limit, :interval, visits, fallbacks, exact_work)
                     visits += 1
@@ -2259,12 +2276,12 @@ function _probing_witness(
                     L_spin -= abs(h_u)
                     L_bpos += min(_Exact(0), f_u)
                     L_bneg += min(2 * h_u, f_u - 2 * h_u)
-                    diff_u = st.upper[u] - st.lower[u]
+                    diff_u = _physical(st, st.upper[u]) - _physical(st, st.lower[u])
                     sum_diff += diff_u
                     if !is_spin_dom
-                        sum_neg_qb2 += direction > 0 ? (st.lower[u] - st.fields[u]) : (st.fields[u] - st.upper[u])
+                        sum_neg_qb2 += direction > 0 ? (_physical(st, st.lower[u]) - _physical(st, st.fields[u])) : (_physical(st, st.fields[u]) - _physical(st, st.upper[u]))
                     else
-                        sum_neg_qb2 += direction * (2 * st.fields[u] - st.dual_fields[u]) - diff_u
+                        sum_neg_qb2 += direction * (2 * _physical(st, st.fields[u]) - _physical(st, st.dual_fields[u])) - diff_u
                     end
                     visits += length(st.adjacency[u])
                     exact_work += 1
@@ -2286,6 +2303,7 @@ function _probing_witness(
                     L_bneg += min(2 * h_u, f_u - 2 * h_u)
                     exact_work += 1
                     for (v, q) in st.adjacency[u]
+                        q = _physical(st, q)
                         _expired(deadline_ns) && return (nothing, :deadline, :exact, visits, fallbacks, exact_work)
                         visits += 1
                         (st.fixed[v] == 2 && u < v) || continue
@@ -2626,14 +2644,15 @@ function _roof_scc_relation_witness(
         return (nothing, :not_strict, :roof_scc_pair, total_visits, 1, exact_work)
     end
     n = length(s.labels)
-    w_energy = st.constant
+    w_energy = _physical(st, st.constant)
     for idx in 1:n
         st.fixed[idx] == 2 || continue
         _expired(deadline_ns) && return (nothing, :deadline, :roof_scc_pair, total_visits, 1, exact_work)
         exact_work < mex || return (nothing, :verification_limit, :roof_scc_pair, total_visits, 1, exact_work)
-        w_energy += st.fields[idx] * w_vec[idx]
+        w_energy += _physical(st, st.fields[idx]) * w_vec[idx]
         exact_work += 1
         for (nbr, q) in st.adjacency[idx]
+            q = _physical(st, q)
             _expired(deadline_ns) && return (nothing, :deadline, :roof_scc_pair, total_visits, 1, exact_work)
             total_visits < mw || return (nothing, :work_limit, :roof_scc_pair, total_visits, 1, exact_work)
             total_visits += 1
@@ -3604,14 +3623,15 @@ function _extract_roof_scc_specs(
         _expired(deadline_ns) && return (false, :deadline, specs, ver_w, ex_w)
         if w_vec !== nothing
             n = length(s.labels)
-            w_energy = st.constant
+            w_energy = _physical(st, st.constant)
             for idx in 1:n
                 st.fixed[idx] == 2 || continue
                 _expired(deadline_ns) && return (false, :deadline, specs, ver_w, ex_w)
                 ex_w < max_exact_work || return (false, :verification_limit, specs, ver_w, ex_w)
-                w_energy += st.fields[idx] * w_vec[idx]
+                w_energy += _physical(st, st.fields[idx]) * w_vec[idx]
                 ex_w += 1
                 for (nbr, q) in st.adjacency[idx]
+                    q = _physical(st, q)
                     _expired(deadline_ns) && return (false, :deadline, specs, ver_w, ex_w)
                     ver_w < max_work || return (false, :work_limit, specs, ver_w, ex_w)
                     ver_w += 1
@@ -3730,7 +3750,7 @@ function _commit_roof_scc_specs!(
                 end
                 push!(acc, spec)
                 dummy_wit = _RoofSCCPairWitness(L_roof, total_flow, flow_edges, w_upper, w_tuple, K_tuple, ((u, rep, orig_σ),), 1)
-                dummy_step = RelationStep(u, rep, orig_σ, orig_σ, margin, margin, st.constant, st.proof_count, :roof_scc_pair, scope_len, :strong, dummy_wit)
+                dummy_step = RelationStep(u, rep, orig_σ, orig_σ, margin, margin, _physical(st, st.constant), st.proof_count, :roof_scc_pair, scope_len, :strong, dummy_wit)
                 cd, fd, qd = _relation_deltas(ws, u, rep, orig_σ)
                 rep_sim = _apply_reduction!(ws, u, Int8(3), dummy_step, cd, fd, qd; max_work=max_work - sim_visits - sim_cand, deadline_ns=deadline_ns, precharged_visits=0)
                 sim_visits += rep_sim.edge_visits
@@ -3769,7 +3789,7 @@ function _commit_roof_scc_specs!(
             end
             cand_work += 1
         end
-        c_before = deepcopy(st.constant)
+        c_before = deepcopy(_physical(st, st.constant))
         wit_r = _RoofSCCPairWitness(
             deepcopy(L_roof), deepcopy(total_flow), flow_edges,
             deepcopy(w_upper), w_tuple, K_tuple,
@@ -3907,7 +3927,7 @@ function _commit_roof_duality_pass!(
     end
     for (r, (u, orig_val)) in enumerate(batch_pairs)
         _expired(deadline_ns) && return abort_pass(:deadline)
-        c_before = deepcopy(st.constant)
+        c_before = deepcopy(_physical(st, st.constant))
         step_r = RoofDualityStep(
             u, orig_val,
             deepcopy(L_roof), deepcopy(total_flow),
@@ -4208,6 +4228,7 @@ function _connected_active_component(ws::Workspace, seed::Int; max_work::Int=typ
         u = queue[head]
         head += 1
         for (v, q) in st.adjacency[u]
+            q = _physical(st, q)
             _expired(deadline_ns) && return (Int[], :deadline, work)
             work < max_work || return (Int[], :work_limit, work)
             work += 1
@@ -4375,7 +4396,7 @@ function _build_submodular_cut_certificate(
             batch_tuple = Tuple(batch_pairs)
             for (r, (u, orig_val)) in enumerate(batch_pairs)
                 _expired(deadline_ns) && return (nothing, :deadline, mat_visits)
-                c_before = deepcopy(st.constant)
+                c_before = deepcopy(_physical(st, st.constant))
                 step_r = SubmodularCutStep(
                     u, orig_val,
                     comp_tuple, gauge_tuple,

@@ -493,7 +493,7 @@ Privately snapshot a finite Float64 QUBOTools model and its ordered labels.
 a deterministic queue for [`propagate!`](@ref). When `integerize_scale=true`,
 the snapshot searches ``0 \\le a, b \\le \\min(\\text{max\\_decimals}, 300)`` for the
 smallest common denominator ``m = 2^a \\cdot 5^b`` to factor into `scale(model) / m`
-via [`integerize_scale`](@ref) before building exact rational state. With the
+via [`integerize_scale`](@ref) before building exact integer state. With the
 default `atol=0.0`, this rescaling is **exact** (`Rational{BigInt}(v) * m` must be
 an integer for every coefficient and `offset` and `Rational{BigInt}(scale(model) / m) * m == Rational{BigInt}(scale(model))`,
 with no rounding); passing `atol > 0` opts in to tolerance-based decimal
@@ -555,13 +555,14 @@ generation(ws::Workspace) = ws._generation
 
 function is_integer_scaled(ws::Workspace)::Bool
     st = ws._state
-    denominator(st.constant) == 1 || return false
+    denominator = big(1) << st.shift
+    iszero(rem(st.constant, denominator)) || return false
     for i in eachindex(st.fixed)
         st.fixed[i] == 2 || continue
-        denominator(st.fields[i]) == 1 || return false
+        iszero(rem(st.fields[i], denominator)) || return false
         for (j, q) in st.adjacency[i]
             (st.fixed[j] == 2 && i < j) || continue
-            denominator(q) == 1 || return false
+            iszero(rem(q, denominator)) || return false
         end
     end
     return true

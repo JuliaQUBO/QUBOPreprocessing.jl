@@ -381,20 +381,23 @@ end
 lift_state(::DomainGaugeMap, _) = throw(ArgumentError("state must be a complete one-based vector"))
 
 _spin_field(ws::Workspace, i::Int) =
-    ws._snapshot.domain === QT.SpinDomain ? ws._state.fields[i] : ws._state.dual_fields[i]
+    ws._snapshot.domain === QT.SpinDomain ? _physical(ws._state, ws._state.fields[i]) : _physical(ws._state, ws._state.dual_fields[i])
 _bool_field(ws::Workspace, i::Int) =
-    ws._snapshot.domain === QT.BoolDomain ? ws._state.fields[i] : ws._state.dual_fields[i]
+    ws._snapshot.domain === QT.BoolDomain ? _physical(ws._state, ws._state.fields[i]) : _physical(ws._state, ws._state.dual_fields[i])
 _spin_constant(ws::Workspace) =
-    ws._snapshot.domain === QT.SpinDomain ? ws._state.constant : ws._state.dual_constant
+    ws._snapshot.domain === QT.SpinDomain ? _physical(ws._state, ws._state.constant) : _physical(ws._state, ws._state.dual_constant)
 _bool_constant(ws::Workspace) =
-    ws._snapshot.domain === QT.BoolDomain ? ws._state.constant : ws._state.dual_constant
+    ws._snapshot.domain === QT.BoolDomain ? _physical(ws._state, ws._state.constant) : _physical(ws._state, ws._state.dual_constant)
 _spin_coupling(ws::Workspace, q::_Exact) =
     ws._snapshot.domain === QT.SpinDomain ? q : q // 4
 _bool_coupling(ws::Workspace, q::_Exact) =
     ws._snapshot.domain === QT.BoolDomain ? q : 4 * q
 
+_spin_coupling(ws::Workspace, q::Integer) = _spin_coupling(ws, _physical(ws._state, q))
+_bool_coupling(ws::Workspace, q::Integer) = _bool_coupling(ws, _physical(ws._state, q))
+
 function _mapped_field(ws::Workspace, i::Int, m::Union{Nothing,DomainGaugeMap})
-    m === nothing && return ws._state.fields[i]
+    m === nothing && return _physical(ws._state, ws._state.fields[i])
     g_i = m.gauge[i]
     if m.target_domain === :spin
         return g_i * _spin_field(ws, i)
@@ -405,6 +408,7 @@ function _mapped_field(ws::Workspace, i::Int, m::Union{Nothing,DomainGaugeMap})
         h_g = g_i * _spin_field(ws, i)
         coupling_sum = _Exact(0)
         for (j, q) in st.adjacency[i]
+            q = _physical(st, q)
             st.fixed[j] == 2 || continue
             coupling_sum += (g_i * m.gauge[j]) * _spin_coupling(ws, q)
         end
@@ -412,7 +416,8 @@ function _mapped_field(ws::Workspace, i::Int, m::Union{Nothing,DomainGaugeMap})
     end
 end
 
-function _mapped_coupling(ws::Workspace, i::Int, j::Int, q::_Exact, m::Union{Nothing,DomainGaugeMap})
+function _mapped_coupling(ws::Workspace, i::Int, j::Int, q::Union{Integer,_Exact}, m::Union{Nothing,DomainGaugeMap})
+    q = _physical(ws._state, q)
     m === nothing && return q
     sign_ij = m.gauge[i] * m.gauge[j]
     return m.target_domain === :spin ? sign_ij * _spin_coupling(ws, q) :
@@ -420,7 +425,7 @@ function _mapped_coupling(ws::Workspace, i::Int, j::Int, q::_Exact, m::Union{Not
 end
 
 function _direct_mapped_constant(ws::Workspace, m::Union{Nothing,DomainGaugeMap})
-    m === nothing && return ws._state.constant
+    m === nothing && return _physical(ws._state, ws._state.constant)
     if m.target_domain === :spin
         return _spin_constant(ws)
     elseif m._identity_gauge
@@ -432,6 +437,7 @@ function _direct_mapped_constant(ws::Workspace, m::Union{Nothing,DomainGaugeMap}
             st.fixed[i] == 2 || continue
             c -= m.gauge[i] * _spin_field(ws, i)
             for (j, q) in st.adjacency[i]
+                q = _physical(st, q)
                 i < j && st.fixed[j] == 2 || continue
                 c += (m.gauge[i] * m.gauge[j]) * _spin_coupling(ws, q)
             end
@@ -441,7 +447,7 @@ function _direct_mapped_constant(ws::Workspace, m::Union{Nothing,DomainGaugeMap}
 end
 
 function _mapped_constant(ws::Workspace, m::Union{Nothing,DomainGaugeMap})
-    m === nothing && return ws._state.constant
+    m === nothing && return _physical(ws._state, ws._state.constant)
     if m.target_domain === :spin
         return _spin_constant(ws)
     elseif m._identity_gauge
@@ -477,6 +483,7 @@ function _mapped_constant(ws::Workspace, m::Union{Nothing,DomainGaugeMap})
                     h_i = _spin_field(ws, i)
                     csum = _Exact(0)
                     for (j, q) in st.adjacency[i]
+                        q = _physical(st, q)
                         (st.fixed[j] == 2 || st.entries[j] > pos) || continue
                         csum += (g_i * m.gauge[j]) * _spin_coupling(ws, q)
                     end
@@ -485,12 +492,12 @@ function _mapped_constant(ws::Workspace, m::Union{Nothing,DomainGaugeMap})
                 cur.serials[r] = entry.serial
             else
                 red = raw_entry::_UndoReduction
-                c += red.spin_const_delta
+                c += _physical(st, red.spin_const_delta)
                 for (w, dh) in red.spin_field_deltas
-                    c -= m.gauge[w] * dh
+                    c -= m.gauge[w] * _physical(st, dh)
                 end
                 for (j, l, dJ) in red.spin_coupling_deltas
-                    c += (m.gauge[j] * m.gauge[l]) * dJ
+                    c += (m.gauge[j] * m.gauge[l]) * _physical(st, dJ)
                 end
                 cur.serials[r] = red.serial
             end
@@ -548,6 +555,7 @@ function incident_couplings(ws::Workspace, label; map::Union{Nothing,DomainGauge
     V = s.label_type
     out = Pair{V,_Exact}[]
     for (j, q) in st.adjacency[i]
+        q = _physical(st, q)
         st.fixed[j] == 2 || continue
         lbl = _owned_labels(V[s.labels[j]])[1]
         push!(out, lbl => deepcopy(_mapped_coupling(ws, i, j, q, map)))
@@ -613,6 +621,7 @@ function _ws_coercive_ratios_and_active(ws::Workspace; norm::Real=2)
             abs_h = abs(_spin_field(ws, i))
             abs_js = _Exact[]
             for (j, q) in st.adjacency[i]
+                q = _physical(st, q)
                 (st.fixed[j] == 2 && !iszero(q)) || continue
                 push!(abs_js, abs(_spin_coupling(ws, q)))
             end
@@ -760,6 +769,7 @@ function trivial_dominance_fraction(
         abs_h = abs(_spin_field(ws, i))
         l1 = _Exact(0)
         for (j, q) in st.adjacency[i]
+            q = _physical(st, q)
             (st.fixed[j] == 2 && !iszero(q)) || continue
             l1 += abs(_spin_coupling(ws, q))
         end

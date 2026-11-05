@@ -139,7 +139,7 @@ end
 
     # Verifier recomputes from represented source, not the producer's cached field.
     ws = Workspace(fixture([:x],[1.0],zeros(1,1)))
-    ws._state.fields[1] = -big(100)//big(1)
+    ws._state.fields[1] = -(Int128(100) << ws._state.shift)
     bad = prove_dominance(ws,:x).certificate
     @test verify_certificate(ws,bad).stop_reason === :invalid_bound
 end

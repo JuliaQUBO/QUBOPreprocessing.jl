@@ -14,23 +14,23 @@ end
 
 function _is_quadratic_deg3(
     is_bool::Bool,
-    fields::Vector{_Exact},
-    dual_fields::Vector{_Exact},
-    adjacency::Vector{Vector{Pair{Int,_Exact}}},
+    fields::Vector{I},
+    dual_fields::Vector{I},
+    adjacency::Vector{Vector{Pair{Int,I}}},
     fixed::Union{Nothing,Vector{Int8}},
     u::Int,
-)
-    h_u = is_bool ? dual_fields[u] : fields[u]
+) where {I<:Integer}
+    h_u = is_bool ? 4 * dual_fields[u] : fields[u]
     iszero(h_u) && return true
     abs_h = abs(h_u)
-    sum_J = _Exact(0)
-    max_J = _Exact(0)
+    sum_J = zero(I)
+    max_J = zero(I)
     cnt = 0
     for (w, q) in adjacency[u]
         ((fixed === nothing || fixed[w] == 2) && !iszero(q)) || continue
         cnt += 1
         cnt > 3 && return false
-        aJ = abs(is_bool ? (q // 4) : q)
+        aJ = abs(q)
         sum_J += aJ
         aJ > max_J && (max_J = aJ)
     end
@@ -50,7 +50,8 @@ _is_quadratic_deg3(ws::Workspace, u::Int) = _is_quadratic_deg3(
 function _may_be_quadratic_deg3_fast(ws::Workspace, u::Int)
     st = ws._state
     st.degrees[u] == 3 || return false
-    return iszero(_spin_field(ws, u)) || _is_quadratic_deg3(ws, u)
+    return iszero(ws._snapshot.domain === QT.BoolDomain ? st.dual_fields[u] : st.fields[u]) ||
+        _is_quadratic_deg3(ws, u)
 end
 
 mutable struct _DyadicConstructionRange
@@ -106,159 +107,93 @@ function _dyadic_construction_plan(s::_Snapshot; deadline=nothing)
     return (; shift, degrees)
 end
 
-function _incremental(s::_Snapshot;rules=:identity)
-    n = length(s.labels)
-    adj_pos = [Dict{Int,Int}() for _ in 1:n]
-    fields = fill(_Exact(0), n)
-    plan = _dyadic_construction_plan(s)
-    shift, deg_init = plan.shift, plan.degrees
-    bounded = shift >= 0
-    denominators = _dyadic_denominators(max(shift, 0))
-    f_int = bounded ? zeros(Int128, n) : Int128[]
-    _foreach_linear_term(s.linear) do i, v
-        iszero(v) && return nothing
-        if bounded
-            f_int[i] = _dyadic_integer(v, shift)
-            fields[i] = _from_dyadic_integer(f_int[i], shift, denominators)
-        else
-            fields[i] = _to_exact(v)
-        end
-        return nothing
+function _incremental(s::_Snapshot; rules=:identity)
+    range = _DyadicConstructionRange(0, typemin(Int), UInt128(0), false)
+    degrees = zeros(Int, length(s.labels))
+    _observe_dyadic!(range, s.offset)
+    _foreach_linear_term(s.linear) do _, v
+        _observe_dyadic!(range, v)
     end
-    adjacency = [Vector{Pair{Int,_Exact}}(undef, deg_init[i]) for i in 1:n]
-    for i in 1:n
-        d_i = deg_init[i]
-        d_i > 0 && sizehint!(adj_pos[i], d_i)
-    end
-    need_bounds = rules in (:dominance, :elimination, :relations, :mixed)
-    csum_int = bounded ? zeros(Int128, n) : Int128[]
-    neg_int = (bounded && need_bounds) ? zeros(Int128, n) : Int128[]
-    pos_int = (bounded && need_bounds) ? zeros(Int128, n) : Int128[]
-    quad_sum_int = Ref(Int128(0))
-    adj_cur = ones(Int, n)
     _foreach_quadratic_term(s.quadratic) do i, j, v
         iszero(v) && return nothing
-        iv = bounded ? _dyadic_integer(v, shift) : Int128(0)
-        q = bounded ? _from_dyadic_integer(iv, shift, denominators) : _to_exact(v)
-        pi = adj_cur[i]
-        adjacency[i][pi] = j => q
-        adj_pos[i][j] = pi
-        adj_cur[i] = pi + 1
-        pj = adj_cur[j]
-        adjacency[j][pj] = i => q
-        adj_pos[j][i] = pj
-        adj_cur[j] = pj + 1
-        if bounded
-            csum_int[i] += iv
-            csum_int[j] += iv
-            quad_sum_int[] += iv
-            if need_bounds
-                if iv < 0
-                    neg_int[i] += iv
-                    neg_int[j] += iv
-                else
-                    pos_int[i] += iv
-                    pos_int[j] += iv
-                end
-            end
-        end
-        return nothing
+        degrees[i] += 1
+        degrees[j] += 1
+        _observe_dyadic!(range, v)
     end
-    degrees = deg_init
-    initial_degrees = copy(degrees)
-    dual_fields = Vector{_Exact}(undef, n)
-    is_bool = s.domain === QT.BoolDomain
-    offset_ex = _to_exact(s.offset)
-    if bounded
-        for i in 1:n
-            dual_fields[i] = is_bool ? _from_dyadic_integer(2 * f_int[i] + csum_int[i], shift + 2, denominators) :
-                                       _from_dyadic_integer(2 * f_int[i] - 2 * csum_int[i], shift, denominators)
-        end
-        field_sum_int = sum(f_int; init=Int128(0))
-        dual_constant = is_bool ?
-            (offset_ex + _from_dyadic_integer(2 * field_sum_int + quad_sum_int[], shift + 2, denominators)) :
-            (offset_ex + _from_dyadic_integer(quad_sum_int[] - field_sum_int, shift, denominators))
-        lower, upper = nothing, nothing
-        if need_bounds
-            lower = Vector{_Exact}(undef, n)
-            upper = Vector{_Exact}(undef, n)
-            if is_bool
-                for i in 1:n
-                    lower[i] = _from_dyadic_integer(f_int[i] + neg_int[i], shift, denominators)
-                    upper[i] = _from_dyadic_integer(f_int[i] + pos_int[i], shift, denominators)
-                end
-            else
-                for i in 1:n
-                    abs_i = pos_int[i] - neg_int[i]
-                    lower[i] = _from_dyadic_integer(f_int[i] - abs_i, shift, denominators)
-                    upper[i] = _from_dyadic_integer(f_int[i] + abs_i, shift, denominators)
-                end
-            end
-        end
+    # Boolean dual spin fields/constants need quarters on the input grid.
+    shift = -range.min_exponent + (s.domain === QT.BoolDomain ? 2 : 0)
+    sum_bits = iszero(range.terms) ? 0 : 128 - leading_zeros(range.terms - UInt128(1))
+    bounded = iszero(range.terms) || range.max_top + shift + sum_bits + 3 <= 123
+    return _incremental_integer(s, rules, degrees, shift, bounded ? Int128 : BigInt)
+end
+
+function _incremental_integer(s::_Snapshot, rules::Symbol, degrees::Vector{Int},
+                              shift::Int, ::Type{I}) where {I<:Integer}
+    n = length(s.labels)
+    cv(v) = if I === Int128
+        _dyadic_integer(v, shift)
     else
-        quad_sum = _Exact(0)
-        for i in 1:n
-            csum = _Exact(0)
-            for (j, q) in adjacency[i]
-                csum += q
-                i < j && (quad_sum += q)
-            end
-            dual_fields[i] = is_bool ? (fields[i] // 2 + csum // 4) :
-                                       (2 * fields[i] - 2 * csum)
-        end
-        field_sum = sum(fields; init=_Exact(0))
-        dual_constant = is_bool ?
-            (offset_ex + field_sum // 2 + quad_sum // 4) :
-            (offset_ex - field_sum + quad_sum)
-        lower,upper = nothing,nothing
-        if need_bounds
-            lower = Vector{_Exact}(undef, n)
-            upper = Vector{_Exact}(undef, n)
-            for i in 1:n
-                lo = fields[i]
-                hi = fields[i]
-                if is_bool
-                    for (_, q) in adjacency[i]
-                        if signbit(q.num)
-                            lo += q
-                        elseif !iszero(q.num)
-                            hi += q
-                        end
-                    end
-                else
-                    for (_, q) in adjacency[i]
-                        aq = abs(q)
-                        lo -= aq
-                        hi += aq
-                    end
-                end
-                lower[i] = lo
-                upper[i] = hi
-            end
-        end
+        m, e = _dyadic_parts(v)
+        BigInt(m) << (e + shift)
     end
-    queue = rules in (:dominance, :elimination, :relations, :mixed) ? collect(1:n) : Int[]
-    queued = rules in (:dominance, :elimination, :relations, :mixed) ? trues(n) : falses(n)
+    fields = zeros(I, n)
+    _foreach_linear_term(s.linear) do i, v
+        fields[i] = cv(v)
+    end
+    adjacency = [Vector{Pair{Int,I}}(undef, degrees[i]) for i in 1:n]
+    adj_pos = [Dict{Int,Int}() for _ in 1:n]
+    cursors = ones(Int, n)
+    csum = zeros(I, n)
+    neg = zeros(I, n)
+    pos = zeros(I, n)
+    quad_sum = Ref(zero(I))
+    _foreach_quadratic_term(s.quadratic) do i, j, v
+        iszero(v) && return nothing
+        q = cv(v)
+        for (a,b) in ((i,j),(j,i))
+            k = cursors[a]
+            adjacency[a][k] = b=>q
+            adj_pos[a][b] = k
+            cursors[a] = k + 1
+            csum[a] += q
+            if q < 0
+                neg[a] += q
+            else
+                pos[a] += q
+            end
+        end
+        quad_sum[] += q
+    end
     is_bool = s.domain === QT.BoolDomain
+    constant = cv(s.offset)
+    dual_fields = [is_bool ? div(2*fields[i] + csum[i], 4) :
+                              2*fields[i] - 2*csum[i] for i in 1:n]
+    total_field = sum(fields; init=zero(I))
+    dual_constant = is_bool ? constant + div(2*total_field + quad_sum[], 4) :
+                              constant - total_field + quad_sum[]
+    need_bounds = rules in (:dominance, :elimination, :relations, :mixed)
+    lower = need_bounds ? [is_bool ? fields[i]+neg[i] : fields[i]-pos[i]+neg[i] for i in 1:n] : nothing
+    upper = need_bounds ? [is_bool ? fields[i]+pos[i] : fields[i]+pos[i]-neg[i] for i in 1:n] : nothing
+    queue = need_bounds ? collect(1:n) : Int[]
+    queued = need_bounds ? trues(n) : falses(n)
     is_quad_deg3(i) = _is_quadratic_deg3(is_bool, fields, dual_fields, adjacency, nothing, i)
-    elim_queues = ntuple(b -> Int[i for i in 1:n if degrees[i] == b - 1 && (b < 4 || is_quad_deg3(i))], 4)
+    elim_queues = ntuple(b -> Int[i for i in 1:n if degrees[i] == b-1 && (b<4 || is_quad_deg3(i))], 4)
     elim_queued = ntuple(_ -> falses(n), 4)
     for b in 1:4, i in elim_queues[b]
         elim_queued[b][i] = true
     end
-    elim_blocked_fill = ntuple(_ -> fill(typemax(Int), n), 4)
     rel_queue = Int[i for i in 1:n if degrees[i] >= 1]
     rel_queued = BitVector(degrees[i] >= 1 for i in 1:n)
     m_init = sum(degrees; init=0) ÷ 2
-    return _Incremental(_label_index_dict(s.labels),
-                        adjacency, adj_pos, fields, offset_ex, fill(Int8(2), n),
-                        queue, queued, _UndoEntry[], 0, uuid4(),rules,lower,upper,1,
-                        Int[],Int[],zeros(Int,n),0,0,0,0,0,0,dual_fields,dual_constant,
-                        degrees, initial_degrees, elim_queues, elim_queued, [1, 1, 1, 1],
-                        elim_blocked_fill,
-                        rel_queue, rel_queued, 1, fill(typemax(Int), n), trues(n),
-                        (Int[], Int[], Int[], Int[]), Int[], Int[], 0,
-                        m_init, m_init, 1, 1, NTuple{4,Int}[], 0)
+    numeric = _IntegerState{I}(adjacency, fields, constant, lower, upper,
+        dual_fields, dual_constant, _UndoEntry{I}[], shift, 0, 0)
+    return _Incremental(numeric, _label_index_dict(s.labels), adj_pos,
+        fill(Int8(2), n), queue, queued, 0, uuid4(), rules, 1,
+        Int[], Int[], zeros(Int,n), 0, 0, 0, 0, 0, 0,
+        degrees, copy(degrees), elim_queues, elim_queued, [1,1,1,1],
+        ntuple(_ -> fill(typemax(Int), n),4), rel_queue, rel_queued, 1,
+        fill(typemax(Int),n), trues(n), (Int[],Int[],Int[],Int[]), Int[],Int[],0,
+        m_init,m_init,1,1,NTuple{4,Int}[],0)
 end
 
 """
@@ -436,58 +371,81 @@ end
 
 function _fix!(ws::Workspace,i::Int,v::Int;proof=nothing,max_work=typemax(Int),deadline_ns=nothing)
     st = ws._state
+    old_numeric = st.numeric
+    result = try
+        _fix_integer!(ws, st, st.numeric, i, v; proof, max_work, deadline_ns)
+    catch err
+        st.fixed[i] == 2 && (st.numeric = old_numeric)
+        rethrow()
+    end
+    result.stop_reason === :applied || (st.numeric = old_numeric)
+    return result
+end
+
+function _fix_integer!(ws::Workspace, st::_Incremental, numeric::_IntegerState{I}, i::Int, v::Int;
+                       proof=nothing, max_work=typemax(Int), deadline_ns=nothing) where {I<:Integer}
     st.fixed[i] == 2 || throw(ArgumentError("fixing requires a free variable"))
-    edges = st.adjacency[i]
+    edges = numeric.adjacency[i]
     length(edges) <= max_work || return UpdateReport(:work_limit, 0, 0)
     _expired(deadline_ns) && return UpdateReport(:deadline, 0, 0)
     is_bool = ws._snapshot.domain === QT.BoolDomain
     dual_v = is_bool ? (2 * v - 1) : ((v + 1) ÷ 2)
-    old = _NeighborRecord[]
-    updated = _NeighborRecord[]
-    old_dual = Pair{Int,_Exact}[]
-    updated_dual = Pair{Int,_Exact}[]
+    old = _NeighborRecord{I}[]
+    updated = _NeighborRecord{BigInt}[]
+    old_dual = Pair{Int,I}[]
+    updated_dual = Pair{Int,BigInt}[]
     sizehint!(old, length(edges))
     sizehint!(updated, length(edges))
     sizehint!(old_dual, length(edges))
     sizehint!(updated_dual, length(edges))
     visits = 0
-    for (j,q) in edges
+    for (j,q_raw) in edges
+        q = BigInt(q_raw)
         _expired(deadline_ns) && return UpdateReport(:deadline, visits, 0)
         visits += 1
         st.fixed[j] == 2 || continue
-        field = v == 0 ? st.fields[j] : (v == 1 ? (st.fields[j] + q) : (st.fields[j] - q))
+        field = v == 0 ? numeric.fields[j] : (v == 1 ? (BigInt(numeric.fields[j]) + q) : (BigInt(numeric.fields[j]) - q))
         df_new = if dual_v == 0
-            st.dual_fields[j]
+            numeric.dual_fields[j]
         else
-            dual_q = is_bool ? (q // 4) : (4 * q)
-            dual_v == 1 ? (st.dual_fields[j] + dual_q) : (st.dual_fields[j] - dual_q)
+            dual_q = is_bool ? div(q, 4) : (4 * q)
+            dual_v == 1 ? (BigInt(numeric.dual_fields[j]) + dual_q) : (BigInt(numeric.dual_fields[j]) - dual_q)
         end
-        push!(old_dual, j => st.dual_fields[j])
+        push!(old_dual, j => numeric.dual_fields[j])
         push!(updated_dual, j => df_new)
-        if st.lower === nothing
-            push!(old,(j,st.fields[j],st.fields[j],st.fields[j]))
+        if numeric.lower === nothing
+            push!(old,(j,numeric.fields[j],numeric.fields[j],numeric.fields[j]))
             push!(updated,(j,field,field,field))
         else
             new_lo, new_hi = if is_bool
                 if v == 0
-                    q >= 0 ? (st.lower[j], st.upper[j] - q) : (st.lower[j] - q, st.upper[j])
+                    q >= 0 ? (numeric.lower[j], BigInt(numeric.upper[j]) - q) : (BigInt(numeric.lower[j]) - q, numeric.upper[j])
                 else
-                    q >= 0 ? (st.lower[j] + q, st.upper[j]) : (st.lower[j], st.upper[j] + q)
+                    q >= 0 ? (BigInt(numeric.lower[j]) + q, numeric.upper[j]) : (numeric.lower[j], BigInt(numeric.upper[j]) + q)
                 end
             else
                 if (v == 1 && q >= 0) || (v == -1 && q <= 0)
-                    (st.lower[j] + 2 * abs(q), st.upper[j])
+                    (BigInt(numeric.lower[j]) + 2 * abs(q), numeric.upper[j])
                 else
-                    (st.lower[j], st.upper[j] - 2 * abs(q))
+                    (numeric.lower[j], BigInt(numeric.upper[j]) - 2 * abs(q))
                 end
             end
-            push!(old,(j,st.fields[j],st.lower[j],st.upper[j]))
+            push!(old,(j,numeric.fields[j],numeric.lower[j],numeric.upper[j]))
             push!(updated,(j,field,new_lo,new_hi))
         end
     end
-    constant = v == 0 ? st.constant : (v == 1 ? (st.constant + st.fields[i]) : (st.constant - st.fields[i]))
-    dual_constant = dual_v == 0 ? st.dual_constant : (dual_v == 1 ? (st.dual_constant + st.dual_fields[i]) : (st.dual_constant - st.dual_fields[i]))
+    constant = v == 0 ? numeric.constant : (v == 1 ? (BigInt(numeric.constant) + BigInt(numeric.fields[i])) : (BigInt(numeric.constant) - BigInt(numeric.fields[i])))
+    dual_constant = dual_v == 0 ? numeric.dual_constant : (dual_v == 1 ? (BigInt(numeric.dual_constant) + BigInt(numeric.dual_fields[i])) : (BigInt(numeric.dual_constant) - BigInt(numeric.dual_fields[i])))
     _expired(deadline_ns) && return UpdateReport(:deadline, visits, 0)
+    if I === Int128 && (!all(_grid_fits, (constant, dual_constant)) ||
+            !all(t -> all(_grid_fits, t[2:4]), updated) ||
+            !all(p -> _grid_fits(p.second), updated_dual))
+        st.numeric = _regrid(st, BigInt, numeric.shift)
+        return _fix_integer!(ws, st, st.numeric, i, v; proof, max_work, deadline_ns)
+    end
+    constant_i, dual_constant_i = I(constant), I(dual_constant)
+    updated_i = _NeighborRecord{I}[(j,I(field),I(lo),I(hi)) for (j,field,lo,hi) in updated]
+    updated_dual_i = Pair{Int,I}[j=>I(value) for (j,value) in updated_dual]
     st.serial == typemax(UInt64) && throw(ArgumentError("trail serial exhausted; reset workspace"))
     # Complete allocation before committing field, queue and trail changes.
     _reserve!(st.queue, length(st.queue) + length(updated))
@@ -495,41 +453,41 @@ function _fix!(ws::Workspace,i::Int,v::Int;proof=nothing,max_work=typemax(Int),d
         _reserve!(st.elim_queues[b], length(st.elim_queues[b]) + length(updated))
     end
     _reserve!(st.rel_queue, length(st.rel_queue) + length(updated))
-    _reserve!(st.trail, length(st.trail) + 1)
+    _reserve!(numeric.trail, length(numeric.trail) + 1)
     _reserve!(st.fixes, length(st.fixes) + 1)
     proof === nothing && _reserve!(st.callers, length(st.callers) + 1)
     elim_lens = ntuple(b -> length(st.elim_queues[b]), 4)
-    entry = _UndoFix(st.serial + 1,length(st.fixes)+1,i,v,st.constant,old,length(st.queue),proof,st.dual_constant,old_dual,elim_lens,length(st.rel_queue))
-    push!(st.trail, entry)
-    push!(st.fixes,length(st.trail))
+    entry = _UndoFix(st.serial + 1,length(st.fixes)+1,i,v,numeric.constant,old,length(st.queue),proof,numeric.dual_constant,old_dual,elim_lens,length(st.rel_queue))
+    push!(numeric.trail, entry)
+    push!(st.fixes,length(numeric.trail))
     if proof === nothing
-        push!(st.callers,length(st.trail))
+        push!(st.callers,length(numeric.trail))
     else
-        st.proof_count == 0 && (st.first_proof_pos = length(st.trail))
+        st.proof_count == 0 && (st.first_proof_pos = length(numeric.trail))
         st.proof_count += 1
         (proof isa ProbingStep || proof isa RoofDualityStep || proof isa SubmodularCutStep || proof isa MaxCutStep ||
          (hasproperty(proof, :method) && proof.method === :marginal)) &&
             (st.marginal_count += 1)
     end
-    st.entries[i] = length(st.trail)
+    st.entries[i] = length(numeric.trail)
     st.serial += 1
-    st.constant = constant
-    st.dual_constant = dual_constant
+    numeric.constant = constant_i
+    numeric.dual_constant = dual_constant_i
     st.fixed[i] = v
     st.degrees[i] = 0
     st.active_edges -= length(updated_dual)
-    for (j,field,lower,upper) in updated
-        st.fields[j] = field
-        if st.lower !== nothing
-            st.lower[j],st.upper[j] = lower,upper
+    for (j,field,lower,upper) in updated_i
+        numeric.fields[j] = field
+        if numeric.lower !== nothing
+            numeric.lower[j],numeric.upper[j] = lower,upper
         end
         if !st.queued[j]
             push!(st.queue, j)
             st.queued[j] = true
         end
     end
-    for (j, df) in updated_dual
-        st.dual_fields[j] = df
+    for (j, df) in updated_dual_i
+        numeric.dual_fields[j] = df
         st.degrees[j] -= 1
         d_j = st.degrees[j]
         if d_j <= 3 && (d_j < 3 || _may_be_quadratic_deg3_fast(ws, j)) && !st.elim_queued[d_j + 1][j]
@@ -545,27 +503,27 @@ function _fix!(ws::Workspace,i::Int,v::Int;proof=nothing,max_work=typemax(Int),d
     return UpdateReport(:applied, visits, 1)
 end
 
-function _adj_set!(st::_Incremental, adj_edits::Vector{_AdjacencyEdit}, a::Int, b::Int, q_new::_Exact)
-    pos = get(st.adj_pos[a], b, 0)
+function _adj_set!(adjacency, adj_pos, adj_edits::Vector{_AdjacencyEdit{I}}, a::Int, b::Int, q_new::I) where {I<:Integer}
+    pos = get(adj_pos[a], b, 0)
     if pos == 0
         !iszero(q_new) || return nothing
-        push!(st.adjacency[a], b => q_new)
-        st.adj_pos[a][b] = length(st.adjacency[a])
-        push!(adj_edits, (:pop, a, 0, b => _Exact(0)))
+        push!(adjacency[a], b => q_new)
+        adj_pos[a][b] = length(adjacency[a])
+        push!(adj_edits, (:pop, a, 0, b => zero(I)))
     else
-        old_pair = st.adjacency[a][pos]
+        old_pair = adjacency[a][pos]
         if iszero(q_new)
-            last_pos = length(st.adjacency[a])
+            last_pos = length(adjacency[a])
             if pos != last_pos
-                tail_pair = st.adjacency[a][last_pos]
-                st.adjacency[a][pos] = tail_pair
-                st.adj_pos[a][tail_pair.first] = pos
+                tail_pair = adjacency[a][last_pos]
+                adjacency[a][pos] = tail_pair
+                adj_pos[a][tail_pair.first] = pos
             end
-            pop!(st.adjacency[a])
-            delete!(st.adj_pos[a], b)
+            pop!(adjacency[a])
+            delete!(adj_pos[a], b)
             push!(adj_edits, (:swap_remove, a, pos, old_pair))
         else
-            st.adjacency[a][pos] = b => q_new
+            adjacency[a][pos] = b => q_new
             push!(adj_edits, (:update, a, pos, old_pair))
         end
     end
@@ -593,12 +551,40 @@ function _apply_reduction!(
 )
     st = ws._state
     st.fixed[u] == 2 || throw(ArgumentError("reduction requires a free variable"))
+    shift = max(st.shift, _grid_shift(const_delta) + (ws._snapshot.domain === QT.BoolDomain ? 2 : 0))
+    for (_, q) in field_deltas
+        shift = max(shift, _grid_shift(q) + (ws._snapshot.domain === QT.BoolDomain ? 2 : 0))
+    end
+    for (_, _, q) in quad_deltas
+        shift = max(shift, _grid_shift(q) + (ws._snapshot.domain === QT.BoolDomain ? 2 : 0))
+    end
+    old_numeric = st.numeric
+    result = try
+        _ensure_grid!(st, shift)
+        _apply_integer_reduction!(ws, st, st.numeric, u, status, proof,
+            _grid_numerator(const_delta, shift),
+            [i=>_grid_numerator(q, shift) for (i,q) in field_deltas],
+            [(i,j,_grid_numerator(q, shift)) for (i,j,q) in quad_deltas];
+            max_work, deadline_ns, precharged_visits)
+    catch err
+        st.fixed[u] == 2 && (st.numeric = old_numeric)
+        rethrow()
+    end
+    result.stop_reason === :applied || (st.numeric = old_numeric)
+    return result
+end
+
+function _apply_integer_reduction!(ws::Workspace, st::_Incremental, numeric::_IntegerState{I},
+    u::Int, status::Int8, proof::_ProofRecord, const_delta::BigInt,
+    field_deltas::Vector{Pair{Int,BigInt}}, quad_deltas::Vector{Tuple{Int,Int,BigInt}};
+    max_work=typemax(Int), deadline_ns=nothing, precharged_visits::Int=0) where {I<:Integer}
+    st.fixed[u] == 2 || throw(ArgumentError("reduction requires a free variable"))
     is_bool = ws._snapshot.domain === QT.BoolDomain
     visits = precharged_visits
-    u_free_edges = Pair{Int,_Exact}[]
+    u_free_edges = Pair{Int,BigInt}[]
     touched = Int[]
     touched_seen = Set{Int}()
-    for (w, q) in st.adjacency[u]
+    for (w, q) in numeric.adjacency[u]
         _expired(deadline_ns) && return UpdateReport(:deadline, visits, 0)
         visits < max_work || return UpdateReport(:work_limit, visits, 0)
         visits += 1
@@ -612,7 +598,7 @@ function _apply_reduction!(
         w != u && st.fixed[w] == 2 || throw(ArgumentError("field delta targets a non-free variable"))
         _touch!(touched, touched_seen, w)
     end
-    merged_q = Dict{Tuple{Int,Int},_Exact}()
+    merged_q = Dict{Tuple{Int,Int},BigInt}()
     merged_order = Tuple{Int,Int}[]
     for (a, b, dq) in quad_deltas
         iszero(dq) && continue
@@ -620,11 +606,11 @@ function _apply_reduction!(
             throw(ArgumentError("quadratic delta targets non-free or identical variables"))
         j, k = min(a, b), max(a, b)
         !haskey(merged_q, (j, k)) && push!(merged_order, (j, k))
-        merged_q[(j, k)] = get(merged_q, (j, k), _Exact(0)) + dq
+        merged_q[(j, k)] = get(merged_q, (j, k), big(0)) + dq
         _touch!(touched, touched_seen, j)
         _touch!(touched, touched_seen, k)
     end
-    merged_quad_deltas = Tuple{Int,Int,_Exact}[
+    merged_quad_deltas = Tuple{Int,Int,BigInt}[
         (j, k, merged_q[(j, k)]) for (j, k) in merged_order if !iszero(merged_q[(j, k)])
     ]
     for _ in merged_quad_deltas
@@ -632,19 +618,19 @@ function _apply_reduction!(
         _expired(deadline_ns) && return UpdateReport(:deadline, visits, 0)
         visits += 2
     end
-    old_fields = Vector{_NeighborRecord}(undef, length(touched))
-    old_dual = Vector{_DualDegreeRecord}(undef, length(touched) + 1)
-    old_dual[1] = (u, st.dual_fields[u], st.degrees[u])
+    old_fields = Vector{_NeighborRecord{I}}(undef, length(touched))
+    old_dual = Vector{_DualDegreeRecord{I}}(undef, length(touched) + 1)
+    old_dual[1] = (u, numeric.dual_fields[u], st.degrees[u])
     for (idx, w) in enumerate(touched)
-        lo_w = st.lower === nothing ? st.fields[w] : st.lower[w]
-        hi_w = st.upper === nothing ? st.fields[w] : st.upper[w]
-        old_fields[idx] = (w, st.fields[w], lo_w, hi_w)
-        old_dual[idx + 1] = (w, st.dual_fields[w], st.degrees[w])
+        lo_w = numeric.lower === nothing ? numeric.fields[w] : numeric.lower[w]
+        hi_w = numeric.upper === nothing ? numeric.fields[w] : numeric.upper[w]
+        old_fields[idx] = (w, numeric.fields[w], lo_w, hi_w)
+        old_dual[idx + 1] = (w, numeric.dual_fields[w], st.degrees[w])
     end
-    f_map = Dict{Int,_Exact}(w => _Exact(0) for w in touched)
-    lo_map = Dict{Int,_Exact}(w => _Exact(0) for w in touched)
-    hi_map = Dict{Int,_Exact}(w => _Exact(0) for w in touched)
-    qsum_map = Dict{Int,_Exact}(w => _Exact(0) for w in touched)
+    f_map = Dict{Int,BigInt}(w => big(0) for w in touched)
+    lo_map = Dict{Int,BigInt}(w => big(0) for w in touched)
+    hi_map = Dict{Int,BigInt}(w => big(0) for w in touched)
+    qsum_map = Dict{Int,BigInt}(w => big(0) for w in touched)
     deg_map = Dict{Int,Int}(w => 0 for w in touched)
     grow_map = Dict{Int,Int}(w => 0 for w in touched)
     for (w, q_uw) in u_free_edges
@@ -661,7 +647,7 @@ function _apply_reduction!(
     end
     for (j, k, dq) in merged_quad_deltas
         pos_j = get(st.adj_pos[j], k, 0)
-        q_old = pos_j == 0 ? _Exact(0) : st.adjacency[j][pos_j].second
+        q_old = pos_j == 0 ? big(0) : numeric.adjacency[j][pos_j].second
         q_new = q_old + dq
         if pos_j == 0
             deg_map[j] += 1
@@ -681,27 +667,48 @@ function _apply_reduction!(
         hi_map[j] += d_hi
         hi_map[k] += d_hi
     end
-    old_f_u = st.fields[u]
-    old_h_u = _spin_field(ws, u)
-    total_f_delta = -old_f_u + sum(values(f_map); init=_Exact(0))
-    total_q_delta = -sum((q for (_, q) in u_free_edges); init=_Exact(0)) +
-                    sum((dq for (_, _, dq) in merged_quad_deltas); init=_Exact(0))
-    new_constant = st.constant + const_delta
+    old_f_u = BigInt(numeric.fields[u])
+    old_h_u = BigInt(is_bool ? numeric.dual_fields[u] : numeric.fields[u])
+    total_f_delta = -old_f_u + sum(values(f_map); init=big(0))
+    total_q_delta = -sum((q for (_, q) in u_free_edges); init=big(0)) +
+                    sum((dq for (_, _, dq) in merged_quad_deltas); init=big(0))
+    new_constant = BigInt(numeric.constant) + const_delta
     new_dual_constant = is_bool ?
-        (st.dual_constant + const_delta + total_f_delta // 2 + total_q_delta // 4) :
-        (st.dual_constant + const_delta - total_f_delta + total_q_delta)
-    spin_const_delta = is_bool ? (new_dual_constant - st.dual_constant) : const_delta
-    spin_field_deltas = Pair{Int,_Exact}[u => -old_h_u]
+        (BigInt(numeric.dual_constant) + const_delta + div(total_f_delta, 2) + div(total_q_delta, 4)) :
+        (BigInt(numeric.dual_constant) + const_delta - total_f_delta + total_q_delta)
+    spin_const_delta = is_bool ? (new_dual_constant - numeric.dual_constant) : const_delta
+    spin_field_deltas = Pair{Int,BigInt}[u => -old_h_u]
     for w in touched
-        dh_w = is_bool ? (f_map[w] // 2 + qsum_map[w] // 4) : f_map[w]
+        dh_w = is_bool ? (div(f_map[w], 2) + div(qsum_map[w], 4)) : f_map[w]
         !iszero(dh_w) && push!(spin_field_deltas, w => dh_w)
     end
-    spin_coupling_deltas = Tuple{Int,Int,_Exact}[]
+    spin_coupling_deltas = Tuple{Int,Int,BigInt}[]
     for (w, q_uw) in u_free_edges
-        push!(spin_coupling_deltas, (min(u, w), max(u, w), -_spin_coupling(ws, q_uw)))
+        push!(spin_coupling_deltas, (min(u, w), max(u, w), -(is_bool ? div(q_uw, 4) : q_uw)))
     end
     for (j, k, dq) in merged_quad_deltas
-        push!(spin_coupling_deltas, (j, k, _spin_coupling(ws, dq)))
+        push!(spin_coupling_deltas, (j, k, (is_bool ? div(dq, 4) : dq)))
+    end
+    fits = all(_grid_fits, (new_constant, new_dual_constant, spin_const_delta))
+    for w in touched
+        fits &= _grid_fits(BigInt(numeric.fields[w]) + f_map[w])
+        dual_delta = is_bool ? div(f_map[w],2) + div(qsum_map[w],4) : 2*f_map[w] - 2*qsum_map[w]
+        fits &= _grid_fits(BigInt(numeric.dual_fields[w]) + dual_delta)
+        if numeric.lower !== nothing
+            fits &= _grid_fits(BigInt(numeric.lower[w]) + lo_map[w])
+            fits &= _grid_fits(BigInt(numeric.upper[w]) + hi_map[w])
+        end
+    end
+    fits &= all(p -> _grid_fits(p.second), spin_field_deltas)
+    fits &= all(t -> _grid_fits(t[3]), spin_coupling_deltas)
+    for (j,k,dq) in merged_quad_deltas
+        pos = get(st.adj_pos[j], k, 0)
+        fits &= _grid_fits((pos == 0 ? big(0) : BigInt(numeric.adjacency[j][pos].second)) + dq)
+    end
+    if I === Int128 && !fits
+        st.numeric = _regrid(st, BigInt, numeric.shift)
+        return _apply_integer_reduction!(ws, st, st.numeric, u, status, proof,
+            const_delta, field_deltas, quad_deltas; max_work, deadline_ns, precharged_visits)
     end
     _expired(deadline_ns) && return UpdateReport(:deadline, visits, 0)
     st.serial == typemax(UInt64) && throw(ArgumentError("trail serial exhausted; reset workspace"))
@@ -710,22 +717,35 @@ function _apply_reduction!(
         _reserve!(st.elim_queues[b], length(st.elim_queues[b]) + length(touched))
     end
     _reserve!(st.rel_queue, length(st.rel_queue) + length(touched))
-    _reserve!(st.trail, length(st.trail) + 1)
+    _reserve!(numeric.trail, length(numeric.trail) + 1)
     _reserve!(st.fixes, length(st.fixes) + 1)
     for w in touched
-        grow_map[w] > 0 && _reserve!(st.adjacency[w], length(st.adjacency[w]) + grow_map[w])
+        grow_map[w] > 0 && _reserve!(numeric.adjacency[w], length(numeric.adjacency[w]) + grow_map[w])
     end
-    adj_edits = _AdjacencyEdit[]
+    constant_i, dual_constant_i = I(new_constant), I(new_dual_constant)
+    updated_fields = _NeighborRecord{I}[]
+    updated_dual = I[]
+    for w in touched
+        field = I(BigInt(numeric.fields[w]) + f_map[w])
+        lo = numeric.lower === nothing ? field : I(BigInt(numeric.lower[w]) + lo_map[w])
+        hi = numeric.upper === nothing ? field : I(BigInt(numeric.upper[w]) + hi_map[w])
+        dual_delta = is_bool ? div(f_map[w],2) + div(qsum_map[w],4) : 2*f_map[w] - 2*qsum_map[w]
+        push!(updated_fields, (w,field,lo,hi))
+        push!(updated_dual, I(BigInt(numeric.dual_fields[w]) + dual_delta))
+    end
+    planned_adjacency = Dict(w=>copy(numeric.adjacency[w]) for w in touched)
+    planned_positions = Dict(w=>copy(st.adj_pos[w]) for w in touched)
+    adj_edits = _AdjacencyEdit{I}[]
     _reserve!(adj_edits, length(u_free_edges) + 2 * length(merged_quad_deltas))
     for (w, _) in u_free_edges
-        _adj_set!(st, adj_edits, w, u, _Exact(0))
+        _adj_set!(planned_adjacency, planned_positions, adj_edits, w, u, zero(I))
     end
     for (j, k, dq) in merged_quad_deltas
         pos_j = get(st.adj_pos[j], k, 0)
-        q_old = pos_j == 0 ? _Exact(0) : st.adjacency[j][pos_j].second
+        q_old = pos_j == 0 ? big(0) : numeric.adjacency[j][pos_j].second
         q_new = q_old + dq
-        _adj_set!(st, adj_edits, j, k, q_new)
-        _adj_set!(st, adj_edits, k, j, q_new)
+        _adj_set!(planned_adjacency, planned_positions, adj_edits, j, k, I(q_new))
+        _adj_set!(planned_adjacency, planned_positions, adj_edits, k, j, I(q_new))
     end
     elim_lens = ntuple(b -> length(st.elim_queues[b]), 4)
     entry = _UndoReduction(
@@ -733,39 +753,42 @@ function _apply_reduction!(
         length(st.fixes) + 1,
         u,
         status,
-        st.constant,
-        st.dual_constant,
+        numeric.constant,
+        numeric.dual_constant,
         old_fields,
         old_dual,
         adj_edits,
         length(st.queue),
         proof,
-        spin_const_delta,
-        spin_field_deltas,
-        spin_coupling_deltas,
+        I(spin_const_delta),
+        Pair{Int,I}[j=>I(v) for (j,v) in spin_field_deltas],
+        Tuple{Int,Int,I}[(j,k,I(v)) for (j,k,v) in spin_coupling_deltas],
         elim_lens,
         length(st.rel_queue),
     )
-    push!(st.trail, entry)
-    push!(st.fixes, length(st.trail))
-    st.proof_count == 0 && (st.first_proof_pos = length(st.trail))
+    for w in touched
+        numeric.adjacency[w] = planned_adjacency[w]
+        st.adj_pos[w] = planned_positions[w]
+    end
+    push!(numeric.trail, entry)
+    push!(st.fixes, length(numeric.trail))
+    st.proof_count == 0 && (st.first_proof_pos = length(numeric.trail))
     st.proof_count += 1
     (proof isa MaxCutStep || (proof isa RelationStep && proof.method in (:probing_pair, :roof_scc_pair))) && (st.marginal_count += 1)
-    st.entries[u] = length(st.trail)
+    st.entries[u] = length(numeric.trail)
     st.serial += 1
-    st.constant = new_constant
-    st.dual_constant = new_dual_constant
+    numeric.constant = constant_i
+    numeric.dual_constant = dual_constant_i
     st.fixed[u] = status
     st.degrees[u] = 0
     st.active_edges += (-old_dual[1][3] + sum(values(deg_map); init=0)) ÷ 2
-    for w in touched
-        st.fields[w] += f_map[w]
-        st.dual_fields[w] += is_bool ? (f_map[w] // 2 + qsum_map[w] // 4) :
-                                       (2 * f_map[w] - 2 * qsum_map[w])
+    for (idx,(w,field,lo,hi)) in enumerate(updated_fields)
+        numeric.fields[w] = field
+        numeric.dual_fields[w] = updated_dual[idx]
         st.degrees[w] += deg_map[w]
-        if st.lower !== nothing
-            st.lower[w] += lo_map[w]
-            st.upper[w] += hi_map[w]
+        if numeric.lower !== nothing
+            numeric.lower[w] = lo
+            numeric.upper[w] = hi
         end
         if !st.queued[w]
             push!(st.queue, w)

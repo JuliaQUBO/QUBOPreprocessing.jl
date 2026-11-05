@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Store live workspace fields, edges, bounds, dual-coordinate caches and numeric
+  undo records in typed `Int128` or `BigInt` arrays on one exact dyadic grid.
+  Construction includes the offset in its range check; productive updates use
+  integer scratch arithmetic and promote before fixed-width overflow. Fractional
+  Spin eliminations extend the grid and rescale both live state and undo history.
+  Rollback may retain a finer grid or wider integer type while restoring exact
+  values. Public rational queries, source-scale semantics, proofs and independent
+  rational certificate replay are preserved. Cached strict-dominance and
+  degree-three screening use integer arithmetic; expensive proof producers and
+  flow retain explicit rational conversion costs. Performance acceptance remains
+  pending matched measurements (Refs #93).
 - Added opt-in `materialize(ws; normalization=:integer)` for exact Float64
   transport through primitive integer coefficients and an adjusted scale.
   Normalization includes the mapped constant, preserves the exact source proof

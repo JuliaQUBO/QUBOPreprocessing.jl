@@ -157,7 +157,8 @@ and a `finite` flag. Floating rounding, cancellation, overflow and summation
 order apply; exact stored-value preservation does not imply exact numerical
 energy evaluation. Nonfinite numerical results are reported without upgrading
 them to proof. Tests use independent exact binary-value rational references on
-guarded tiny fixtures. Reversible conditioning uses exact rational algebra;
+guarded tiny fixtures. Reversible conditioning uses exact integer algebra on a
+shared dyadic grid, with rational public coefficients and proof boundaries;
 individual strict-dominance bounds and independent proof verification are now
 implemented. Automatic strict dominance retains a separate deduction trail.
 

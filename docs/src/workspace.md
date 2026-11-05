@@ -5,8 +5,8 @@ model under different assumptions. The [branch walkthrough](guide.md#guide-branc
 shows the complete loop; this reference explains what each update captures and
 which costs you need to budget.
 
-The workspace prepares signed sparse adjacency once and stores exact rational
-boundary fields and constants for both binary and spin coordinates, plus per-variable
+The workspace prepares signed sparse adjacency once and stores exact integer
+numerators for boundary fields and constants on a shared dyadic grid in both binary and spin coordinates, plus per-variable
 free interaction degrees (`degree(ws, label)`). Stored zero quadratic entries do
 not inflate degrees, and linear fields (`effective_field(ws, label; map=...)`)
 are tracked separately from remaining nonzero interactions
@@ -52,9 +52,11 @@ ordered strong proof is included. Source fields/scale/offset are exact binary va
 accepted finite Float64 input (unless opt-in tolerance-based decimal rounding with
 `integerize_scale=true` and `atol > 0` accepts a multiplier that changes any
 effective objective coefficient or scaled offset, in which case `ws.perturbed == true`
-and `ws.max_perturbation` records the largest absolute effective change). Conditioning uses `Rational{BigInt}` internally
-to prevent cancellation drift and overflow in reversible algebra. This is
-algebraic storage; inference additionally records independently verifiable proof evidence.
+and `ws.max_perturbation` records the largest absolute effective change).
+Conditioning uses integer arithmetic with a common power-of-two denominator
+to prevent cancellation drift. Public coefficient queries still return owned
+`Rational{BigInt}` values in the same unscaled units. Algebraic preservation and
+inference remain separate: inference additionally records independently verifiable proof evidence.
 
 `checkpoint` is constant-size. Nested `rollback!` restores prior fields,
 constant, fixed flags, pending dirty queue and assumption provenance exactly.
@@ -85,14 +87,32 @@ work, without a graph scan or floating subtraction. Mutable state is private to
 each serial workspace. Exact integer bit complexity, allocations and label
 hash/copy costs are additional to structural counts.
 
-Construction combines binary64 coefficients with a shared power-of-two denominator
-when a checked range bound permits Int128 accumulation. It converts the resulting
-cache sums back to exact `Rational{BigInt}` values; wider exponent ranges use
-arbitrary-precision rational arithmetic. This also applies to certificate replay.
-The optimization preserves every input coefficient and the snapshot scale with
-`integerize_scale=false`, including binary64 values such as `0.1` and `0.3`.
-Persistent workspace state and certificates remain exact rational values; this
-does not introduce an approximate representation or a fixed-width update backend.
+Each live integer numerator ``n`` denotes ``n/2^k`` for one workspace exponent
+``k``. The actual field, adjacency, bound, dual-cache and numeric undo containers
+use either `Int128` throughout or `BigInt` throughout. A checked construction
+bound includes fields, edges and the offset. Boolean input reserves two extra
+denominator bits so its spin fields and constants fit on that same grid.
+The representation preserves every input coefficient and the snapshot scale with
+`integerize_scale=false`, including represented binary64 values `0.1` and `0.3`.
+
+Productive conditioning, contractions and eliminations prepare integer updates
+before committing. Updates that exceed the fixed-width range promote the numeric
+payload to `BigInt`; a fractional Spin elimination can increase ``k``. Such a
+change rescales every live numerator and every numeric undo entry together.
+It costs O(n+m+numeric undo history), in addition to the local update cost.
+An ordinary rollback restores values, topology and scope and can retain the finer
+grid or wider integer type. Checkpoint identity does not depend on this private
+representation choice. Non-LIFO replay and reset rebuild from the source snapshot.
+
+Proof records, domain-map cursor constants and public/export boundaries retain
+exact rational physical units. Certificate replay uses a separate rational
+polynomial implementation. Expensive proof search and local flow networks still
+convert coefficients to rational values; persistent integer storage does not
+claim that those algorithms are integer kernels or that their conversion costs
+are absent. Cached strict-dominance, degree-three checks and relation screening
+use the integer state directly; their floating intervals enclose the shared-grid
+values without constructing a rational per edge. Full schedules retain their
+existing families and order.
 
 `max_work` is a nonnegative integer adjacency-visit budget for an update.
 `deadline_ns` is an absolute UInt64 monotonic `time_ns()` deadline. An update

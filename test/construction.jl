@@ -57,20 +57,21 @@ end
 function check_construction_state(ws, L, Q, offset, domain)
     R = Rational{BigInt}
     st = ws._state
+    physical(v) = R(v) / (big(1) << st.shift)
     ref = construction_reference(L, Q, offset, domain)
-    @test st.fields == ref.fields
-    @test st.lower == ref.lo
-    @test st.upper == ref.hi
-    @test st.dual_fields == ref.dual
-    @test st.constant == ref.constant
-    @test st.dual_constant == ref.dual_constant
+    @test physical.(st.fields) == ref.fields
+    @test physical.(st.lower) == ref.lo
+    @test physical.(st.upper) == ref.hi
+    @test physical.(st.dual_fields) == ref.dual
+    @test physical(st.constant) == ref.constant
+    @test physical(st.dual_constant) == ref.dual_constant
     for i in eachindex(L)
         expected = Dict(j => R(Q[min(i,j), max(i,j)]) for j in eachindex(L)
                         if j != i && !iszero(Q[min(i,j), max(i,j)]))
-        @test Dict(st.adjacency[i]) == expected
+        @test Dict(j=>physical(q) for (j,q) in st.adjacency[i]) == expected
         @test st.degrees[i] == length(expected)
         for (j, pos) in st.adj_pos[i]
-            @test st.adjacency[i][pos] == (j => expected[j])
+            @test physical(st.adjacency[i][pos].second) == expected[j]
         end
     end
     poly = QUBOPreprocessing._init_poly_state(ws._snapshot)
@@ -79,7 +80,7 @@ function check_construction_state(ws, L, Q, offset, domain)
     @test poly.constant == ref.constant
     @test poly.h_spin == (domain === :bool ? ref.dual : ref.fields)
     @test poly.c_spin == (domain === :bool ? ref.dual_constant : ref.constant)
-    @test poly.adj == st.adjacency
+    @test poly.adj == [[j=>physical(q) for (j,q) in row] for row in st.adjacency]
     @test !ws.perturbed && iszero(ws.max_perturbation)
     return nothing
 end
@@ -134,10 +135,11 @@ end
         ws = Workspace(model; rules=:mixed)
         other = Workspace(model; rules=:mixed)
         poly = QUBOPreprocessing._init_poly_state(ws._snapshot)
-        @test denominator(ws._state.fields[1]) !== denominator(other._state.fields[1])
-        @test denominator(ws._state.fields[1]) !== denominator(poly.fields[1])
-        # Public coefficient results must stay owned even though private initial
-        # rationals now share read-only denominator storage within one state.
+        @test ws._state.fields !== other._state.fields
+        @test eltype(ws._state.fields) <: Integer
+        @test eltype(poly.fields) === R
+        # Public rational coefficients own their storage, independently of both
+        # the integer payload and the rational replay oracle.
         owned = (effective_field(ws,1), last(first(incident_couplings(ws,1))), conditioned_constant(ws))
         for q in owned
             Base.GMP.MPZ.set!(denominator(q), BigInt(7))
@@ -251,7 +253,13 @@ end
             @test snapshot_content(historical_snapshot) == historical_contents
             @test generation(ws) == historical_generation
             for field in fieldnames(typeof(historical_state))
-                @test getfield(ws._state, field) == getfield(historical_state, field)
+                if field === :numeric
+                    for numeric_field in fieldnames(typeof(historical_state.numeric))
+                        @test getfield(ws._state.numeric, numeric_field) == getfield(historical_state.numeric, numeric_field)
+                    end
+                else
+                    @test getfield(ws._state, field) == getfield(historical_state, field)
+                end
             end
         end
     end
