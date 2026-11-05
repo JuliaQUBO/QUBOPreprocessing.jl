@@ -10,10 +10,11 @@ authors:
     affiliation: "Purdue University"
     orcid: "https://orcid.org/0000-0002-8308-5016"
 repository-code: "https://github.com/JuliaQUBO/QUBOPreprocessing.jl"
+doi: "10.5281/zenodo.23745876"
 url: "https://juliaqubo.github.io/QUBOPreprocessing.jl/"
 license: MPL-2.0
-version: "0.2.0"
-date-released: "2026-11-02"
+version: "0.2.1"
+date-released: "2026-11-04"
 keywords:
   - "Julia"
   - "QUBO"

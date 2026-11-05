@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.2.1
+
+Budgeted scheduling, recorded approximate exports, deadline fixes and exact
+construction improvements (#91–#95, #96–#102):
+
+- Added `schedule_budgeted!`, `BudgetedScheduleReport` and `BudgetedFamilyRun`.
+  `preprocess(model; rules=:mixed, time_limit=T)` uses that schedule and records
+  calls, elapsed time, deductions and stop reasons per family. The schedule's
+  allowance starts after workspace construction; its capped cheap-rule floor
+  and mandatory work can overrun the soft target. Without `time_limit`, the
+  existing `:mixed` schedule is unchanged. The API does not promise a universally
+  better short-budget policy.
+- Added opt-in `materialize(ws; rounding=:nearest)` for Float64 consumers.
+  Default materialization still requires exact transport. Nearest rounding is
+  computed directly from exact rational values, independently of ambient
+  BigFloat settings. Exports record perturbation and the maximum of prior input
+  perturbation and scaled per-coefficient export change. This is not a combined
+  objective-error bound or an original-model optimality certificate. Later
+  solver-format transport is separate. Reduction proofs retain
+  their exact residual and reconstruction evaluates the original source model.
+  Exact-transport errors identify the offending coefficient and chain families.
+- Bounded roof-duality residual-SCC extraction and verification by deadline/work
+  checks, including inner collection and adjacency loops. Interrupted phases do
+  not commit partial deductions.
+- Added `min_reduction` and `max_prep_fraction` options to
+  `sample_preprocessed`. They can send the original model to the child when
+  preprocessing is unlikely to pay off; identity rebuilding is charged and the
+  selected model/reason is reported. Defaults preserve the previous behavior,
+  and caller assumptions or an all-fixed model prevent this bypass.
+- Reduced exact workspace/cache construction and certificate-replay overhead
+  through bounded Int128/shared-dyadic accumulation with arbitrary-precision
+  fallback. Persistent workspace state remains `Rational{BigInt}` and exact
+  certificate semantics are unchanged.
+- Added bounded precompile fixtures exercising productive budgeted scheduling
+  and the expensive rule families, reducing first-use compilation overhead.
+
+No breaking API change is intended. Remaining general exact-integer export,
+persistent-integer-state work and default-policy acceptance criteria stay tracked
+in #91, #93 and #95; this release does not claim those issues are fully resolved.
+
 ## 0.2.0
 
 Exact-by-default scale integerization with recorded perturbation, and a Float64
