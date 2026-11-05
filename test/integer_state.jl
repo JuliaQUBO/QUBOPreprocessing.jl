@@ -630,3 +630,142 @@ end
         @test QUBOPreprocessing._can_use_float_spin_heuristic(zero_ws,[1,2])
     end
 end
+
+@testset "physical scalar interning is lazy and exact on every dyadic grid" begin
+    R = Rational{BigInt}
+    ws = Workspace(fixture([1],[0.0],zeros(1,1);domain=:spin);rules=:mixed)
+    st = ws._state
+    @test length(st.physical_constants) == 3 && all(isnothing,st.physical_constants)
+    constants = Tuple(QUBOPreprocessing._physical(st,Int128(k)) for k in (-1,0,1))
+    @test constants == (R(-1),R(0),R(1))
+    for shift in (0,1,2,63,126,127,128,1074)
+        QUBOPreprocessing._ensure_grid!(st,shift) # zero live state fits every grid
+        @test eltype(st.fields) === Int128 && st.shift == shift
+        @test QUBOPreprocessing._physical(st,Int128(0)) === constants[2]
+        for q in (typemin(Int128),typemax(Int128),Int128(-3),Int128(-1),Int128(0),Int128(1),Int128(3))
+            actual = QUBOPreprocessing._physical(st,q)
+            @test actual == R(q)/(big(1)<<shift)
+            @test denominator(actual)>0 && gcd(numerator(actual),denominator(actual))==1
+        end
+        if shift < 127
+            unit = Int128(1)<<shift
+            @test QUBOPreprocessing._physical(st,-unit) === constants[1]
+            @test QUBOPreprocessing._physical(st,unit) === constants[3]
+        elseif shift == 127
+            minus_one = QUBOPreprocessing._physical(st,typemin(Int128))
+            @test minus_one == -1
+            @test numerator(minus_one) !== numerator(constants[1]) # safe general path
+        end
+        @test constants == (R(-1),R(0),R(1))
+        check_integer_objective(ws,[0.0],zeros(1,1),1.0,0.0,:spin)
+    end
+    @test QUBOPreprocessing._physical(st,Int128(1)) == R(nextfloat(0.0))
+    # The BigInt adapter keeps its previous behavior, including physical units.
+    for q in (big(0),big(1)<<1074,-(big(1)<<1074),big(3))
+        @test QUBOPreprocessing._physical(st,q) == R(q)/(big(1)<<st.shift)
+    end
+end
+
+@testset "physical constants survive elimination, finer grids, promotion and rollback" begin
+    R = Rational{BigInt}
+    L = [1.0,0.0,0.0,2.0]
+    Q = [0.0 1.0 1.0 0.0; zeros(3,4)]
+    ws = Workspace(fixture(collect(1:4),L,Q;domain=:spin);rules=:mixed)
+    st = ws._state
+    constants = Tuple(QUBOPreprocessing._physical(st,Int128(k)) for k in (-1,0,1))
+    pool = st.physical_constants
+    root = checkpoint(ws)
+    assume!(ws,4,1)
+    conditioned = checkpoint(ws)
+    @test eliminate_variable!(ws,1).stop_reason === :applied
+    @test st.shift == 1
+    proof = export_certificate(ws)
+    for shift in (3,6)
+        QUBOPreprocessing._ensure_grid!(st,shift)
+        @test st.physical_constants === pool
+        for k in (-1,0,1)
+            @test QUBOPreprocessing._physical(st,Int128(k)*(Int128(1)<<shift)) === constants[k+2]
+        end
+        @test verify_certificate(ws,proof).valid
+        check_integer_objective(ws,L,Q,1.0,0.0,:spin)
+    end
+    rollback!(ws,conditioned)
+    @test st.physical_constants === pool && constants == (R(-1),R(0),R(1))
+    check_integer_objective(ws,L,Q,1.0,0.0,:spin)
+    QUBOPreprocessing._ensure_grid!(st,st.shift+130)
+    @test eltype(st.fields) === BigInt && st.physical_constants === pool
+    @test QUBOPreprocessing._physical(st,Int128(0)) === constants[2]
+    @test QUBOPreprocessing._physical(st,st.constant) == 2
+    rollback!(ws,root)
+    @test constants == (R(-1),R(0),R(1))
+    check_integer_objective(ws,L,Q,1.0,0.0,:spin)
+end
+
+@testset "public rationals cannot mutate interned scalars or another workspace" begin
+    R = Rational{BigInt}
+    poison_owned!(q) = (Base.GMP.MPZ.set!(numerator(q),BigInt(777));
+                        Base.GMP.MPZ.set!(denominator(q),BigInt(7)))
+    L = [0.0,0.0,0.0,-1.0]
+    Q = [0.0 1.0 -1.0 0.0; zeros(3,4)]
+    for domain in (:bool,:spin)
+        model = fixture(collect(1:4),L,Q;domain,offset=1.0)
+        ws = Workspace(model;rules=:dominance)
+        st = ws._state
+        unit = Int128(1)<<st.shift
+        constants = Tuple(QUBOPreprocessing._physical(st,Int128(k)*unit) for k in (-1,0,1))
+        other = Workspace(model;rules=:dominance)
+        copied = deepcopy(ws)
+        for owner in (other,copied),k in (-1,0,1)
+            q = QUBOPreprocessing._physical(owner._state,Int128(k)*unit)
+            @test q == constants[k+2]
+            @test owner._state.physical_constants !== st.physical_constants
+            @test numerator(q) !== numerator(constants[k+2])
+            @test denominator(q) !== denominator(constants[k+2])
+        end
+        # A public proof attempt owns both mutable BigInts in its rationals.
+        attempt = prove_dominance(ws,4)
+        @test attempt.certificate !== nothing && verify_certificate(ws,attempt.certificate).valid
+        poison_owned!(only(attempt.certificate.steps).lower)
+        @test verify_certificate(ws,prove_dominance(ws,4).certificate).valid
+        @test constants == (R(-1),R(0),R(1))
+        report = propagate!(ws)
+        @test report.deductions == 1
+        raw = st.trail[only(st.fixes)].proof
+        @test numerator(raw.lower) === numerator(constants[1])
+        @test denominator(raw.lower) === denominator(constants[1])
+        for q in (effective_field(ws,1),conditioned_constant(ws),
+                  (last(edge) for edge in incident_couplings(ws,1))...)
+            poison_owned!(q)
+        end
+        result = materialize(ws;coefficient_type=R)
+        exported = export_model(result)
+        for q in (linear(exported)[1],quadratic(exported)[1,2],quadratic(exported)[1,3],
+                  QT.offset(exported),QT.scale(exported))
+            poison_owned!(q)
+        end
+        fresh = export_model(result)
+        @test linear(fresh)[1] == 0 && quadratic(fresh)[1,2] == 1 && quadratic(fresh)[1,3] == -1
+        @test QT.offset(fresh) == 0 && QT.scale(fresh) == 1
+        # Certificate exports, materialized proof chains and reduction queries
+        # all pass through owned-copy paths, even when raw trail bounds intern.
+        certificate = export_certificate(ws)
+        @test numerator(only(certificate.steps).lower) !== numerator(constants[1])
+        @test denominator(only(certificate.steps).lower) !== denominator(constants[1])
+        for step in (only(certificate.steps),only(result.certificate.proof.steps),only(reductions(ws)))
+            for q in (step.lower,step.upper,step.constant)
+                poison_owned!(q)
+            end
+        end
+        @test verify_certificate(ws,export_certificate(ws)).valid
+        @test constants == (R(-1),R(0),R(1))
+        check_integer_objective(ws,L,Q,1.0,1.0,domain)
+        for owner in (other,copied)
+            check_integer_objective(owner,L,Q,1.0,1.0,domain)
+        end
+        pool = st.physical_constants
+        reset!(ws,model)
+        @test ws._state.physical_constants !== pool && all(isnothing,ws._state.physical_constants)
+        @test numerator(QUBOPreprocessing._physical(ws._state,unit)) !== numerator(constants[3])
+        check_integer_objective(ws,L,Q,1.0,1.0,domain)
+    end
+end

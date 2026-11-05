@@ -156,6 +156,7 @@ end
 mutable struct _Incremental
     numeric::Union{_IntegerState{Int128},_IntegerState{BigInt}}
     denominators::_DyadicDenominators
+    physical_constants::Vector{Union{Nothing,_Exact}}
     labels::Dict{Any,Int}
     adj_pos::Vector{Dict{Int,Int}}
     fixed::Vector{Int8} # 2 denotes free in either source domain
@@ -219,7 +220,30 @@ end
 Base.propertynames(::_Incremental, private::Bool=false) =
     (fieldnames(_Incremental)..., _numeric_properties...)
 
-@inline _physical(st::_Incremental, q::Int128) = _from_dyadic_integer(q, st.shift, st.denominators)
+# The three scalar cells (-1, 0, +1) are private to this workspace. Their
+# numerator and denominator BigInts are read-only, just like cached powers.
+# Physical constants are grid-invariant and survive numeric replacement/undo.
+@inline function _physical_constant!(st::_Incremental, index::Int)::_Exact
+    value = st.physical_constants[index]
+    if value === nothing
+        value = _from_dyadic_integer(Int128(index - 2), 0, st.denominators)
+        st.physical_constants[index] = value
+    end
+    return value
+end
+
+@inline function _physical(st::_Incremental, q::Int128)
+    iszero(q) && return _physical_constant!(st, 2)
+    shift = st.shift
+    # A positive unit must fit before forming its negative. In particular,
+    # neither shifting into the sign bit nor negating typemin(Int128) is safe.
+    if shift < 127
+        unit = Int128(1) << shift
+        q == unit && return _physical_constant!(st, 3)
+        q == -unit && return _physical_constant!(st, 1)
+    end
+    return _from_dyadic_integer(q, shift, st.denominators)
+end
 @inline _physical(st::_Incremental, q::Integer) = _from_dyadic_integer(q, st.shift)
 @inline _physical(st::_Incremental, q::_Exact) = q
 @inline _physical(q::Integer, shift::Int) = _from_dyadic_integer(q, shift)
