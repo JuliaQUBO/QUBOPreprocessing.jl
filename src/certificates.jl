@@ -772,6 +772,36 @@ _direction(s::_Snapshot) = iszero(s.scale) ? 0 :
     end
 end
 
+# Preserve the exact enclosure of the physical value without constructing a
+# rational when its Int128 dyadic is represented exactly before Float64
+# rounding. Near/subnormal, low-precision and generic paths keep the old view.
+@inline function _enclose_physical(st::_Incremental, q::Int128)
+    shift = st.shift
+    shift >= 0 || return _enclose(_physical(st, q))
+    iszero(q) && return (0.0, 0.0)
+    common = min(trailing_zeros(q), shift)
+    num = q >> common
+    den_shift = shift - common
+    if den_shift <= 1021 && -(Int128(1) << 53) <= num <= (Int128(1) << 53) &&
+       precision(BigFloat) >= 53
+        value = ldexp(Float64(Int64(num)), -den_shift)
+        return (value, value)
+    end
+    if den_shift <= 1021 && precision(BigFloat) >= 128
+        negative = num < 0
+        unsigned = reinterpret(UInt128, num)
+        magnitude = negative ? zero(UInt128) - unsigned : unsigned
+        cut = max(0, ndigits(magnitude; base=2) - 53)
+        top = UInt64(magnitude >> cut)
+        lower = ldexp(Float64(top), cut - den_shift)
+        upper = (UInt128(top) << cut) == magnitude ? lower : nextfloat(lower)
+        return negative ? (-upper, -lower) : (lower, upper)
+    end
+    return _enclose(_physical(st, q))
+end
+@inline _enclose_physical(st::_Incremental, q::Integer) = _enclose(_physical(st, q))
+@inline _enclose_physical(st::_Incremental, q::_Exact) = _enclose(_physical(st, q))
+
 @inline _prevfloat_finite(x::Float64) = isfinite(x) ? prevfloat(x) : NaN
 @inline _nextfloat_finite(x::Float64) = isfinite(x) ? nextfloat(x) : NaN
 @inline _min_nan(a::Float64, b::Float64) = (isnan(a) || isnan(b)) ? NaN : min(a, b)
@@ -1195,8 +1225,8 @@ function _relation_witness(ws::Workspace, u::Int, v::Int;
     has_summary = st.lower !== nothing && st.upper !== nothing
     rad_v_other_lo = 0.0
     if has_summary
-        up_v_lo, _ = _enclose(_physical(st, st.upper[v]))
-        _, lo_v_hi = _enclose(_physical(st, st.lower[v]))
+        up_v_lo, _ = _enclose_physical(st, st.upper[v])
+        _, lo_v_hi = _enclose_physical(st, st.lower[v])
         scale_inv = is_spin_dom ? 0.5 : 0.25
         tot_v_lo = _prevfloat_finite(scale_inv * _prevfloat_finite(up_v_lo - lo_v_hi))
         j_abs_hi = max(abs(j_uv_lo), abs(j_uv_hi))
@@ -2152,10 +2182,8 @@ function _probing_witness(
         for u in 1:n
             st.fixed[u] == 2 || continue
             _expired(deadline_ns) && return (nothing, :deadline, :interval, visits, fallbacks, exact_work)
-            h_u = _spin_field(ws, u)
-            f_u = _bool_field(ws, u)
-            hu_lo, hu_hi = _enclose(h_u)
-            fu_lo, fu_hi = _enclose(f_u)
+            hu_lo, hu_hi = _enclose_physical(st, is_spin_dom ? st.fields[u] : st.dual_fields[u])
+            fu_lo, fu_hi = _enclose_physical(st, is_spin_dom ? st.dual_fields[u] : st.fields[u])
             h_lo, h_hi = direction >= 0 ? (hu_lo, hu_hi) : (-hu_hi, -hu_lo)
             f_lo, f_hi = direction >= 0 ? (fu_lo, fu_hi) : (-fu_hi, -fu_lo)
             m_h = _max_nan(abs(h_lo), abs(h_hi))
@@ -2175,9 +2203,9 @@ function _probing_witness(
             if use_vertex_sums
                 visits += length(st.adjacency[u])
                 if st.degrees[u] > 0
-                    up_lo, up_hi = _enclose(_physical(st, st.upper[u]))
-                    lo_lo, lo_hi = _enclose(_physical(st, st.lower[u]))
-                    fld_lo, fld_hi = _enclose(_physical(st, st.fields[u]))
+                    up_lo, up_hi = _enclose_physical(st, st.upper[u])
+                    lo_lo, lo_hi = _enclose_physical(st, st.lower[u])
+                    fld_lo, fld_hi = _enclose_physical(st, st.fields[u])
                     diff_lo = _max_nan(0.0, _prevfloat_finite(up_lo - lo_hi))
                     diff_hi = _max_nan(0.0, _nextfloat_finite(up_hi - lo_lo))
                     if !is_spin_dom
@@ -2188,7 +2216,7 @@ function _probing_witness(
                         add_qb = _prevfloat_finite(0.5 * neg_qb_lo)
                         add_qb_hi = _nextfloat_finite(0.5 * neg_qb_hi)
                     else
-                        df_lo, df_hi = _enclose(_physical(st, st.dual_fields[u]))
+                        df_lo, df_hi = _enclose_physical(st, st.dual_fields[u])
                         m_j_hi = _nextfloat_finite(0.25 * diff_hi)
                         m_j_lo = _prevfloat_finite(0.25 * diff_lo)
                         two_fld_lo = _prevfloat_finite(2.0 * fld_lo)

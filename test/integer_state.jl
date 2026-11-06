@@ -1249,3 +1249,123 @@ end
         check_integer_objective(ws,L,Q,scale,0.0,domain)
     end
 end
+
+@testset "physical enclosures preserve exact endpoint bits across numeric contexts" begin
+    R = Rational{BigInt}
+    bits(x) = reinterpret(UInt64,x)
+    pairbits(x) = map(bits,x)
+    function exact_float_bits(x)
+        b=bits(x);e=Int((b>>52)&0x7ff);m=b&0x000fffffffffffff
+        e==0x7ff && error("finite endpoint required")
+        e==0 || (m|=UInt64(1)<<52)
+        n=BigInt(m);(b>>63)!=0 && (n=-n)
+        p=e==0 ? -1074 : e-1075
+        return p>=0 ? R(n<<p,1) : R(n,big(1)<<(-p))
+    end
+    vals=Int128[0,1,-1,17,-17,3602879701896397,-3602879701896397,
+        (Int128(1)<<53)-1,(Int128(1)<<53)+1,-((Int128(1)<<53)+1),
+        (Int128(1)<<63)+1024,-((Int128(1)<<63)+1025),
+        (Int128(1)<<126)+(Int128(1)<<73)+1,
+        -((Int128(1)<<126)+(Int128(1)<<73)+1),typemin(Int128),typemax(Int128)]
+    shifts=(0,1,2,55,74,127,129,1021,1022,1074)
+    ws=Workspace(fixture([1,2,3],zeros(3),zeros(3,3));rules=:mixed)
+    st=ws._state;saved_ftz=get_zero_subnormals()
+    try
+        for p in (8,24,53,128,256),round in (RoundNearest,RoundUp,RoundDown,RoundToZero),ftz in (false,true)
+            set_zero_subnormals(ftz)
+            setprecision(BigFloat,p) do
+                setrounding(BigFloat,round) do
+                    for q in vals,shift in shifts
+                        # Scalar conversion context only, never a live update.
+                        st.shift=shift
+                        old=QUBOPreprocessing._enclose(QUBOPreprocessing._physical(st,q))
+                        enclosed=QUBOPreprocessing._enclose_physical(st,q)
+                        @test pairbits(enclosed)==pairbits(old)
+                        if iszero(q)
+                            @test pairbits(enclosed)==(UInt64(0),UInt64(0))
+                        elseif p>=53
+                            common=min(trailing_zeros(q),shift)
+                            num=q>>common;d=shift-common
+                            eligible=d<=1021 && (p>=128 || -(Int128(1)<<53)<=num<=(Int128(1)<<53))
+                            if eligible
+                                exact=R(BigInt(q),big(1)<<shift)
+                                lo=exact_float_bits(enclosed[1]);hi=exact_float_bits(enclosed[2])
+                                @test lo<=exact<=hi
+                                if lo==exact
+                                    @test lo==hi
+                                    @test bits(enclosed[1])==bits(enclosed[2])
+                                else
+                                    @test lo<exact<hi
+                                    @test bits(nextfloat(enclosed[1]))==bits(enclosed[2])
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    finally
+        set_zero_subnormals(saved_ftz)
+    end
+    @test get_zero_subnormals()==saved_ftz
+    for q in (BigInt(0),big(1)<<200,-(big(1)<<200)+1),shift in (0,2,55,1074,65536)
+        st.shift=shift;before=deepcopy(q)
+        @test pairbits(QUBOPreprocessing._enclose_physical(st,q))==pairbits(QUBOPreprocessing._enclose(QUBOPreprocessing._physical(st,q)))
+        @test q==before
+    end
+    for q in (R(0),R(1,3),R(-1,3),R(1,10)),shift in (-1,55,65536)
+        st.shift=shift;before=deepcopy(q)
+        @test pairbits(QUBOPreprocessing._enclose_physical(st,q))==pairbits(QUBOPreprocessing._enclose(q))
+        @test q==before
+    end
+    st.shift=-1
+    @test_throws ArgumentError QUBOPreprocessing._enclose_physical(st,Int128(0))
+    @test_throws ArgumentError QUBOPreprocessing._enclose_physical(st,Int128(1))
+    st.shift=typemax(Int)
+    @test pairbits(QUBOPreprocessing._enclose_physical(st,Int128(0)))==(UInt64(0),UInt64(0))
+    @test pairbits(QUBOPreprocessing._enclose_physical(st,BigInt(0)))==(UInt64(0),UInt64(0))
+    for q in (Int128(1),typemin(Int128),typemax(Int128))
+        st.shift=65536
+        @test pairbits(QUBOPreprocessing._enclose_physical(st,q))==pairbits(QUBOPreprocessing._enclose(QUBOPreprocessing._physical(st,q)))
+    end
+    # Preserve raw-coordinate enclosure before the existing outward quarter.
+    try
+        set_zero_subnormals(false)
+        setprecision(BigFloat,256) do
+            setrounding(BigFloat,RoundNearest) do
+                st.shift=2
+                lo,hi=QUBOPreprocessing._enclose_physical(st,Int128(1))
+                @test pairbits((prevfloat(0.25*lo),nextfloat(0.25*hi)))!=pairbits(QUBOPreprocessing._enclose(R(1,16)))
+            end
+        end
+    finally
+        set_zero_subnormals(saved_ftz)
+    end
+    @test get_zero_subnormals()==saved_ftz
+end
+
+@testset "physical enclosures survive productive regridding promotion and rollback" begin
+    L=[1.0,0.0,0.0]
+    Q=[0.0 1.0 1.0;0.0 0.0 0.0;0.0 0.0 0.0]
+    ws=Workspace(fixture([1,2,3],L,Q;domain=:spin);rules=:mixed)
+    root=checkpoint(ws)
+    @test QUBOPreprocessing._enclose_physical(ws._state,Int128(1))==(1.0,1.0)
+    @test eliminate_variable!(ws,1).stop_reason===:applied
+    @test ws._state.shift==1
+    check_integer_objective(ws,L,Q,1.0,0.0,:spin)
+    for promoted in (false,true)
+        promoted && QUBOPreprocessing._ensure_grid!(ws._state,ws._state.shift+130)
+        @test eltype(ws._state.fields)==(promoted ? BigInt : Int128)
+        st=ws._state
+        for q in vcat(st.fields,st.dual_fields,st.lower,st.upper,[q for ns in st.adjacency for (_,q) in ns])
+            @test map(x->reinterpret(UInt64,x),QUBOPreprocessing._enclose_physical(st,q))==map(x->reinterpret(UInt64,x),QUBOPreprocessing._enclose(QUBOPreprocessing._physical(st,q)))
+        end
+        check_integer_objective(ws,L,Q,1.0,0.0,:spin)
+    end
+    rollback!(ws,root)
+    check_integer_objective(ws,L,Q,1.0,0.0,:spin)
+    st=ws._state
+    for q in st.fields
+        @test map(x->reinterpret(UInt64,x),QUBOPreprocessing._enclose_physical(st,q))==map(x->reinterpret(UInt64,x),QUBOPreprocessing._enclose(QUBOPreprocessing._physical(st,q)))
+    end
+end

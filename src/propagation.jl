@@ -2110,8 +2110,8 @@ function _mc_compute_sweep_bounds!(
         H_hi[x] = hx_abs_hi
         W0_lo = _prevfloat_finite(W0_lo + hx_abs_lo)
         M0_hi = _max_nan(M0_hi, hx_abs_hi)
-        up_lo, _ = _enclose(_physical(st, st.upper[x]))
-        _, lo_hi = _enclose(_physical(st, st.lower[x]))
+        up_lo, _ = _enclose_physical(st, st.upper[x])
+        _, lo_hi = _enclose_physical(st, st.lower[x])
         edge_lo = _prevfloat_finite(tot_scale * _prevfloat_finite(up_lo - lo_hi))
         W_lo[x] = _prevfloat_finite(edge_lo + hx_abs_lo)
         if mt == 0
