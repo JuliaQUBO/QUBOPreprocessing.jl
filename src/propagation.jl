@@ -571,7 +571,6 @@ function _polish_spin_state!(
     @inbounds for i in free_vars
         eh = _spin_field(ws, i)
         for (j, q) in st.adjacency[i]
-            q = _physical(st, q)
             scanned += 1
             _poll_expired(scanned, deadline_ns) && return nothing
             (st.fixed[j] == 2 && !iszero(q)) || continue
@@ -595,7 +594,6 @@ function _polish_spin_state!(
         spin_s[best_i] = new_s
         two_new_s = 2 * new_s
         @inbounds for (j, q) in st.adjacency[best_i]
-            q = _physical(st, q)
             (st.fixed[j] == 2 && !iszero(q)) || continue
             eff_h[j] += two_new_s * _spin_coupling(ws, q)
         end
@@ -652,7 +650,6 @@ function _spin_seq_strictly_better(
         s_seq == spin_par[i] && continue
         cut_ex = _spin_field(ws, i)
         for (j, q) in st.adjacency[i]
-            q = _physical(st, q)
             # On expiry the parallel state is kept
             scanned += 1
             _poll_expired(scanned, deadline_ns) && return false
@@ -875,7 +872,6 @@ function _coercive_field_witness_spins(
                     spin_seq[i] = s_i
                     assigned[i] = true
                     for (j, q) in st.adjacency[i]
-                        q = _physical(st, q)
                         scanned += 1
                         if _poll_expired(scanned, deadline_ns)
                             complete = false
@@ -1062,7 +1058,6 @@ function _order_probing_candidates!(
             abs_h = abs(_spin_field(ws, i))
             l1 = _Exact(0)
             for (j, q) in st.adjacency[i]
-                q = _physical(st, q)
                 polled += 1
                 _poll_expired(polled, deadline_ns) && return cand_indices
                 (st.fixed[j] == 2 && !iszero(q)) || continue
@@ -1088,7 +1083,6 @@ function _order_probing_candidates!(
             l1 = _Exact(0)
             eff_h = h_i
             for (j, q) in st.adjacency[i]
-                q = _physical(st, q)
                 polled += 1
                 _poll_expired(polled, deadline_ns) && return cand_indices
                 (st.fixed[j] == 2 && !iszero(q)) || continue

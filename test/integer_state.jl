@@ -1071,3 +1071,181 @@ end
     end
     @test get_zero_subnormals() == saved_ftz
 end
+
+
+@testset "direct exact coordinate couplings match independent dyadic oracles" begin
+    R = Rational{BigInt}
+    vals = Int128[0,1,-1,2,-2,4,-4,7,-7,8,-8,17,-17,12345,-12345,
+        typemin(Int128),typemax(Int128),typemin(Int128)÷4-1,
+        typemin(Int128)÷4,typemax(Int128)÷4,typemax(Int128)÷4+1,
+        typemin(Int128)÷2-1,typemin(Int128)÷2,typemax(Int128)÷2+1]
+    for domain in (:bool,:spin)
+        ws = Workspace(fixture([1],[0.0],zeros(1,1);domain);rules=:mixed)
+        st = ws._state
+        for shift in (0,1,2,3,55,127,140,1074,65536)
+            shift < st.shift && continue
+            QUBOPreprocessing._ensure_grid!(st,shift)
+            for q in vals
+                original = R(BigInt(q),big(1)<<shift)
+                spin = domain === :bool ? original/4 : original
+                bool = domain === :spin ? 4original : original
+                @test QUBOPreprocessing._spin_coupling(ws,q) == spin
+                @test QUBOPreprocessing._bool_coupling(ws,q) == bool
+                @test QUBOPreprocessing._physical_at_shift(st,q,shift) == original
+                @test gcd(numerator(QUBOPreprocessing._spin_coupling(ws,q)),denominator(QUBOPreprocessing._spin_coupling(ws,q))) == 1
+            end
+            for q in (big(0),big(17),-(big(1)<<200),(big(1)<<200)+12345)
+                before = deepcopy(q)
+                original = R(q,big(1)<<shift)
+                @test QUBOPreprocessing._spin_coupling(ws,q) == (domain === :bool ? original/4 : original)
+                @test QUBOPreprocessing._bool_coupling(ws,q) == (domain === :spin ? 4original : original)
+                @test q == before
+            end
+        end
+        # _Exact overloads retain arbitrary rationals and same-domain identity.
+        for exact in (R(0),R(1,3),R(-17,64),R(0.1))
+            @test QUBOPreprocessing._spin_coupling(ws,exact) == (domain === :bool ? exact/4 : exact)
+            @test QUBOPreprocessing._bool_coupling(ws,exact) == (domain === :spin ? 4exact : exact)
+            @test (domain === :bool ? QUBOPreprocessing._bool_coupling(ws,exact) : QUBOPreprocessing._spin_coupling(ws,exact)) === exact
+        end
+        @test_throws ArgumentError QUBOPreprocessing._physical_at_shift(st,Int128(1),-1)
+        @test_throws ArgumentError QUBOPreprocessing._physical_at_shift(st,big(1),-1)
+    end
+    # Zero is meaningful without allocating a denominator on an impossible
+    # exponent; nonzero quarter conversion must detect Int exponent overflow.
+    overflow = Workspace(fixture([1],[0.0],zeros(1,1);domain=:bool))
+    for shift in (typemax(Int)-1,typemax(Int))
+        overflow._state.shift = shift # zero state, scalar context only
+        @test QUBOPreprocessing._spin_coupling(overflow,Int128(0)) == 0
+        @test QUBOPreprocessing._spin_coupling(overflow,big(0)) == 0
+        @test_throws OverflowError QUBOPreprocessing._spin_coupling(overflow,Int128(1))
+        @test_throws OverflowError QUBOPreprocessing._spin_coupling(overflow,big(1))
+    end
+end
+
+@testset "exact coordinate and Float expression order survive public precision contexts" begin
+    R = Rational{BigInt}
+    bits(x) = reinterpret(UInt64,x)
+    saved = get_zero_subnormals()
+    try
+        for ftz in (false,true)
+            set_zero_subnormals(ftz)
+            for precision_bits in (8,24,53,256), mode in (RoundNearest,RoundUp,RoundDown,RoundToZero)
+                setprecision(BigFloat,precision_bits) do
+                    setrounding(BigFloat,mode) do
+                        for domain in (:bool,:spin)
+                            ws = Workspace(fixture([1],[0.0],zeros(1,1);domain))
+                            for shift in (2,55,127,1075), q in Int128[0,17,-12345,typemin(Int128),typemax(Int128)]
+                                QUBOPreprocessing._ensure_grid!(ws._state,shift)
+                                raw = R(q,big(1)<<shift)
+                                exact_spin = domain === :bool ? raw/4 : raw
+                                exact_bool = domain === :spin ? 4raw : raw
+                                @test bits(Float64(QUBOPreprocessing._spin_coupling(ws,q))) == bits(Float64(exact_spin))
+                                @test bits(Float64(QUBOPreprocessing._bool_coupling(ws,q))) == bits(Float64(exact_bool))
+                                # Float consumers keep conversion before Bool's
+                                # factor0.25, unlike the exact coordinate view.
+                                old_float = domain === :bool ? 0.25*Float64(raw) : Float64(raw)
+                                @test bits(QUBOPreprocessing._float_spin_coupling(ws,q)) == bits(old_float)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    finally
+        set_zero_subnormals(saved)
+    end
+    @test get_zero_subnormals() == saved
+end
+
+@testset "direct coordinates remain exact across grid extension promotion and rollback" begin
+    L = [1.0,0.0,0.0]
+    Q = [0.0 1.0 1.0;0.0 0.0 0.0;0.0 0.0 0.0]
+    ws = Workspace(fixture([1,2,3],L,Q;domain=:spin);rules=:mixed)
+    root = checkpoint(ws)
+    old = QUBOPreprocessing._bool_coupling(ws,first(ws._state.adjacency[1]).second)
+    @test old == 4
+    @test eliminate_variable!(ws,1).stop_reason === :applied
+    @test ws._state.shift == 1
+    check_integer_objective(ws,L,Q,1.0,0.0,:spin)
+    for i in (2,3),(_,q) in ws._state.adjacency[i]
+        @test QUBOPreprocessing._bool_coupling(ws,q) == 4Rational{BigInt}(q)/(big(1)<<ws._state.shift)
+    end
+    QUBOPreprocessing._ensure_grid!(ws._state,ws._state.shift+130)
+    @test eltype(ws._state.fields) === BigInt
+    check_integer_objective(ws,L,Q,1.0,0.0,:spin)
+    rollback!(ws,root)
+    @test old == 4
+    check_integer_objective(ws,L,Q,1.0,0.0,:spin)
+    for i in 1:3,(_,q) in ws._state.adjacency[i]
+        @test QUBOPreprocessing._bool_coupling(ws,q) == 4
+    end
+end
+
+@testset "public cross-domain quarter exports own both mutable BigInts" begin
+    R = Rational{BigInt}
+    poison(q) = (Base.GMP.MPZ.set!(numerator(q),big(777));Base.GMP.MPZ.set!(denominator(q),big(7)))
+    for domain in (:bool,:spin),sense in (:min,:max),scale in (-2.0,0.5),gauged in (false,true)
+        # Both transformations have final J=1/4: Bool1/4 and Spin(1/16)*4.
+        nativeq = domain === :bool ? 1.0 : 1/16
+        L = [0.1,-0.3,2.0];Q=[0.0 nativeq 0.0;0.0 0.0 0.0;0.0 0.0 0.0]
+        model=fixture([1,2,3],L,Q;domain,sense,scale)
+        ws=Workspace(model;rules=:mixed,integerize_scale=false)
+        other=Workspace(model;rules=:mixed,integerize_scale=false)
+        target=domain===:bool ? :spin : :bool
+        gauge=gauged ? [-1,1,-1] : [1,1,1]
+        map=domain_map(ws;domain=target,gauge)
+        raw=first(ws._state.adjacency[1]).second
+        borrowed=domain===:bool ? QUBOPreprocessing._spin_coupling(ws,raw) : QUBOPreprocessing._bool_coupling(ws,raw)
+        @test borrowed == R(1,4)
+        copied=deepcopy(ws)
+        owned=last(only(incident_couplings(ws,1;map)))
+        @test owned == gauge[1]*gauge[2]*R(1,4)
+        @test numerator(owned) !== numerator(borrowed)
+        @test denominator(owned) !== denominator(borrowed)
+        poison(owned)
+        @test borrowed == R(1,4)
+        @test last(only(incident_couplings(ws,1;map))) == gauge[1]*gauge[2]*R(1,4)
+        result=materialize(ws,map;coefficient_type=R)
+        out=export_model(result)
+        for y in states(3,target)
+            expected=domain===:bool ? [(gauge[i]*y[i]+1)÷2 for i in 1:3] : [gauge[i]*(2*y[i]-1) for i in 1:3]
+            @test reconstruct(result,y).state == expected
+            @test exact_model_energy(out,y) == reference(L,Q,scale,0.0,expected,R)
+        end
+        for q in (linear(out)[1],quadratic(out)[1,2],QT.offset(out),QT.scale(out))
+            poison(q)
+        end
+        fresh=export_model(result)
+        @test quadratic(fresh)[1,2] == gauge[1]*gauge[2]*R(1,4)
+        @test borrowed == R(1,4)
+        # Public MaxCut graph and certificates also promise owned rationals.
+        graph=maxcut_graph(ws)
+        for (_,q) in graph.reference_weights
+            poison(q)
+        end
+        for (_,_,q) in graph.edge_weights
+            poison(q)
+        end
+        poison(graph.cut_constant);poison(graph.scale)
+        @test borrowed == R(1,4)
+        attempt=prove_dominance(ws,3)
+        @test attempt.certificate !== nothing && verify_certificate(ws,attempt.certificate).valid
+        for step in attempt.certificate.steps,q in (step.lower,step.upper,step.constant)
+            poison(q)
+        end
+        @test verify_certificate(ws,prove_dominance(ws,3).certificate).valid
+        @test apply_dominance!(ws,3).stop_reason === :applied
+        exported=export_certificate(ws)
+        for step in exported.steps,q in (step.lower,step.upper,step.constant)
+            poison(q)
+        end
+        @test verify_certificate(ws,export_certificate(ws)).valid
+        @test borrowed == R(1,4)
+        check_integer_objective(ws,L,Q,scale,0.0,domain)
+        check_integer_objective(other,L,Q,scale,0.0,domain)
+        check_integer_objective(copied,L,Q,scale,0.0,domain)
+        reset!(ws,model;integerize_scale=false)
+        check_integer_objective(ws,L,Q,scale,0.0,domain)
+    end
+end

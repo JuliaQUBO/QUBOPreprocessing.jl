@@ -393,8 +393,13 @@ _spin_coupling(ws::Workspace, q::_Exact) =
 _bool_coupling(ws::Workspace, q::_Exact) =
     ws._snapshot.domain === QT.BoolDomain ? q : 4 * q
 
-_spin_coupling(ws::Workspace, q::Integer) = _spin_coupling(ws, _physical(ws._state, q))
-_bool_coupling(ws::Workspace, q::Integer) = _bool_coupling(ws, _physical(ws._state, q))
+@inline function _spin_coupling(ws::Workspace, q::Integer)
+    st = ws._state
+    (ws._snapshot.domain === QT.SpinDomain || iszero(q)) && return _physical(st, q)
+    return _physical_at_shift(st, q, Base.Checked.checked_add(st.shift, 2))
+end
+@inline _bool_coupling(ws::Workspace, q::Integer) =
+    ws._snapshot.domain === QT.BoolDomain ? _physical(ws._state, q) : _physical_times_four(ws._state, q)
 
 function _mapped_field(ws::Workspace, i::Int, m::Union{Nothing,DomainGaugeMap})
     m === nothing && return _physical(ws._state, ws._state.fields[i])
@@ -408,7 +413,6 @@ function _mapped_field(ws::Workspace, i::Int, m::Union{Nothing,DomainGaugeMap})
         h_g = g_i * _spin_field(ws, i)
         coupling_sum = _Exact(0)
         for (j, q) in st.adjacency[i]
-            q = _physical(st, q)
             st.fixed[j] == 2 || continue
             coupling_sum += (g_i * m.gauge[j]) * _spin_coupling(ws, q)
         end
@@ -417,8 +421,7 @@ function _mapped_field(ws::Workspace, i::Int, m::Union{Nothing,DomainGaugeMap})
 end
 
 function _mapped_coupling(ws::Workspace, i::Int, j::Int, q::Union{Integer,_Exact}, m::Union{Nothing,DomainGaugeMap})
-    q = _physical(ws._state, q)
-    m === nothing && return q
+    m === nothing && return _physical(ws._state, q)
     sign_ij = m.gauge[i] * m.gauge[j]
     return m.target_domain === :spin ? sign_ij * _spin_coupling(ws, q) :
                                        sign_ij * _bool_coupling(ws, q)
@@ -437,7 +440,6 @@ function _direct_mapped_constant(ws::Workspace, m::Union{Nothing,DomainGaugeMap}
             st.fixed[i] == 2 || continue
             c -= m.gauge[i] * _spin_field(ws, i)
             for (j, q) in st.adjacency[i]
-                q = _physical(st, q)
                 i < j && st.fixed[j] == 2 || continue
                 c += (m.gauge[i] * m.gauge[j]) * _spin_coupling(ws, q)
             end
@@ -483,7 +485,6 @@ function _mapped_constant(ws::Workspace, m::Union{Nothing,DomainGaugeMap})
                     h_i = _spin_field(ws, i)
                     csum = _Exact(0)
                     for (j, q) in st.adjacency[i]
-                        q = _physical(st, q)
                         (st.fixed[j] == 2 || st.entries[j] > pos) || continue
                         csum += (g_i * m.gauge[j]) * _spin_coupling(ws, q)
                     end
@@ -555,7 +556,6 @@ function incident_couplings(ws::Workspace, label; map::Union{Nothing,DomainGauge
     V = s.label_type
     out = Pair{V,_Exact}[]
     for (j, q) in st.adjacency[i]
-        q = _physical(st, q)
         st.fixed[j] == 2 || continue
         lbl = _owned_labels(V[s.labels[j]])[1]
         push!(out, lbl => deepcopy(_mapped_coupling(ws, i, j, q, map)))
@@ -621,7 +621,6 @@ function _ws_coercive_ratios_and_active(ws::Workspace; norm::Real=2)
             abs_h = abs(_spin_field(ws, i))
             abs_js = _Exact[]
             for (j, q) in st.adjacency[i]
-                q = _physical(st, q)
                 (st.fixed[j] == 2 && !iszero(q)) || continue
                 push!(abs_js, abs(_spin_coupling(ws, q)))
             end
@@ -769,7 +768,6 @@ function trivial_dominance_fraction(
         abs_h = abs(_spin_field(ws, i))
         l1 = _Exact(0)
         for (j, q) in st.adjacency[i]
-            q = _physical(st, q)
             (st.fixed[j] == 2 && !iszero(q)) || continue
             l1 += abs(_spin_coupling(ws, q))
         end

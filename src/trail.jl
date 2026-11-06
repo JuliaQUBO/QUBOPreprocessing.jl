@@ -237,9 +237,11 @@ Base.propertynames(::_Incremental, private::Bool=false) =
     return value
 end
 
-@inline function _physical(st::_Incremental, q::Int128)
+# Exact coordinate views use an explicit nonnegative grid exponent without
+# changing the live payload. Returned numerators and denominators are read-only.
+@inline function _physical_at_shift(st::_Incremental, q::Int128, shift::Int)
+    shift >= 0 || throw(ArgumentError("dyadic exponent must be nonnegative"))
     iszero(q) && return _physical_constant!(st, 8, Int128(0), 0)
-    shift = st.shift
     common = min(trailing_zeros(q), shift)
     num = q >> common
     den_shift = shift - common
@@ -252,9 +254,33 @@ end
     end
     return _from_normalized_dyadic(num, den_shift, st.denominators)
 end
+@inline function _physical_at_shift(st::_Incremental, q::Integer, shift::Int)
+    shift >= 0 || throw(ArgumentError("dyadic exponent must be nonnegative"))
+    return _from_dyadic_integer(q, shift)
+end
+@inline _physical(st::_Incremental, q::Int128) = _physical_at_shift(st, q, st.shift)
 @inline _physical(st::_Incremental, q::Integer) = _from_dyadic_integer(q, st.shift)
 @inline _physical(st::_Incremental, q::_Exact) = q
 @inline _physical(q::Integer, shift::Int) = _from_dyadic_integer(q, shift)
+
+@inline function _physical_times_four(st::_Incremental, q::Int128)
+    shift = st.shift
+    shift >= 2 && return _physical_at_shift(st, q, shift - 2)
+    # The live grid is nonnegative. At shifts zero and one, multiply only after
+    # checking bounds; never negate/abs typemin or overflow an intermediate.
+    factor = shift == 0 ? Int128(4) : shift == 1 ? Int128(2) :
+        throw(ArgumentError("dyadic exponent must be nonnegative"))
+    if typemin(Int128) ÷ factor <= q <= typemax(Int128) ÷ factor
+        return _physical_at_shift(st, q * factor, 0)
+    end
+    return _from_dyadic_integer(BigInt(q) * factor, 0)
+end
+@inline function _physical_times_four(st::_Incremental, q::Integer)
+    shift = st.shift
+    shift >= 2 && return _physical_at_shift(st, q, shift - 2)
+    shift >= 0 || throw(ArgumentError("dyadic exponent must be nonnegative"))
+    return _from_dyadic_integer(BigInt(q) << (2 - shift), 0)
+end
 
 # Float-only consumers can avoid constructing a rational when the normalized
 # dyadic is exactly representable as a normal binary64. Keep the old conversion

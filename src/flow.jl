@@ -657,7 +657,6 @@ function _build_implication_network(
             exact_work < max_exact_work || return (false, :verification_limit, nothing, _Exact(0), graph_work, exact_work)
             exact_work += 1
             iszero(q) && continue
-            q = _physical(st, q)
             J_uv = direction * _spin_coupling(ws, q)
             iszero(J_uv) && continue
             aJ = abs(J_uv)
@@ -951,7 +950,6 @@ function _build_submodular_cut_network(
             end
         end
         for (v, q) in st.adjacency[u]
-            q = _physical(st, q)
             _expired(deadline_ns) && return (false, :deadline, nothing, _Exact(0), graph_work, exact_work)
             graph_work < max_work || return (false, :work_limit, nothing, _Exact(0), graph_work, exact_work)
             graph_work += 1

@@ -120,7 +120,6 @@ function maxcut_graph(
             push!(ref_weights, lbl_u => 2 * h_u)
         end
         for (v, q) in st.adjacency[u]
-            q = _physical(st, q)
             _expired(deadline_ns) && return MaxCutGraph{V}(
                 generation(ws), 0, V[], Int[], Int[], _Exact(0), _Exact(0),
                 Pair{V,_Exact}[], Tuple{V,V,_Exact}[], 0, 0, 0, :deadline, graph_work, exact_work,
@@ -320,7 +319,7 @@ function _ws_mc_J(ws::Workspace, x::Int, y::Int, direction::Int)
     (st.fixed[x] == 2 && st.fixed[y] == 2) || return _Exact(0)
     pos = get(st.adj_pos[x], y, 0)
     pos == 0 && return _Exact(0)
-    return direction * _spin_coupling(ws, _physical(st, st.adjacency[x][pos].second))
+    return direction * _spin_coupling(ws, st.adjacency[x][pos].second)
 end
 
 function _ws_mc_total_abs_weight(
@@ -371,7 +370,6 @@ function _ws_mc_total_abs_weight(
         exact_work += 1
         total += abs(direction * _spin_field(ws, x))
         for (d, q) in st.adjacency[x]
-            q = _physical(st, q)
             _expired(deadline_ns) && return (false, :deadline, _Exact(0), visits, exact_work)
             visits < max_work || return (false, :work_limit, _Exact(0), visits, exact_work)
             visits += 1
@@ -452,7 +450,6 @@ function _eval_maxcut_anchor(
     tri_work = 0
     exact_work = 1
     for (w, q) in st.adjacency[a]
-        q = _physical(st, q)
         _expired(deadline_ns) &&
             return (false, :deadline, :maxcut_edge, 0, _Exact(0), _Exact(0), _Exact(0), (), graph_work, tri_work, exact_work)
         graph_work < max_work ||
