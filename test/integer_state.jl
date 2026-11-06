@@ -1369,3 +1369,116 @@ end
         @test map(x->reinterpret(UInt64,x),QUBOPreprocessing._enclose_physical(st,q))==map(x->reinterpret(UInt64,x),QUBOPreprocessing._enclose(QUBOPreprocessing._physical(st,q)))
     end
 end
+
+@testset "rollback preserves exact conditioned states and ordered removal reports" begin
+    L = [-8.0, 2.0, 0.5]
+    Q = [0.0 1.0 -0.25; 0.0 0.0 0.5; zeros(1,3)]
+    for domain in (:bool,:spin), rules in (:identity,:dominance),
+        scale in (-0.5,0.5), wide in (false,true), with_report in (false,true)
+        ws = Workspace(fixture([:a,:b,:c],L,Q;domain,scale,offset=0.125);rules)
+        root = checkpoint(ws)
+        low = domain === :bool ? 0 : -1
+        @test assume!(ws,:c,low).stop_reason === :applied
+        conditioned = checkpoint(ws)
+        @test assume!(ws,:a,1).stop_reason === :applied
+        branch = checkpoint(ws)
+        @test assume!(ws,:b,low).stop_reason === :applied
+        # A checkpoint may precede payload replacement. Undo must use the
+        # current grid and backend, not the payload that existed at that pin.
+        wide && QUBOPreprocessing._ensure_grid!(ws._state,ws._state.shift+130)
+        payload = ws._state.numeric
+        @test eltype(payload.fields) === (wide ? BigInt : Int128)
+        check_integer_objective(ws,L,Q,scale,0.125,domain)
+        result = rollback!(ws,conditioned;report=with_report)
+        @test ws._state.numeric === payload
+        @test assumptions(ws) == [:c=>low]
+        if with_report
+            @test result isa RollbackReport
+            @test generation(result) == generation(ws)
+            @test result.checkpoint == conditioned
+            @test result.caller_unfixed == [2=>low,1=>1]
+            @test isempty(result.deduction_unfixed)
+        else
+            @test result === ws
+        end
+        check_integer_objective(ws,L,Q,scale,0.125,domain)
+        # Discarded-branch validation must finish before it can undo anything.
+        state_before = (copy(ws._state.fields),copy(ws._state.fixed),copy(assumptions(ws)),
+                        length(ws._state.trail),conditioned_constant(ws))
+        @test_throws ArgumentError rollback!(ws,branch;report=with_report)
+        @test ws._state.numeric === payload
+        @test (ws._state.fields,ws._state.fixed,assumptions(ws),
+               length(ws._state.trail),conditioned_constant(ws)) == state_before
+        empty_report = rollback!(ws,conditioned;report=true)
+        @test isempty(empty_report.caller_unfixed) && isempty(empty_report.deduction_unfixed)
+        root_report = rollback!(ws,root;report=true)
+        @test root_report.caller_unfixed == [3=>low]
+        @test isempty(root_report.deduction_unfixed)
+        @test ws._state.numeric === payload
+        check_integer_objective(ws,L,Q,scale,0.125,domain)
+    end
+end
+
+@testset "rollback retains promoted journals and restores nested deduction pins" begin
+    for domain in (:bool,:spin), wide in (false,true)
+        L = [-8.0, 2.0, 0.5]
+        Q = [0.0 1.0 0.0; 0.0 0.0 0.5; zeros(1,3)]
+        ws = Workspace(fixture([:a,:b,:c],L,Q;domain);rules=:dominance)
+        low = domain === :bool ? 0 : -1
+        root = checkpoint(ws)
+        @test assume!(ws,:c,low).stop_reason === :applied
+        conditioned = checkpoint(ws)
+        @test apply_dominance!(ws,:a).stop_reason === :applied
+        @test assume!(ws,:a,1).stop_reason === :unchanged
+        pinned = checkpoint(ws)
+        @test apply_dominance!(ws,:b).stop_reason === :applied
+        @test assume!(ws,:b,low).stop_reason === :unchanged
+        discarded = checkpoint(ws)
+        wide && QUBOPreprocessing._ensure_grid!(ws._state,ws._state.shift+130)
+        payload = ws._state.numeric
+        report = rollback!(ws,pinned;report=true)
+        @test ws._state.numeric === payload
+        @test isempty(report.caller_unfixed)
+        @test report.deduction_unfixed == [2=>low]
+        @test length(ws._state.pins) == 1
+        @test only(ws._state.pins)[1:2] == (1,1)
+        @test_throws ArgumentError rollback!(ws,discarded)
+        check_integer_objective(ws,L,Q,1.0,0.0,domain)
+        report = rollback!(ws,conditioned;report=true)
+        @test report.deduction_unfixed == [1=>1]
+        @test isempty(report.caller_unfixed) && isempty(ws._state.pins)
+        check_integer_objective(ws,L,Q,1.0,0.0,domain)
+        @test rollback!(ws,root) === ws
+        @test ws._state.numeric === payload
+        check_integer_objective(ws,L,Q,1.0,0.0,domain)
+    end
+    # Structural reductions alter adjacency and have a distinct undo record.
+    # This Spin elimination extends the grid before a later wide promotion.
+    L = [1.0,0.0,0.0,2.0]
+    Q = [0.0 1.0 1.0 0.0; zeros(3,4)]
+    for wide in (false,true), with_report in (false,true)
+        ws = Workspace(fixture(collect(1:4),L,Q;domain=:spin);rules=:mixed)
+        root = checkpoint(ws)
+        @test assume!(ws,4,1).stop_reason === :applied
+        conditioned = checkpoint(ws)
+        @test eliminate_variable!(ws,1).stop_reason === :applied
+        @test ws._state.extensions == 1
+        @test any(e isa QUBOPreprocessing._UndoReduction for e in ws._state.trail)
+        wide && QUBOPreprocessing._ensure_grid!(ws._state,ws._state.shift+130)
+        payload = ws._state.numeric
+        result = rollback!(ws,conditioned;report=with_report)
+        @test ws._state.numeric === payload
+        @test ws._state.shift == (wide ? 131 : 1)
+        @test assumptions(ws) == [4=>1]
+        if with_report
+            # Reduction reconstruction is not a removed unary fixing.
+            @test isempty(result.caller_unfixed) && isempty(result.deduction_unfixed)
+        else
+            @test result === ws
+        end
+        check_integer_objective(ws,L,Q,1.0,0.0,:spin)
+        @test rollback!(ws,root) === ws
+        @test ws._state.numeric === payload
+        check_integer_objective(ws,L,Q,1.0,0.0,:spin)
+    end
+end

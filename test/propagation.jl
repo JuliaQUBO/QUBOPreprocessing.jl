@@ -274,3 +274,209 @@ end
     @test index_map(small)[2] == 0
     @test index_map(large)[2] == 2
 end
+
+# BEGIN TYPED RELATION QUEUE REGRESSION FIXTURES
+# Typed relation-queue regression fixtures (all at most eight variables).
+import UUIDs
+# Independent synthetic fixtures only. Every model is checked <=8 BEFORE construction.
+const REL_TRACE=String[]
+mutable struct RelationDeadline
+    expire_at::Int
+    polls::Int
+end
+# Test-only deterministic clock accepted by a type-specific guard method.
+# Legal public UInt64/nothing deadlines keep the original production method.
+function QUBOPreprocessing._limits(max_work,deadline::RelationDeadline)
+    max_work isa Integer && !(max_work isa Bool) && 0<=max_work<=typemax(Int) ||
+        throw(ArgumentError("max_work must be a nonnegative machine-sized integer"))
+    return nothing
+end
+function Base.:>=(::UInt64,d::RelationDeadline)
+    d.polls+=1
+    return d.polls>=d.expire_at
+end
+function relation_normalize(x)
+    x===nothing && return "nothing"
+    x isa UUIDs.UUID && return "<UUIDs.UUID>"
+    x isa Symbol && return string(x)
+    x isa AbstractString && return String(x)
+    x isa AbstractFloat && return (string(typeof(x)),bitstring(x))
+    x isa Number && return (string(typeof(x)),string(x))
+    x isa Pair && return (relation_normalize(x.first),relation_normalize(x.second))
+    x isa AbstractDict && return sort!([(repr(relation_normalize(k)),relation_normalize(v)) for (k,v) in x];by=first)
+    x isa Union{Tuple,AbstractArray} && return (string(typeof(x)),[relation_normalize(v) for v in x])
+    return (string(typeof(x)),[(string(f),relation_normalize(getfield(x,f))) for f in fieldnames(typeof(x))])
+end
+function relation_record(label,ws,result,deadline=nothing)
+    push!(REL_TRACE,repr((label,relation_normalize(result),relation_normalize(ws._state),deadline===nothing ? 0 : deadline.polls)))
+end
+function relation_input(kind,domain,sense,scale)
+    if kind===:glk
+        h=[2.0,2.0,0.0];J=[0.0 -3.0 2.0;0.0 0.0 2.0;zeros(1,3)]
+    elseif kind===:twins
+        h=zeros(4);J=[0.0 0.0 -2.0 1.0;0.0 0.0 -2.0 1.0;0.0 0.0 0.0 1.0;zeros(1,4)]
+    else
+        h=[0.0,1.0,-1.0,0.0];J=[0.0 -4.0 0.5 0.0;0.0 0.0 -1.0 0.0;0.0 0.0 0.0 -2.0;zeros(1,4)]
+    end
+    # Keep all min/max and scale signs nontrivial while retaining exact Float64 inputs.
+    direction=(sense===:min ? 1 : -1)*(scale<0 ? -1 : 1)
+    h=direction*h;J=direction*J;c=0.125
+    if domain===:spin
+        return h,J,c
+    end
+    n=length(h);L=2h;Q=4J;c-=sum(h)
+    for i in 1:n,j in i+1:n
+        L[i]-=2J[i,j];L[j]-=2J[i,j];c+=J[i,j]
+    end
+    return L,Q,c
+end
+function relation_workspace(L,Q,c,domain,sense,scale,backend)
+    1<=length(L)<=8 || error("tiny relations fixtures require at most8 variables")
+    ws=Workspace(fixture(collect(1:length(L)),L,Q;domain,sense,scale,offset=c);rules=:relations,integerize_scale=false)
+    st=ws._state
+    if backend===:fine_int128
+        QUBOPreprocessing._ensure_grid!(st,st.shift+2)
+    elseif backend===:bigint
+        st.numeric=QUBOPreprocessing._regrid(st,BigInt,st.shift)
+    elseif backend===:fine_bigint
+        QUBOPreprocessing._ensure_grid!(st,st.shift+130)
+    end
+    @test eltype(st.fields)==(backend in (:bigint,:fine_bigint) ? BigInt : Int128)
+    return ws
+end
+function relation_oracle(ws,L,Q,c,domain,sense,scale)
+    n=length(L);@test n<=8
+    original=[reference(L,Q,scale,c,x,Rational{BigInt}) for x in states(n,domain)]
+    best=sense===:min ? minimum(original) : maximum(original)
+    mat=isempty(ws._state.fixes) ? materialize(ws) : materialize(ws;coefficient_type=Rational{BigInt});out=export_model(mat)
+    proof=export_certificate(ws)
+    proof===nothing || @test verify_certificate(ws,proof).valid
+    lf,qf=linear(out),quadratic(out);energies=Rational{BigInt}[]
+    for y in states(QT.dimension(out),domain)
+        rr=reconstruct(mat,y);energy=Rational{BigInt}(QT.offset(out))
+        for i in eachindex(y)
+            energy+=Rational{BigInt}(lf[i])*y[i]
+            for j in i+1:length(y);energy+=Rational{BigInt}(qf[i,j])*y[i]*y[j];end
+        end
+        energy*=Rational{BigInt}(QT.scale(out))
+        @test energy==reference(L,Q,scale,c,rr.state,Rational{BigInt})
+        push!(energies,energy)
+    end
+    @test (sense===:min ? minimum(energies) : maximum(energies))==best
+    return nothing
+end
+@testset "typed relation queue exact state, proof, residual and rollback invariants" begin
+    for kind in (:glk,:twins,:chain),domain in (:bool,:spin),sense in (:min,:max),
+        scale in (-0.5,0.5),weak in (false,true),mapped in (false,true),
+        backend in (:int128,:fine_int128,:bigint,:fine_bigint)
+        L,Q,c=relation_input(kind,domain,sense,scale)
+        ws=relation_workspace(L,Q,c,domain,sense,scale,backend)
+        root=checkpoint(ws)
+        map=mapped ? domain_map(ws;domain=domain===:bool ? :spin : :bool,gauge=[isodd(i) ? -1 : 1 for i in eachindex(L)]) : nothing
+        report=contract_relations!(ws;allow_weak=weak,map)
+        @test report.stop_reason===:quiescent
+        relation_record((kind,domain,sense,scale,weak,mapped,backend,:complete),ws,report)
+        relation_oracle(ws,L,Q,c,domain,sense,scale)
+        rollback!(ws,root)
+        @test all(==(Int8(2)),ws._state.fixed)
+        relation_oracle(ws,L,Q,c,domain,sense,scale)
+        relation_record((kind,domain,sense,scale,weak,mapped,backend,:rollback),ws,nothing)
+    end
+end
+@testset "direct queue ordered polls and exact/work caps preserve parent traces" begin
+    for kind in (:glk,:twins),domain in (:bool,:spin),weak in (false,true),backend in (:int128,:bigint),
+        work in (0,1,3,12,100),exact in (0,4,100)
+        L,Q,c=relation_input(kind,domain,:min,0.5)
+        ws=relation_workspace(L,Q,c,domain,:min,0.5,backend)
+        result=QUBOPreprocessing._step_relation_queue!(ws,typemax(Int),nothing,weak,1,work,exact,nothing)
+        relation_record((kind,domain,weak,backend,:caps,work,exact),ws,result)
+        relation_oracle(ws,L,Q,c,domain,:min,0.5)
+    end
+    for kind in (:glk,:twins),domain in (:bool,:spin),weak in (false,true),backend in (:int128,:bigint),expire in 1:24
+        L,Q,c=relation_input(kind,domain,:min,0.5)
+        ws=relation_workspace(L,Q,c,domain,:min,0.5,backend)
+        d=RelationDeadline(expire,0)
+        result=QUBOPreprocessing._step_relation_queue!(ws,typemax(Int),nothing,weak,1,1000,1000,d)
+        @test d.polls<=expire
+        relation_record((kind,domain,weak,backend,:deadline,expire),ws,result,d)
+        relation_oracle(ws,L,Q,c,domain,:min,0.5)
+    end
+    L,Q,c=relation_input(:glk,:spin,:min,0.5)
+    for deadline in (UInt64(0),nothing),work in (0,1)
+        ws=relation_workspace(L,Q,c,:spin,:min,0.5,:int128)
+        before=relation_normalize(ws._state)
+        r=QUBOPreprocessing._step_relation_queue!(ws,0,nothing,false,1,work,0,deadline)
+        @test r[1]===(deadline===nothing ? :work_limit : :deadline)
+        @test relation_normalize(ws._state)==before
+        relation_record((:entry_guard,deadline,work),ws,r)
+    end
+end
+# Applying a contraction may widen the payload. This fixture verifies that
+# queue-pop journaling uses the new owner after the applied exit.
+@testset "applying relation exits after an Int128 to BigInt payload replacement" begin
+    q=-ldexp(1.0,115);n=6;L=zeros(n);Q=zeros(n,n)
+    for i in 1:n,j in i+1:n;Q[i,j]=q;end
+    ws=relation_workspace(L,Q,0.0,:spin,:min,1.0,:int128)
+    QUBOPreprocessing._ensure_grid!(ws._state,ws._state.shift+4)
+    @test QUBOPreprocessing._payload_fits(ws._state.numeric)
+    old=ws._state.numeric
+    r=QUBOPreprocessing._step_relation_queue!(ws,typemax(Int),nothing,true,1,10000,10000,nothing)
+    @test r[1]===:applied
+    @test ws._state.numeric!==old
+    @test eltype(ws._state.fields)===BigInt
+    @test ws._state.promotions==1
+    @test any(e isa QUBOPreprocessing._UndoReduction for e in ws._state.trail)
+    @test last(ws._state.trail) isa QUBOPreprocessing._UndoQueue
+    relation_record(:apply_payload_replacement,ws,r)
+    relation_oracle(ws,L,Q,0.0,:spin,:min,1.0)
+end
+
+@testset "forward, reverse and nonadjacent twin branch lifetime" begin
+    # Forward: the first queued vertex is the eliminated endpoint.
+    L,Q,c=relation_input(:glk,:spin,:min,0.5)
+    ws=relation_workspace(L,Q,c,:spin,:min,0.5,:int128)
+    r=QUBOPreprocessing._step_relation_queue!(ws,typemax(Int),nothing,false,1,10000,10000,nothing)
+    @test r[1]===:applied
+    @test ws._state.fixed[1]==3
+    relation_record(:forward_branch,ws,r)
+    relation_oracle(ws,L,Q,c,:spin,:min,0.5)
+    # Reverse: eliminating the first star center would exceed fill0, but a leaf
+    # can contract into it. The reverse branch must not perform the forward pop.
+    L=[10.0,0.0,0.0,0.0]
+    Q=[0.0 -3.0 1.0 1.0;zeros(3,4)];c=0.0
+    for backend in (:int128,:bigint)
+        ws=relation_workspace(L,Q,c,:spin,:min,1.0,backend)
+        beforehead=ws._state.rel_head
+        r=QUBOPreprocessing._step_relation_queue!(ws,0,nothing,false,1,10000,10000,nothing)
+        @test r[1]===:applied
+        @test ws._state.fixed[1]==2 && ws._state.fixed[2]==3
+        @test ws._state.rel_head==beforehead
+        relation_record((:reverse_branch,backend),ws,r)
+        relation_oracle(ws,L,Q,c,:spin,:min,1.0)
+    end
+    # Nonadjacent twins are tried after all adjacent orientations exceed fill0.
+    L=zeros(5);Q=zeros(5,5)
+    for i in 1:2,j in 3:5;Q[i,j]=1.0;end
+    for backend in (:int128,:bigint)
+        ws=relation_workspace(L,Q,c,:spin,:min,1.0,backend)
+        r=QUBOPreprocessing._step_relation_queue!(ws,0,nothing,true,1,10000,10000,nothing)
+        @test r[1]===:applied
+        @test ws._state.fixed[1]==3 && ws._state.fixed[2]==2
+        step=only(export_certificate(ws).steps)
+        @test step.eliminated==1 && step.representative==2
+        relation_record((:twin_branch,backend),ws,r)
+        relation_oracle(ws,L,Q,c,:spin,:min,1.0)
+    end
+end
+@testset "non-strict attempts retain the borrowed payload and fallback status" begin
+    # With fill0, blocked adjacent pairs and non-strict witnesses are resumable.
+    L=zeros(3);Q=[0.0 1.0 1.0;0.0 0.0 1.0;zeros(1,3)]
+    for backend in (:int128,:bigint),weak in (false,true),fallback in (false,true)
+        ws=relation_workspace(L,Q,0.0,:spin,:min,1.0,backend)
+        payload=ws._state.numeric
+        r=QUBOPreprocessing._step_relation_queue!(ws,typemax(Int),nothing,weak,1,10000,10000,nothing;allow_exact_fallback=fallback)
+        r[1]===:applied || @test ws._state.numeric===payload
+        relation_record((:fallback_status,backend,weak,fallback),ws,r)
+        relation_oracle(ws,L,Q,0.0,:spin,:min,1.0)
+    end
+end

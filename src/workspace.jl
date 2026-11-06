@@ -872,10 +872,17 @@ cost constant-size work and no full materialization is needed.
 function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
     _validate_checkpoint(ws, cp)
     st = ws._state
+    return _rollback_integer!(ws, st, st.numeric, cp; report)
+end
+
+# Rollback restores journaled values without regridding or replacing the payload.
+# Dispatch once so undo iteration and numeric array writes retain their type.
+function _rollback_integer!(ws::Workspace, st::_Incremental, numeric::_IntegerState{I},
+                            cp::Checkpoint; report::Bool=false) where {I<:Integer}
     captured = if report
         callers,deductions = Pair{Int,Int}[],Pair{Int,Int}[]
         for k in length(st.fixes):-1:cp._fix_depth+1
-            e = st.trail[st.fixes[k]]
+            e = numeric.trail[st.fixes[k]]
             if e isa _UndoFix
                 push!(e.proof === nothing ? callers : deductions,e.index=>e.value)
             end
@@ -884,8 +891,8 @@ function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
     else
         nothing
     end
-    while length(st.trail) > cp._depth
-        undo = pop!(st.trail)
+    while length(numeric.trail) > cp._depth
+        undo = pop!(numeric.trail)
         if undo isa _UndoQueue
             b = Int(undo.bucket)
             if b == 0
@@ -923,32 +930,32 @@ function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
             for r in length(undo.adj_edits):-1:1
                 op, a, pos, old_pair = undo.adj_edits[r]
                 if op === :pop
-                    popped = pop!(st.adjacency[a])
+                    popped = pop!(numeric.adjacency[a])
                     delete!(st.adj_pos[a], popped.first)
                 elseif op === :swap_remove
-                    if pos <= length(st.adjacency[a])
-                        moved_pair = st.adjacency[a][pos]
-                        push!(st.adjacency[a], moved_pair)
-                        st.adj_pos[a][moved_pair.first] = length(st.adjacency[a])
-                        st.adjacency[a][pos] = old_pair
+                    if pos <= length(numeric.adjacency[a])
+                        moved_pair = numeric.adjacency[a][pos]
+                        push!(numeric.adjacency[a], moved_pair)
+                        st.adj_pos[a][moved_pair.first] = length(numeric.adjacency[a])
+                        numeric.adjacency[a][pos] = old_pair
                     else
-                        push!(st.adjacency[a], old_pair)
+                        push!(numeric.adjacency[a], old_pair)
                     end
                     st.adj_pos[a][old_pair.first] = pos
                 else
-                    st.adjacency[a][pos] = old_pair
+                    numeric.adjacency[a][pos] = old_pair
                 end
             end
             for (j, field, lower, upper) in undo.fields
-                st.fields[j] = field
-                if st.lower !== nothing
-                    st.lower[j], st.upper[j] = lower, upper
+                numeric.fields[j] = field
+                if numeric.lower !== nothing
+                    numeric.lower[j], numeric.upper[j] = lower, upper
                 end
             end
             deg_delta = 0
             for (j, df, deg) in undo.dual_fields
                 deg_delta += deg - st.degrees[j]
-                st.dual_fields[j] = df
+                numeric.dual_fields[j] = df
                 st.degrees[j] = deg
             end
             st.active_edges += deg_delta ÷ 2
@@ -969,17 +976,17 @@ function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
             st.proof_count -= 1
             st.proof_count == 0 && (st.first_proof_pos = 0)
             (undo.proof isa MaxCutStep || (undo.proof isa RelationStep && undo.proof.method in (:probing_pair, :roof_scc_pair))) && (st.marginal_count -= 1)
-            st.constant = undo.constant
-            st.dual_constant = undo.dual_constant
+            numeric.constant = undo.constant
+            numeric.dual_constant = undo.dual_constant
         else
             for (j,field,lower,upper) in undo.fields
-                st.fields[j] = field
-                if st.lower !== nothing
-                    st.lower[j],st.upper[j] = lower,upper
+                numeric.fields[j] = field
+                if numeric.lower !== nothing
+                    numeric.lower[j],numeric.upper[j] = lower,upper
                 end
             end
             for (j, df) in undo.dual_fields
-                st.dual_fields[j] = df
+                numeric.dual_fields[j] = df
                 st.degrees[j] += 1
             end
             st.active_edges += length(undo.dual_fields)
@@ -1007,8 +1014,8 @@ function rollback!(ws::Workspace, cp::Checkpoint;report::Bool=false)
                  (hasproperty(undo.proof, :method) && undo.proof.method === :marginal)) &&
                     (st.marginal_count -= 1)
             end
-            st.constant = undo.constant
-            st.dual_constant = undo.dual_constant
+            numeric.constant = undo.constant
+            numeric.dual_constant = undo.dual_constant
         end
     end
     filter!(p -> p[4] <= cp._pin, st.pins)

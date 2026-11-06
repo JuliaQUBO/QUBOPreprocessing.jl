@@ -3277,6 +3277,28 @@ function _step_relation_queue!(
     st = ws._state
     _expired(deadline_ns) && return (:deadline, 0, 0, 0, 0, 0, 0)
     rem_work > 0 || return (:work_limit, 0, 0, 0, 0, 0, 0)
+    return _step_relation_queue_integer!(
+        ws, st, st.numeric, mf, map, allow_weak, direction, rem_work, rem_exact, deadline_ns;
+        allow_exact_fallback,
+    )
+end
+
+# Only :not_strict continues after a witness attempt; that path never applies a
+# reduction. An applied attempt can replace the numeric payload and exits at
+# once. Queue helpers therefore retain the stable owner rather than this view.
+function _step_relation_queue_integer!(
+    ws::Workspace,
+    st::_Incremental,
+    numeric::_IntegerState{I},
+    mf::Int,
+    map::Union{Nothing,DomainGaugeMap},
+    allow_weak::Bool,
+    direction::Int,
+    rem_work::Int,
+    rem_exact::Int,
+    deadline_ns;
+    allow_exact_fallback::Bool=true,
+) where {I<:Integer}
     if st.rel_head > length(st.rel_queue)
         _requeue_deferred_rel!(ws, mf, allow_weak)
     end
@@ -3285,11 +3307,11 @@ function _step_relation_queue!(
         _pop_rel_queue!(ws)
         return (:continue, 1, 0, 0, 0, 0, 0)
     end
-    adj_u_len = length(st.adjacency[u])
+    adj_u_len = length(numeric.adjacency[u])
     adj_u_len <= rem_work - 1 || return (:work_limit, 0, 0, 0, 0, 0, 0)
-    nbrs = Pair{Int,eltype(st.fields)}[]
+    nbrs = Pair{Int,I}[]
     sizehint!(nbrs, st.degrees[u])
-    for (w, q) in st.adjacency[u]
+    for (w, q) in numeric.adjacency[u]
         _expired(deadline_ns) && return (:deadline, 0, 0, 0, 0, 0, 0)
         if st.fixed[w] == 2 && !iszero(q)
             push!(nbrs, w => q)
@@ -3395,21 +3417,21 @@ function _step_relation_queue!(
         end
         w_piv, q_uw_piv = nbrs[piv_idx]
         neg_q_uw_piv = -q_uw_piv
-        h_u_spin = ws._snapshot.domain === QT.SpinDomain ? st.fields[u] : st.dual_fields[u]
+        h_u_spin = ws._snapshot.domain === QT.SpinDomain ? numeric.fields[u] : numeric.dual_fields[u]
         neg_h_u_spin = -h_u_spin
-        has_sum = st.lower !== nothing && st.upper !== nothing
-        tot_u_exact = has_sum ? (st.upper[u] - st.lower[u]) : zero(eltype(st.fields))
+        has_sum = numeric.lower !== nothing && numeric.upper !== nothing
+        tot_u_exact = has_sum ? (numeric.upper[u] - numeric.lower[u]) : zero(I)
         twin_cands = Int[]
-        for (v, q_vw_piv) in st.adjacency[w_piv]
+        for (v, q_vw_piv) in numeric.adjacency[w_piv]
             _expired(deadline_ns) && return (:deadline, 1, u_visits, 0, u_exact, u_fb, 0)
             (v != u && st.fixed[v] == 2 && st.degrees[v] == d_u) || continue
             σ_cand = q_vw_piv == q_uw_piv ? 1 : (q_vw_piv == neg_q_uw_piv ? -1 : 0)
             σ_cand != 0 || continue
-            h_v_spin = ws._snapshot.domain === QT.SpinDomain ? st.fields[v] : st.dual_fields[v]
+            h_v_spin = ws._snapshot.domain === QT.SpinDomain ? numeric.fields[v] : numeric.dual_fields[v]
             (σ_cand == 1 ? (h_v_spin == h_u_spin) : (h_v_spin == neg_h_u_spin)) || continue
             pos_uv = get(st.adj_pos[u], v, 0)
-            (pos_uv == 0 || iszero(st.adjacency[u][pos_uv].second)) || continue
-            has_sum && (st.upper[v] - st.lower[v]) != tot_u_exact && continue
+            (pos_uv == 0 || iszero(numeric.adjacency[u][pos_uv].second)) || continue
+            has_sum && (numeric.upper[v] - numeric.lower[v]) != tot_u_exact && continue
             all_match = true
             @inbounds for (w, q_uw) in nbrs
                 pos_vw = get(st.adj_pos[v], w, 0)
@@ -3417,7 +3439,7 @@ function _step_relation_queue!(
                     all_match = false
                     break
                 end
-                q_vw = st.adjacency[v][pos_vw].second
+                q_vw = numeric.adjacency[v][pos_vw].second
                 if !(σ_cand == 1 ? (q_vw == q_uw) : (q_vw == -q_uw))
                     all_match = false
                     break
