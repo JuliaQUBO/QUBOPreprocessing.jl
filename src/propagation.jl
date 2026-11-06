@@ -144,7 +144,6 @@ end
 function _contraction_fill(st::_Incremental, elim::Int, rep::Int)
     fill = 0
     for (w, q) in st.adjacency[elim]
-        q = _physical(st, q)
         (w != rep && st.fixed[w] == 2 && !iszero(q)) || continue
         haskey(st.adj_pos[rep], w) || (fill += 1)
     end
@@ -163,7 +162,7 @@ function _elimination_fill(st::_Incremental, quad_deltas)
     for (a, b, dq) in quad_deltas
         iszero(dq) && continue
         pos = get(st.adj_pos[a], b, 0)
-        (pos == 0 || iszero(_physical(st, st.adjacency[a][pos].second))) && (fill += 1)
+        (pos == 0 || iszero(st.adjacency[a][pos].second)) && (fill += 1)
     end
     return fill
 end
@@ -2748,7 +2747,6 @@ function _find_separator_blocks(
         adj_len = length(st.adjacency[u])
         adj_len <= max_work - visits || return (Vector{Int}[], :work_limit, visits)
         for (w, q) in st.adjacency[u]
-            q = _physical(st, q)
             _expired(deadline_ns) && return (Vector{Int}[], :deadline, visits)
             visits += 1
             (st.fixed[w] == 2 && !iszero(q)) && push!(act_nbrs[u], w)
@@ -3144,7 +3142,7 @@ function _try_contract_pair!(
     d_elim = st.degrees[elim]
     adj_elim_len = length(st.adjacency[elim])
     pos_er = get(st.adj_pos[elim], rep, 0)
-    adj_er = pos_er != 0 && !iszero(_physical(st, st.adjacency[elim][pos_er].second))
+    adj_er = pos_er != 0 && !iszero(st.adjacency[elim][pos_er].second)
     n_other = adj_er ? max(0, d_elim - 1) : d_elim
     apply_edge_need = adj_elim_len + 2 * n_other
     apply_exact_need = 1 + 3 * d_elim
