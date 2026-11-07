@@ -1762,6 +1762,8 @@ end
         samples = Tuple{BigInt,Int}[
             (big(0),1074),(big(1),1074),(big(3),1074),(-big(3),1074),
             (big(1),1075),(-big(1),1075),
+            ((big(1)<<52)-3,1074),(-((big(1)<<52)-3),1074),
+            ((big(1)<<52)-2,1074),(-((big(1)<<52)-2),1074),
             ((big(1)<<52)-1,1074),(-((big(1)<<52)-1),1074),
             (big(1)<<52,1074),(-(big(1)<<52),1074),
             ((big(1)<<52)+1,1074),(-((big(1)<<52)+1),1074),
@@ -1806,19 +1808,23 @@ end
                          rules=:identity,integerize_scale=false)
             I === BigInt && (ws._state.numeric=QUBOPreprocessing._regrid(ws._state,BigInt,ws._state.shift))
             @test eltype(ws._state.fields) === I
-            attempts=Any[]
             Base.set_zero_subnormals(ftz)
             try
                 for label in sequence
-                    push!(attempts,prove_dominance(ws,label))
+                    attempt=prove_dominance(ws,label)
+                    # Replay at the unchanged prefix that the attempt certifies.
+                    # Later apply calls advance the trail and invalidate that scope.
+                    Base.set_zero_subnormals(false)
+                    try
+                        attempt.certificate === nothing || @test verify_certificate(ws,attempt.certificate).valid
+                    finally
+                        Base.set_zero_subnormals(ftz)
+                    end
                     apply_dominance!(ws,label)
                 end
             finally
                 # Independent replay/reference never runs with FTZ enabled.
                 Base.set_zero_subnormals(false)
-            end
-            for attempt in attempts
-                attempt.certificate === nothing || @test verify_certificate(ws,attempt.certificate).valid
             end
             proof=export_certificate(ws)
             proof === nothing || @test verify_certificate(ws,proof).valid
