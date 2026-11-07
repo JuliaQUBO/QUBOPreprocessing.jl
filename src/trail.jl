@@ -345,6 +345,8 @@ end
 # Productive updates preflight all scratch results before changing the payload.
 const _SMALL_GRID_LIMIT = Int128(1) << 123
 _grid_fits(v::Integer) = -_SMALL_GRID_LIMIT < v < _SMALL_GRID_LIMIT
+# Count magnitude bits without converting the Int128 bounds to BigInt.
+_grid_fits(v::BigInt) = ndigits(v; base=2) <= 123
 function _ensure_grid!(st::_Incremental, shift::Int)
     shift == st.shift && return nothing
     if eltype(st.fields) === Int128

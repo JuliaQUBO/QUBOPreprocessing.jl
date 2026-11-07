@@ -1482,3 +1482,95 @@ end
         check_integer_objective(ws,L,Q,1.0,0.0,:spin)
     end
 end
+
+@testset "grid headroom matches independent integer and rational oracles" begin
+    limit = big(2)^123
+    values = BigInt.(collect(-4096:4096))
+    for exponent in 0:130, delta in -2:2, sign in (-1,1)
+        push!(values, sign*((big(1)<<exponent)+delta))
+    end
+    for I in (Int8,Int64,Int128), v in (typemin(I),typemax(I))
+        push!(values, BigInt(v))
+    end
+    for exponent in (1024,4096), delta in (-17,-1,0,1,17), sign in (-1,1)
+        push!(values, sign*((big(1)<<exponent)+delta))
+    end
+    for sign in (-1,1)
+        push!(values, sign*((big(1)<<4096)+(big(1)<<2048)+17))
+    end
+    for v in values
+        saved, decimal = copy(v), string(v)
+        # Truncation toward zero and a rational square give independent
+        # expectations without using bit counts or the package's bound.
+        expected = iszero(div(v,limit))
+        @test expected == ((v//limit)^2 < 1)
+        @test QUBOPreprocessing._grid_fits(v) === expected
+        @test QUBOPreprocessing._grid_fits(copy(v)) === expected
+        alias = v
+        @test QUBOPreprocessing._grid_fits(alias) === expected
+        @test v == alias == saved && string(v) == decimal
+    end
+    @test QUBOPreprocessing._grid_fits(big(0))
+    for sign in (-1,1)
+        @test QUBOPreprocessing._grid_fits(sign*(limit-1))
+        @test !QUBOPreprocessing._grid_fits(sign*limit)
+        @test !QUBOPreprocessing._grid_fits(sign*(limit+1))
+    end
+    # The generic Integer path retains the same reserved headroom, including
+    # the fixed-width minimum; convert before any signed magnitude operation.
+    for v in Int128[typemin(Int128),typemax(Int128),0,1,-1,
+                    limit-1,limit,limit+1,-limit+1,-limit,-limit-1]
+        @test QUBOPreprocessing._grid_fits(v) === iszero(div(BigInt(v),limit))
+    end
+end
+
+@testset "scratch headroom endpoints promote before fixing and survive rollback" begin
+    for sign in (-1,1)
+        n=3
+        n<=8 || throw(ArgumentError("grid-fit fixture must remain tiny"))
+        q=sign*ldexp(1.0,117)
+        L=[0.0,q,1.0]
+        Q=[0.0 q 0.0;zeros(2,3)]
+        function grid_fit_workspace(wide)
+            ws=Workspace(fixture(collect(1:n),L,Q;domain=:spin);rules=:mixed)
+            @test eltype(ws._state.fields)===Int128
+            local saved_root=checkpoint(ws)
+            @test assume!(ws,3,1).stop_reason===:applied
+            QUBOPreprocessing._ensure_grid!(ws._state,ws._state.shift+4)
+            @test eltype(ws._state.fields)===Int128
+            @test QUBOPreprocessing._payload_fits(ws._state.numeric)
+            # The next fixing prepares dual field 4q on this finer grid,
+            # exactly at the excluded positive or negative headroom bound.
+            @test 4*BigInt(ws._state.adjacency[1][1].second)==sign*(big(2)^123)
+            wide && (ws._state.numeric=QUBOPreprocessing._regrid(ws._state,BigInt,ws._state.shift))
+            return ws,saved_root
+        end
+        promoted,root=grid_fit_workspace(false)
+        wide,wide_root=grid_fit_workspace(true)
+        original=promoted._state.numeric
+        refused=QUBOPreprocessing._fix!(promoted,1,1;max_work=0)
+        @test refused.stop_reason===:work_limit && refused.edge_visits==0
+        @test promoted._state.numeric===original
+        clock,wide_clock=IntegerPromotionPolls(0),IntegerPromotionPolls(0)
+        result=QUBOPreprocessing._fix!(promoted,1,1;max_work=1,deadline_ns=clock)
+        control=QUBOPreprocessing._fix!(wide,1,1;max_work=1,deadline_ns=wide_clock)
+        @test result.stop_reason===control.stop_reason===:applied
+        @test result.edge_visits==control.edge_visits==1
+        @test clock.calls==wide_clock.calls+1
+        @test eltype(promoted._state.fields)===BigInt
+        @test promoted._state.numeric!==original && promoted._state.promotions==1
+        @test promoted._state.dual_fields[2]==sign*(big(2)^123)
+        for (ws,cp) in ((promoted,root),(wide,wide_root))
+            check_integer_objective(ws,L,Q,1.0,0.0,:spin)
+            payload=ws._state.numeric
+            report=rollback!(ws,cp;report=true)
+            @test report.caller_unfixed==[1=>1,3=>1]
+            @test isempty(report.deduction_unfixed)
+            @test ws._state.numeric===payload && ws._state.shift==4
+            check_integer_objective(ws,L,Q,1.0,0.0,:spin)
+            QUBOPreprocessing._ensure_grid!(ws._state,ws._state.shift+130)
+            @test ws._state.shift==134 && eltype(ws._state.fields)===BigInt
+            check_integer_objective(ws,L,Q,1.0,0.0,:spin)
+        end
+    end
+end
