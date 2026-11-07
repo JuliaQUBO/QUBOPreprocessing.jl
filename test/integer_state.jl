@@ -1657,3 +1657,67 @@ end
         check_integer_objective(wide,L,Q,scale,0.0,domain)
     end
 end
+
+@testset "public materialization rounding adapters preserve exact Float64 errors" begin
+    R = Rational{BigInt}
+    half_ulp = big(1) // (big(1) << 53)
+    quarter_ulp = big(1) // (big(1) << 54)
+    three_halves = big(3) // big(2)
+    for (kind,scale) in ((:linear_constant,-3.0),(:linear_constant,0.0),(:quadratic,1.0))
+        domain = kind === :quadratic ? :spin : :bool
+        L = kind === :quadratic ? zeros(3) : [1.5,1.5]
+        Q = kind === :quadratic ? [0.0 -4.0 1.5;0.0 0.0 2.0^-53;0.0 0.0 0.0] :
+                                  [0.0 2.0^-53;0.0 0.0]
+        offset = kind === :quadratic ? 0.0 : 2.0^-54
+        length(L) <= 3 || error("materialization adapter fixture exceeds three original variables")
+        labels = kind === :quadratic ? [:x,:y,:z] : [:x,:y]
+        ws = Workspace(fixture(labels,L,Q;domain,scale,offset);rules=:relations,integerize_scale=false)
+        original = checkpoint(ws)
+        update = kind === :quadratic ? contract_relation!(ws,:x,:y;sign=1) : assume!(ws,:x,1)
+        @test update.stop_reason === :applied
+        current = checkpoint(ws)
+        numeric = ws._state.numeric
+        # Source substitution gives 3/2+2^-53 for the retained field/coupling,
+        # and 3/2+2^-54 for the conditioned constant. The midpoint field/coupling
+        # and smaller constant increment round to 3/2.
+        expected_error = (kind === :quadratic ? big(1) : abs(BigInt(Int(scale)))) * half_ulp
+        saved = nothing
+        for precision_bits in (8,256), rounding_mode in (RoundNearest,RoundUp)
+            setprecision(BigFloat,precision_bits) do
+                setrounding(BigFloat,rounding_mode) do
+                    @test_throws ArgumentError materialize(ws)
+                    @test_throws ArgumentError materialize(ws;coefficient_type=R,rounding=:nearest)
+                    rounded = materialize(ws;rounding=:nearest)
+                    model = export_model(rounded)
+                    exact = materialize(ws;coefficient_type=R)
+                    exact_model = export_model(exact)
+                    if kind === :quadratic
+                        @test quadratic(model)[1,2] === 1.5
+                        @test quadratic(exact_model)[1,2] == three_halves + half_ulp
+                        @test QT.offset(model) === -4.0
+                        @test verify_certificate(ws,rounded.certificate.proof).valid
+                    else
+                        @test linear(model)[1] === 1.5
+                        @test QT.offset(model) === 1.5
+                        @test linear(exact_model)[1] == three_halves + half_ulp
+                        @test QT.offset(exact_model) == three_halves + quarter_ulp
+                    end
+                    @test rounded.status === :rounded
+                    @test rounded.max_perturbation == expected_error
+                    @test rounded.perturbed == !iszero(expected_error)
+                    @test !rounded.certificate.unchanged_representation
+                    @test QT.scale(model) == scale
+                    @test checkpoint(ws) == current && ws._state.numeric === numeric
+                    @test !ws.perturbed && iszero(ws.max_perturbation)
+                    saved = rounded
+                end
+            end
+        end
+        check_integer_objective(ws,L,Q,scale,offset,domain)
+        # The owned rounded export stays usable after the live workspace rolls back.
+        rollback!(ws,original)
+        retained = export_model(saved)
+        @test (kind === :quadratic ? quadratic(retained)[1,2] : linear(retained)[1]) === 1.5
+        @test saved.max_perturbation == expected_error
+    end
+end

@@ -1321,7 +1321,7 @@ function _conditioned_export(ws::Workspace, ::Type{T}; map::Union{Nothing,Domain
         normalization === :integer && (q /= factor)
         v = _transport(T, q; rounding, ws, kind=:linear, i)
         lin_vec[idx_f] = v
-        rounding === :nearest && (rounding_error = max(rounding_error, abs(_Exact(v) - q)))
+        rounding === :nearest && (rounding_error = max(rounding_error, abs(_to_exact(v) - q)))
     end
     linear = Tuple(lin_vec)
     quad_vec = Tuple{Int,Int,T}[]
@@ -1333,7 +1333,7 @@ function _conditioned_export(ws::Workspace, ::Type{T}; map::Union{Nothing,Domain
                 normalization === :integer && (mapped_q /= factor)
                 v = _transport(T, mapped_q; rounding, ws, kind=:quadratic, i, j)
                 push!(quad_vec, (ii, idxmap[j], v))
-                rounding === :nearest && (rounding_error = max(rounding_error, abs(_Exact(v) - mapped_q)))
+                rounding === :nearest && (rounding_error = max(rounding_error, abs(_to_exact(v) - mapped_q)))
             end
         end
     end
@@ -1346,7 +1346,7 @@ function _conditioned_export(ws::Workspace, ::Type{T}; map::Union{Nothing,Domain
     c_export = _direct_mapped_constant(ws, owned_map)
     normalization === :integer && (c_export /= factor)
     c_transport = _transport(T, c_export; rounding, ws, kind=:constant)
-    rounding === :nearest && (rounding_error = max(rounding_error, abs(_Exact(c_transport) - c_export)))
+    rounding === :nearest && (rounding_error = max(rounding_error, abs(_to_exact(c_transport) - c_export)))
     # The exact positive normalization factor preserves effective coefficients,
     # scale sign and objective sense. The adjusted scale is never rounded.
     adjusted_scale = normalization === :integer ? _Exact(s.scale) * factor : _Exact(s.scale)
