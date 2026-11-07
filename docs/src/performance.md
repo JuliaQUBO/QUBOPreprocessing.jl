@@ -36,6 +36,13 @@ exact-arithmetic allocation costs on large models.
 
 ## Repeated boundary updates
 
+The current workspace uses persistent integer numerators on a shared dyadic
+grid. Construction, integer update preparation, promotion/exponent extension,
+public rational conversion and rational proof/flow preparation have separate
+costs. This backend has not yet been measured under the historical study below;
+the pinned results remain evidence for their recorded implementation. Fresh
+matched construction and corpus measurements are needed to quantify its effect.
+
 Each comparison performs ten identical branch/propagate/rollback cycles. Reuse
 pays for one cold construction and first-growth allocations; the baseline pays
 for a fresh workspace and root propagation at each cycle. Both include returned

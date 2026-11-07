@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Store live workspace fields, edges, bounds, dual-coordinate caches and numeric
+  undo records in typed `Int128` or `BigInt` arrays on one exact dyadic grid.
+  Construction includes the offset in its range check; productive updates use
+  integer scratch arithmetic and promote before fixed-width overflow. Fractional
+  Spin eliminations extend the grid and rescale both live state and undo history.
+  Rollback may retain a finer grid or wider integer type while restoring exact
+  values. Public rational queries, source-scale semantics, proofs and independent
+  rational certificate replay are preserved. Cached strict-dominance and
+  degree-three screening use integer arithmetic; expensive proof producers and
+  flow retain explicit rational conversion costs. Workspace-owned dyadic scalar
+  caches and guarded exact Float64 views avoid repeated rational construction in
+  eligible heuristic conversions. Paired performance evidence and remaining
+  acceptance criteria are recorded in #93.
+
 - Added package-owned `schedule!` policy dispatch and `PolicyScheduleReport`,
   preserving distinct legacy benchmark, middle and census behavior and exposing
   an opt-in dominance/low-degree `:cheap` policy with explicit skipped families.

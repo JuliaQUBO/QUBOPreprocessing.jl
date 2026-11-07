@@ -381,20 +381,28 @@ end
 lift_state(::DomainGaugeMap, _) = throw(ArgumentError("state must be a complete one-based vector"))
 
 _spin_field(ws::Workspace, i::Int) =
-    ws._snapshot.domain === QT.SpinDomain ? ws._state.fields[i] : ws._state.dual_fields[i]
+    ws._snapshot.domain === QT.SpinDomain ? _physical(ws._state, ws._state.fields[i]) : _physical(ws._state, ws._state.dual_fields[i])
 _bool_field(ws::Workspace, i::Int) =
-    ws._snapshot.domain === QT.BoolDomain ? ws._state.fields[i] : ws._state.dual_fields[i]
+    ws._snapshot.domain === QT.BoolDomain ? _physical(ws._state, ws._state.fields[i]) : _physical(ws._state, ws._state.dual_fields[i])
 _spin_constant(ws::Workspace) =
-    ws._snapshot.domain === QT.SpinDomain ? ws._state.constant : ws._state.dual_constant
+    ws._snapshot.domain === QT.SpinDomain ? _physical(ws._state, ws._state.constant) : _physical(ws._state, ws._state.dual_constant)
 _bool_constant(ws::Workspace) =
-    ws._snapshot.domain === QT.BoolDomain ? ws._state.constant : ws._state.dual_constant
+    ws._snapshot.domain === QT.BoolDomain ? _physical(ws._state, ws._state.constant) : _physical(ws._state, ws._state.dual_constant)
 _spin_coupling(ws::Workspace, q::_Exact) =
     ws._snapshot.domain === QT.SpinDomain ? q : q // 4
 _bool_coupling(ws::Workspace, q::_Exact) =
     ws._snapshot.domain === QT.BoolDomain ? q : 4 * q
 
+@inline function _spin_coupling(ws::Workspace, q::Integer)
+    st = ws._state
+    (ws._snapshot.domain === QT.SpinDomain || iszero(q)) && return _physical(st, q)
+    return _physical_at_shift(st, q, Base.Checked.checked_add(st.shift, 2))
+end
+@inline _bool_coupling(ws::Workspace, q::Integer) =
+    ws._snapshot.domain === QT.BoolDomain ? _physical(ws._state, q) : _physical_times_four(ws._state, q)
+
 function _mapped_field(ws::Workspace, i::Int, m::Union{Nothing,DomainGaugeMap})
-    m === nothing && return ws._state.fields[i]
+    m === nothing && return _physical(ws._state, ws._state.fields[i])
     g_i = m.gauge[i]
     if m.target_domain === :spin
         return g_i * _spin_field(ws, i)
@@ -412,15 +420,15 @@ function _mapped_field(ws::Workspace, i::Int, m::Union{Nothing,DomainGaugeMap})
     end
 end
 
-function _mapped_coupling(ws::Workspace, i::Int, j::Int, q::_Exact, m::Union{Nothing,DomainGaugeMap})
-    m === nothing && return q
+function _mapped_coupling(ws::Workspace, i::Int, j::Int, q::Union{Integer,_Exact}, m::Union{Nothing,DomainGaugeMap})
+    m === nothing && return _physical(ws._state, q)
     sign_ij = m.gauge[i] * m.gauge[j]
     return m.target_domain === :spin ? sign_ij * _spin_coupling(ws, q) :
                                        sign_ij * _bool_coupling(ws, q)
 end
 
 function _direct_mapped_constant(ws::Workspace, m::Union{Nothing,DomainGaugeMap})
-    m === nothing && return ws._state.constant
+    m === nothing && return _physical(ws._state, ws._state.constant)
     if m.target_domain === :spin
         return _spin_constant(ws)
     elseif m._identity_gauge
@@ -441,7 +449,7 @@ function _direct_mapped_constant(ws::Workspace, m::Union{Nothing,DomainGaugeMap}
 end
 
 function _mapped_constant(ws::Workspace, m::Union{Nothing,DomainGaugeMap})
-    m === nothing && return ws._state.constant
+    m === nothing && return _physical(ws._state, ws._state.constant)
     if m.target_domain === :spin
         return _spin_constant(ws)
     elseif m._identity_gauge
@@ -485,12 +493,12 @@ function _mapped_constant(ws::Workspace, m::Union{Nothing,DomainGaugeMap})
                 cur.serials[r] = entry.serial
             else
                 red = raw_entry::_UndoReduction
-                c += red.spin_const_delta
+                c += _physical(st, red.spin_const_delta)
                 for (w, dh) in red.spin_field_deltas
-                    c -= m.gauge[w] * dh
+                    c -= m.gauge[w] * _physical(st, dh)
                 end
                 for (j, l, dJ) in red.spin_coupling_deltas
-                    c += (m.gauge[j] * m.gauge[l]) * dJ
+                    c += (m.gauge[j] * m.gauge[l]) * _physical(st, dJ)
                 end
                 cur.serials[r] = red.serial
             end

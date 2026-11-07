@@ -224,17 +224,22 @@ end
 
 function _cached_step(ws::Workspace,i::Int,direction::Int;allow_weak::Bool=false)
     st = ws._state
+    return _cached_integer_step(ws, st, st.numeric, i, direction; allow_weak)
+end
+
+function _cached_integer_step(ws::Workspace, st::_Incremental, numeric::_IntegerState{I},
+                              i::Int, direction::Int; allow_weak::Bool=false) where {I<:Integer}
     direction == 0 && return nothing
-    lower,upper = direction > 0 ? (st.lower[i],st.upper[i]) : (-st.upper[i],-st.lower[i])
+    lower,upper = direction > 0 ? (numeric.lower[i],numeric.upper[i]) : (-numeric.upper[i],-numeric.lower[i])
     value = _strict_value(lower,upper,ws._snapshot.domain)
     if value !== nothing
-        return DominanceStep(i,value,deepcopy(lower),deepcopy(upper),deepcopy(st.constant),
+        return DominanceStep(i,value,_physical(st, lower),_physical(st, upper),deepcopy(_physical(st, numeric.constant)),
                              st.proof_count,:exact,length(st.callers),:strong)
     end
     if allow_weak
         wval = _weak_value(lower,upper,ws._snapshot.domain)
         wval === nothing && return nothing
-        return DominanceStep(i,wval,deepcopy(lower),deepcopy(upper),deepcopy(st.constant),
+        return DominanceStep(i,wval,_physical(st, lower),_physical(st, upper),deepcopy(_physical(st, numeric.constant)),
                              st.proof_count,:exact,length(st.callers),:weak)
     end
     return nothing
@@ -242,10 +247,10 @@ end
 
 function _dominance_interval_strict(ws::Workspace, i::Int, direction::Int)
     st, s = ws._state, ws._snapshot
-    lo, hi = _enclose(direction * st.fields[i])
+    lo, hi = _enclose_grid(st, direction * st.fields[i])
     for (j, q) in st.adjacency[i]
         st.fixed[j] == 2 || continue
-        c_lo, c_hi = _enclose(direction * q)
+        c_lo, c_hi = _enclose_grid(st, direction * q)
         if s.domain === QT.BoolDomain
             a, b = min(0.0, c_lo), max(0.0, c_hi)
         else
@@ -381,11 +386,11 @@ function apply_dominance!(ws::Workspace, label;
         raw_step
     elseif raw_step.method === :marginal
         dm = map.gauge[i] * raw_step.lower
-        DominanceStep(i, raw_step.value, deepcopy(dm), deepcopy(dm), deepcopy(st.constant),
+        DominanceStep(i, raw_step.value, deepcopy(dm), deepcopy(dm), deepcopy(_physical(st, st.constant)),
                       raw_step.predecessors, :marginal, raw_step.scope_length, raw_step.persistency)
     else
         new_lo, new_hi = _convert_step_bounds(ws._snapshot, raw_step, map, nothing)
-        DominanceStep(i, raw_step.value, new_lo, new_hi, deepcopy(st.constant),
+        DominanceStep(i, raw_step.value, new_lo, new_hi, deepcopy(_physical(st, st.constant)),
                       raw_step.predecessors, raw_step.method, raw_step.scope_length, raw_step.persistency)
     end
     rep = _fix!(ws, i, step.value; proof=step, max_work=max_work - visits, deadline_ns)
@@ -432,6 +437,12 @@ const _MIN_FLOAT_SPIN_COEFF = floatmin(Float64) * 1e16
 @inline _float_spin_coupling(ws::Workspace, q::_Exact) =
     ws._snapshot.domain === QT.SpinDomain ? Float64(q) : 0.25 * Float64(q)
 
+@inline _float_spin_coupling(ws::Workspace, q::Integer) =
+    ws._snapshot.domain === QT.SpinDomain ? _physical_float(ws._state, q) : 0.25 * _physical_float(ws._state, q)
+
+@inline _spin_field_numerator(ws::Workspace, i::Int) =
+    ws._snapshot.domain === QT.SpinDomain ? ws._state.fields[i] : ws._state.dual_fields[i]
+
 function _can_use_float_spin_heuristic(ws::Workspace, indices::Vector{Int}; deadline_ns=nothing)
     st = ws._state
     total_abs = 0.0
@@ -440,9 +451,9 @@ function _can_use_float_spin_heuristic(ws::Workspace, indices::Vector{Int}; dead
         scanned += 1
         # On expiry the answer is false; callers check the deadline before the exact path
         _poll_expired(scanned, deadline_ns) && return false
-        h_ex = _spin_field(ws, i)
-        if !iszero(h_ex)
-            hf = Float64(h_ex)
+        h_raw = _spin_field_numerator(ws, i)
+        if !iszero(h_raw)
+            hf = _physical_float(st, h_raw)
             (isfinite(hf) && abs(hf) >= _MIN_FLOAT_SPIN_COEFF) || return false
             total_abs += abs(hf)
         end
@@ -469,9 +480,9 @@ function _try_build_float_spin_subproblem(ws::Workspace, free_vars::Vector{Int};
     @inbounds for i in free_vars
         scanned += 1
         _poll_expired(scanned, deadline_ns) && return nothing
-        h_ex = _spin_field(ws, i)
-        if !iszero(h_ex)
-            hf = Float64(h_ex)
+        h_raw = _spin_field_numerator(ws, i)
+        if !iszero(h_raw)
+            hf = _physical_float(st, h_raw)
             (isfinite(hf) && abs(hf) >= _MIN_FLOAT_SPIN_COEFF) || return nothing
             h_f[i] = hf
             total_abs += abs(hf)
@@ -983,7 +994,7 @@ function _order_probing_candidates!(
             @inbounds for i in cand_indices
                 polled += 1
                 _poll_expired(polled, deadline_ns) && return cand_indices
-                abs_h = _canon_zero(abs(Float64(_spin_field(ws, i))))
+                abs_h = _canon_zero(abs(_physical_float(st, _spin_field_numerator(ws, i))))
                 l1 = 0.0
                 for (j, q) in st.adjacency[i]
                     polled += 1
@@ -1006,7 +1017,7 @@ function _order_probing_candidates!(
             @inbounds for i in cand_indices
                 polled += 1
                 _poll_expired(polled, deadline_ns) && return cand_indices
-                h_i = _canon_zero(Float64(_spin_field(ws, i)))
+                h_i = _canon_zero(_physical_float(st, _spin_field_numerator(ws, i)))
                 s_i = is_bool ? (2 * w_vec[i] - 1) : w_vec[i]
                 fav_h = _canon_zero((-direction * s_i) * h_i)
                 l1 = 0.0
@@ -1315,7 +1326,7 @@ function probe_variables!(
                             u, bs_low.value, low_orig,
                             deepcopy(M_low), deepcopy(M_high),
                             (), bsteps_low,
-                            deepcopy(st.constant), st.proof_count, :double_probe, length(st.callers), :strong,
+                            deepcopy(_physical(st, st.constant)), st.proof_count, :double_probe, length(st.callers), :strong,
                             i, bsteps_high,
                         )
                     else
@@ -1680,7 +1691,7 @@ function apply_submodular_cut!(
                     mat_visits, total_visits + mat_visits, total_exact_work,
                 )
             end
-            c_before = deepcopy(st.constant)
+            c_before = deepcopy(_physical(st, st.constant))
             step_r = SubmodularCutStep(
                 u, orig_val,
                 comp_tuple, gauge_tuple,
@@ -1825,7 +1836,7 @@ function apply_submodular_cut!(
                 rec_work, graph_work, flow_work, ver_work, mat_visits, total_visits + mat_visits, exact_work,
             )
         end
-        c_before = deepcopy(st.constant)
+        c_before = deepcopy(_physical(st, st.constant))
         step_r = SubmodularCutStep(
             u, orig_val,
             comp_tuple, gauge_tuple,
@@ -1951,7 +1962,7 @@ function apply_maxcut!(
             u, 0, raw_step.anchor, raw_step.orig_sign, raw_step.orig_sign, raw_step.value,
             deepcopy(raw_step.margin), deepcopy(raw_step.direct_weight),
             deepcopy(raw_step.non_triangle_slack), deepcopy(raw_step.triangles),
-            deepcopy(st.constant), raw_step.predecessors, raw_step.method,
+            deepcopy(_physical(st, st.constant)), raw_step.predecessors, raw_step.method,
             raw_step.scope_length, raw_step.persistency,
         )
     rep = _fix!(ws, u, step.value; proof=step, max_work=max_work - visits, deadline_ns=deadline_ns)
@@ -2033,7 +2044,7 @@ function apply_maxcut!(
             u, v, raw_step.anchor, raw_step.orig_sign, raw_step.orig_sign, 0,
             deepcopy(raw_step.margin), deepcopy(raw_step.direct_weight),
             deepcopy(raw_step.non_triangle_slack), deepcopy(raw_step.triangles),
-            deepcopy(st.constant), raw_step.predecessors, raw_step.method,
+            deepcopy(_physical(st, st.constant)), raw_step.predecessors, raw_step.method,
             raw_step.scope_length, raw_step.persistency,
         )
     const_delta, field_deltas, quad_deltas = _relation_deltas(ws, u, v, step.orig_sign)
@@ -2099,8 +2110,8 @@ function _mc_compute_sweep_bounds!(
         H_hi[x] = hx_abs_hi
         W0_lo = _prevfloat_finite(W0_lo + hx_abs_lo)
         M0_hi = _max_nan(M0_hi, hx_abs_hi)
-        up_lo, _ = _enclose(st.upper[x])
-        _, lo_hi = _enclose(st.lower[x])
+        up_lo, _ = _enclose_physical(st, st.upper[x])
+        _, lo_hi = _enclose_physical(st, st.lower[x])
         edge_lo = _prevfloat_finite(tot_scale * _prevfloat_finite(up_lo - lo_hi))
         W_lo[x] = _prevfloat_finite(edge_lo + hx_abs_lo)
         if mt == 0
@@ -2110,6 +2121,7 @@ function _mc_compute_sweep_bounds!(
         end
         mx = hx_abs_hi
         for (w, q) in st.adjacency[x]
+            q = _physical(st, q)
             _expired(deadline_ns) && return (false, :deadline, gw, exw)
             gw < max_work || return (false, :work_limit, gw, exw)
             gw += 1
@@ -2135,6 +2147,7 @@ function _mc_compute_sweep_bounds!(
             end
         end
         for (c, q) in st.adjacency[x]
+            q = _physical(st, q)
             _expired(deadline_ns) && return (false, :deadline, gw, exw)
             gw < max_work || return (false, :work_limit, gw, exw)
             gw += 1
@@ -2308,7 +2321,7 @@ function apply_maxcut!(
                         u, 0, raw_step.anchor, raw_step.orig_sign, raw_step.orig_sign, raw_step.value,
                         deepcopy(raw_step.margin), deepcopy(raw_step.direct_weight),
                         deepcopy(raw_step.non_triangle_slack), _deepcopy_tuple(raw_step.triangles, IdDict()),
-                        deepcopy(st.constant), raw_step.predecessors, raw_step.method,
+                        deepcopy(_physical(st, st.constant)), raw_step.predecessors, raw_step.method,
                         raw_step.scope_length, raw_step.persistency,
                     )
                 rem_w2 = Int(max_work) - (g_work_tot + t_work_tot + mat_work_tot)
@@ -2349,7 +2362,7 @@ function apply_maxcut!(
                         (st.fixed[u] == 2 && st.fixed[v] == 2) || continue
                         pos_uv = get(st.adj_pos[u], v, 0)
                         pos_uv == 0 && continue
-                        q = st.adjacency[u][pos_uv].second
+                        q = _physical(st, st.adjacency[u][pos_uv].second)
                         iszero(q) && continue
                         pair_key = u < v ? (u, v) : (v, u)
                         pair_key in tested_pairs && continue
@@ -2400,7 +2413,7 @@ function apply_maxcut!(
                                 elim, rep_v, raw_step.anchor, raw_step.orig_sign, raw_step.orig_sign, 0,
                                 deepcopy(raw_step.margin), deepcopy(raw_step.direct_weight),
                                 deepcopy(raw_step.non_triangle_slack), _deepcopy_tuple(raw_step.triangles, IdDict()),
-                                deepcopy(st.constant), raw_step.predecessors, raw_step.method,
+                                deepcopy(_physical(st, st.constant)), raw_step.predecessors, raw_step.method,
                                 raw_step.scope_length, raw_step.persistency,
                             )
                         const_delta, field_deltas, quad_deltas = _relation_deltas(ws, elim, rep_v, step.orig_sign)
@@ -2504,7 +2517,7 @@ function contract_relation!(ws::Workspace, eliminated, representative;
     raw_step === nothing && return UpdateReport(reason, visits, 0)
     step = (map === nothing || raw_step.method in (:probing_pair, :roof_scc_pair)) ? raw_step :
         RelationStep(u, v, raw_step.orig_sign, raw_step.orig_sign,
-                     deepcopy(raw_step.lower), deepcopy(raw_step.upper), deepcopy(st.constant),
+                     deepcopy(raw_step.lower), deepcopy(raw_step.upper), deepcopy(_physical(st, st.constant)),
                      raw_step.predecessors, raw_step.method, raw_step.scope_length, raw_step.persistency,
                      deepcopy(raw_step.witness))
     const_delta, field_deltas, quad_deltas = _relation_deltas(ws, u, v, step.orig_sign)
@@ -2642,7 +2655,7 @@ function eliminate_variable!(ws::Workspace, label;
     step = map === nothing ? raw_step :
         EliminationStep(u, raw_step.neighbors, raw_step.table,
                         deepcopy(raw_step.constant_delta), deepcopy(raw_step.linear_deltas),
-                        deepcopy(raw_step.quadratic_deltas), deepcopy(st.constant),
+                        deepcopy(raw_step.quadratic_deltas), deepcopy(_physical(st, st.constant)),
                         raw_step.predecessors, raw_step.scope_length, raw_step.unique_argmin)
     field_deltas = Pair{Int,_Exact}[p for p in step.linear_deltas]
     quad_deltas = Tuple{Int,Int,_Exact}[t for t in step.quadratic_deltas]
@@ -2938,7 +2951,7 @@ function _step_elimination_queue!(
     step = map === nothing ? raw_step :
         EliminationStep(u, raw_step.neighbors, raw_step.table,
                         deepcopy(raw_step.constant_delta), deepcopy(raw_step.linear_deltas),
-                        deepcopy(raw_step.quadratic_deltas), deepcopy(st.constant),
+                        deepcopy(raw_step.quadratic_deltas), deepcopy(_physical(st, st.constant)),
                         raw_step.predecessors, raw_step.scope_length, raw_step.unique_argmin)
     field_deltas = Pair{Int,_Exact}[p for p in step.linear_deltas]
     quad_deltas = Tuple{Int,Int,_Exact}[t for t in step.quadratic_deltas]
@@ -3131,7 +3144,7 @@ function _try_contract_pair!(
     apply_exact_need <= rem_exact - w_exact || return (:verification_limit, w_visits, w_exact, w_fb)
     step = map === nothing ? raw_step :
         RelationStep(elim, rep, raw_step.orig_sign, raw_step.orig_sign,
-                     deepcopy(raw_step.lower), deepcopy(raw_step.upper), deepcopy(st.constant),
+                     deepcopy(raw_step.lower), deepcopy(raw_step.upper), deepcopy(_physical(st, st.constant)),
                      raw_step.predecessors, raw_step.method, raw_step.scope_length, raw_step.persistency)
     const_delta, field_deltas, quad_deltas = _relation_deltas(ws, elim, rep, step.orig_sign)
     trail_extra = reserve_pop ? 2 : 1
@@ -3149,44 +3162,64 @@ end
     ws::Workspace,
     elim::Int,
     rep::Int,
-    q::_Exact,
+    q::Union{Integer,_Exact},
     direction::Int,
     map::Union{Nothing,DomainGaugeMap};
     check_coflip::Bool=true,
 )
-    st, s = ws._state, ws._snapshot
-    (st.lower !== nothing && st.upper !== nothing) || return true
-    q.num.size == 0 && return false
+    st = ws._state
+    return _can_possibly_contract_integer(
+        ws, st, st.numeric, elim, rep, q, direction, map; check_coflip,
+    )
+end
+
+# This reader neither mutates state nor invokes callbacks. Its numeric view is
+# valid only for this call; the wrapper captures the current payload each time.
+@inline function _can_possibly_contract_integer(
+    ws::Workspace,
+    st::_Incremental,
+    numeric::_IntegerState{I},
+    elim::Int,
+    rep::Int,
+    q::Union{Integer,_Exact},
+    direction::Int,
+    map::Union{Nothing,DomainGaugeMap};
+    check_coflip::Bool=true,
+) where {I<:Integer}
+    s = ws._snapshot
+    q isa Integer || (q = _grid_numerator(q, numeric.shift))
+    (numeric.lower !== nothing && numeric.upper !== nothing) || return true
+    iszero(q) && return false
     is_spin_dom = s.domain === QT.SpinDomain
     tot_scale = is_spin_dom ? 0.5 : 0.25
     j_scale = is_spin_dom ? 1.0 : 0.25
-    up_e_lo, up_e_hi = _enclose(st.upper[elim])
-    lo_e_lo, lo_e_hi = _enclose(st.lower[elim])
+    up_e_lo, up_e_hi = _enclose_grid(st, numeric.upper[elim])
+    lo_e_lo, lo_e_hi = _enclose_grid(st, numeric.lower[elim])
     tot_e_lo = _prevfloat_finite(tot_scale * _prevfloat_finite(up_e_lo - lo_e_hi))
     tot_e_hi = _nextfloat_finite(tot_scale * _nextfloat_finite(up_e_hi - lo_e_lo))
     g_e = map === nothing ? 1 : map.gauge[elim]
     g_r = map === nothing ? 1 : map.gauge[rep]
-    he_raw = _spin_field(ws, elim)
-    he_lo, he_hi = _enclose(he_raw)
+    he_raw = is_spin_dom ? numeric.fields[elim] : numeric.dual_fields[elim]
+    he_lo, he_hi = _enclose_grid(st, he_raw)
     he_abs_hi = max(abs(he_lo), abs(he_hi))
     he_abs_lo = (he_lo <= 0.0 && he_hi >= 0.0) ? 0.0 : min(abs(he_lo), abs(he_hi))
-    q_lo, q_hi = _enclose(q)
+    q_lo, q_hi = _enclose_grid(st, q)
     two_c_hi = _nextfloat_finite(2.0 * _nextfloat_finite(j_scale * max(abs(q_lo), abs(q_hi))))
     if isfinite(tot_e_lo) && isfinite(he_abs_hi) && isfinite(two_c_hi)
         if _nextfloat_finite(two_c_hi - he_abs_lo) < tot_e_lo
-            glk_ok = (he_raw.num.size != 0) && !(_nextfloat_finite(two_c_hi + he_abs_hi) < tot_e_lo)
+            glk_ok = (!iszero(he_raw)) && !(_nextfloat_finite(two_c_hi + he_abs_hi) < tot_e_lo)
             (!glk_ok && !check_coflip) && return false
-            up_r_lo, up_r_hi = _enclose(st.upper[rep])
-            lo_r_lo, lo_r_hi = _enclose(st.lower[rep])
+            up_r_lo, up_r_hi = _enclose_grid(st, numeric.upper[rep])
+            lo_r_lo, lo_r_hi = _enclose_grid(st, numeric.lower[rep])
             tot_r_lo = _prevfloat_finite(tot_scale * _prevfloat_finite(up_r_lo - lo_r_hi))
             tot_r_hi = _nextfloat_finite(tot_scale * _nextfloat_finite(up_r_hi - lo_r_lo))
-            hr_raw = _spin_field(ws, rep)
-            hrr_lo, hrr_hi = _enclose(hr_raw)
+            hr_raw = is_spin_dom ? numeric.fields[rep] : numeric.dual_fields[rep]
+            hrr_lo, hrr_hi = _enclose_grid(st, hr_raw)
             hr_lo, hr_hi = (direction * g_r >= 0) ? (hrr_lo, hrr_hi) : (-hrr_hi, -hrr_lo)
-            q_mapped_nonpos = (direction * (g_e * g_r) >= 0) ? (q.num.size < 0) : (q.num.size > 0)
+            q_mapped_nonpos = (direction * (g_e * g_r) >= 0) ? (q < 0) : (q > 0)
             σ = q_mapped_nonpos ? 1 : -1
             if glk_ok
-                he_pos = (direction * g_e >= 0) ? (he_raw.num.size > 0) : (he_raw.num.size < 0)
+                he_pos = (direction * g_e >= 0) ? (he_raw > 0) : (he_raw < 0)
                 σ_he_pos = (σ == 1) ? he_pos : !he_pos
                 req_hr_hi = σ_he_pos ? hr_hi : -hr_lo
                 if isfinite(tot_r_lo) && isfinite(req_hr_hi) && _nextfloat_finite(two_c_hi + req_hr_hi) < tot_r_lo
@@ -3210,7 +3243,7 @@ end
                         return false
                     end
                 else
-                    a_small, b_large, tot_a_hi, tot_b_lo = if 2 * length(st.adjacency[elim]) < length(st.adjacency[rep])
+                    a_small, b_large, tot_a_hi, tot_b_lo = if 2 * length(numeric.adjacency[elim]) < length(numeric.adjacency[rep])
                         (elim, rep, tot_e_hi, tot_r_lo)
                     else
                         (rep, elim, tot_r_hi, tot_e_lo)
@@ -3220,19 +3253,19 @@ end
                     if isfinite(rem_budget_hi)
                         rem_budget_hi < 0.0 && return false
                         delta_lo_sum = 0.0
-                        for (w, q_aw) in st.adjacency[a_small]
-                            (w != elim && w != rep && st.fixed[w] == 2 && q_aw.num.size != 0) || continue
-                            qaw_lo, qaw_hi = _enclose(q_aw)
+                        for (w, q_aw) in numeric.adjacency[a_small]
+                            (w != elim && w != rep && st.fixed[w] == 2 && !iszero(q_aw)) || continue
+                            qaw_lo, qaw_hi = _enclose_grid(st, q_aw)
                             jaw_lo = _prevfloat_finite(j_scale * min(abs(qaw_lo), abs(qaw_hi)))
                             pos_bw = get(st.adj_pos[b_large], w, 0)
                             if pos_bw == 0
                                 delta_lo_sum = _prevfloat_finite(delta_lo_sum + _prevfloat_finite(2.0 * jaw_lo))
                             else
-                                q_bw = st.adjacency[b_large][pos_bw].second
-                                if q_bw.num.size == 0 || ((q_aw.num.size > 0) != (orig_σ > 0 ? (q_bw.num.size > 0) : (q_bw.num.size < 0)))
+                                q_bw = numeric.adjacency[b_large][pos_bw].second
+                                if iszero(q_bw) || ((q_aw > 0) != (orig_σ > 0 ? (q_bw > 0) : (q_bw < 0)))
                                     delta_lo_sum = _prevfloat_finite(delta_lo_sum + _prevfloat_finite(2.0 * jaw_lo))
                                 else
-                                    qbw_lo, qbw_hi = _enclose(q_bw)
+                                    qbw_lo, qbw_hi = _enclose_grid(st, q_bw)
                                     jbw_hi = _nextfloat_finite(j_scale * max(abs(qbw_lo), abs(qbw_hi)))
                                     if jaw_lo > jbw_hi
                                         delta_lo_sum = _prevfloat_finite(delta_lo_sum + _prevfloat_finite(2.0 * _prevfloat_finite(jaw_lo - jbw_hi)))
@@ -3263,6 +3296,28 @@ function _step_relation_queue!(
     st = ws._state
     _expired(deadline_ns) && return (:deadline, 0, 0, 0, 0, 0, 0)
     rem_work > 0 || return (:work_limit, 0, 0, 0, 0, 0, 0)
+    return _step_relation_queue_integer!(
+        ws, st, st.numeric, mf, map, allow_weak, direction, rem_work, rem_exact, deadline_ns;
+        allow_exact_fallback,
+    )
+end
+
+# Only :not_strict continues after a witness attempt; that path never applies a
+# reduction. An applied attempt can replace the numeric payload and exits at
+# once. Queue helpers therefore retain the stable owner rather than this view.
+function _step_relation_queue_integer!(
+    ws::Workspace,
+    st::_Incremental,
+    numeric::_IntegerState{I},
+    mf::Int,
+    map::Union{Nothing,DomainGaugeMap},
+    allow_weak::Bool,
+    direction::Int,
+    rem_work::Int,
+    rem_exact::Int,
+    deadline_ns;
+    allow_exact_fallback::Bool=true,
+) where {I<:Integer}
     if st.rel_head > length(st.rel_queue)
         _requeue_deferred_rel!(ws, mf, allow_weak)
     end
@@ -3271,11 +3326,11 @@ function _step_relation_queue!(
         _pop_rel_queue!(ws)
         return (:continue, 1, 0, 0, 0, 0, 0)
     end
-    adj_u_len = length(st.adjacency[u])
+    adj_u_len = length(numeric.adjacency[u])
     adj_u_len <= rem_work - 1 || return (:work_limit, 0, 0, 0, 0, 0, 0)
-    nbrs = Pair{Int,_Exact}[]
+    nbrs = Pair{Int,I}[]
     sizehint!(nbrs, st.degrees[u])
-    for (w, q) in st.adjacency[u]
+    for (w, q) in numeric.adjacency[u]
         _expired(deadline_ns) && return (:deadline, 0, 0, 0, 0, 0, 0)
         if st.fixed[w] == 2 && !iszero(q)
             push!(nbrs, w => q)
@@ -3290,7 +3345,7 @@ function _step_relation_queue!(
     fills_uv = fill(-1, length(nbrs))
     cans_uv = falses(length(nbrs))
     for (idx, (v, q)) in enumerate(nbrs)
-        can_uv = _can_possibly_contract(ws, u, v, q, direction, map)
+        can_uv = _can_possibly_contract_integer(ws, st, numeric, u, v, q, direction, map)
         cans_uv[idx] = can_uv
         if !can_uv && (mf == typemax(Int) || min_blocked <= mf + 1)
             continue
@@ -3326,7 +3381,7 @@ function _step_relation_queue!(
         if f_uv <= mf && st.rel_queued[v] && st.degrees[v] - 1 <= mf
             continue
         end
-        can_vu = _can_possibly_contract(ws, v, u, q, direction, map; check_coflip=cans_uv[idx])
+        can_vu = _can_possibly_contract_integer(ws, st, numeric, v, u, q, direction, map; check_coflip=cans_uv[idx])
         if !can_vu && (mf == typemax(Int) || min_blocked <= mf + 1)
             continue
         end
@@ -3381,21 +3436,21 @@ function _step_relation_queue!(
         end
         w_piv, q_uw_piv = nbrs[piv_idx]
         neg_q_uw_piv = -q_uw_piv
-        h_u_spin = _spin_field(ws, u)
+        h_u_spin = ws._snapshot.domain === QT.SpinDomain ? numeric.fields[u] : numeric.dual_fields[u]
         neg_h_u_spin = -h_u_spin
-        has_sum = st.lower !== nothing && st.upper !== nothing
-        tot_u_exact = has_sum ? (st.upper[u] - st.lower[u]) : _Exact(0)
+        has_sum = numeric.lower !== nothing && numeric.upper !== nothing
+        tot_u_exact = has_sum ? (numeric.upper[u] - numeric.lower[u]) : zero(I)
         twin_cands = Int[]
-        for (v, q_vw_piv) in st.adjacency[w_piv]
+        for (v, q_vw_piv) in numeric.adjacency[w_piv]
             _expired(deadline_ns) && return (:deadline, 1, u_visits, 0, u_exact, u_fb, 0)
             (v != u && st.fixed[v] == 2 && st.degrees[v] == d_u) || continue
             σ_cand = q_vw_piv == q_uw_piv ? 1 : (q_vw_piv == neg_q_uw_piv ? -1 : 0)
             σ_cand != 0 || continue
-            h_v_spin = _spin_field(ws, v)
+            h_v_spin = ws._snapshot.domain === QT.SpinDomain ? numeric.fields[v] : numeric.dual_fields[v]
             (σ_cand == 1 ? (h_v_spin == h_u_spin) : (h_v_spin == neg_h_u_spin)) || continue
             pos_uv = get(st.adj_pos[u], v, 0)
-            (pos_uv == 0 || iszero(st.adjacency[u][pos_uv].second)) || continue
-            has_sum && (st.upper[v] - st.lower[v]) != tot_u_exact && continue
+            (pos_uv == 0 || iszero(numeric.adjacency[u][pos_uv].second)) || continue
+            has_sum && (numeric.upper[v] - numeric.lower[v]) != tot_u_exact && continue
             all_match = true
             @inbounds for (w, q_uw) in nbrs
                 pos_vw = get(st.adj_pos[v], w, 0)
@@ -3403,7 +3458,7 @@ function _step_relation_queue!(
                     all_match = false
                     break
                 end
-                q_vw = st.adjacency[v][pos_vw].second
+                q_vw = numeric.adjacency[v][pos_vw].second
                 if !(σ_cand == 1 ? (q_vw == q_uw) : (q_vw == -q_uw))
                     all_match = false
                     break

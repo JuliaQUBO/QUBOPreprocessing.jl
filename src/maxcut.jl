@@ -361,8 +361,8 @@ function _ws_mc_total_abs_weight(
             1 <= max_work || return (false, :work_limit, _Exact(0), 0, 0)
             1 <= max_exact_work || return (false, :verification_limit, _Exact(0), 0, 0)
             edge_abs = ws._snapshot.domain === QT.BoolDomain ?
-                ((st.upper[x] - st.lower[x]) // 4) :
-                ((st.upper[x] - st.lower[x]) // 2)
+                ((_physical(st, st.upper[x]) - _physical(st, st.lower[x])) // 4) :
+                ((_physical(st, st.upper[x]) - _physical(st, st.lower[x])) // 2)
             total = abs(direction * _spin_field(ws, x)) + edge_abs
             return (true, :ok, total, 1, 1)
         end
@@ -508,7 +508,7 @@ function _eval_maxcut_anchor(
         if b >= 1 && c >= 1
             pos_bc = get(st.adj_pos[b], c, 0)
             pos_bc == 0 && continue
-            q_bc = st.adjacency[b][pos_bc].second
+            q_bc = _physical(st, st.adjacency[b][pos_bc].second)
             iszero(q_bc) && continue
             if st.lower !== nothing && st.upper !== nothing &&
                max_work - graph_work - tri_work >= 1 && max_exact_work - exact_work >= 1
@@ -516,8 +516,8 @@ function _eval_maxcut_anchor(
                 jac_abs_hi = max(abs(jac_lo), abs(jac_hi))
                 qbc_lo, qbc_hi = _enclose(q_bc)
                 jbc_abs_hi = _nextfloat_finite(scale_inv * max(abs(qbc_lo), abs(qbc_hi)))
-                upc_lo, _ = _enclose(st.upper[c])
-                _, loc_hi = _enclose(st.lower[c])
+                upc_lo, _ = _enclose_physical(st, st.upper[c])
+                _, loc_hi = _enclose_physical(st, st.lower[c])
                 wc_lo = _prevfloat_finite(tot_scale * _prevfloat_finite(upc_lo - loc_hi))
                 two_j_sum = _nextfloat_finite(2.0 * _nextfloat_finite(jac_abs_hi + jbc_abs_hi))
                 if isfinite(wc_lo) && isfinite(two_j_sum) && two_j_sum <= wc_lo

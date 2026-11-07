@@ -762,7 +762,8 @@
             domain=:spin, sense=:min,
         )
         ws_big = Workspace(m_big; rules=:identity, integerize_scale=false)
-        ws_big._state.fields[1] = (BigInt(10)^310) // 1
+        ws_big._state.numeric = QUBOPreprocessing._regrid(ws_big._state, BigInt, ws_big._state.shift)
+        ws_big._state.fields[1] = (BigInt(10)^310) << ws_big._state.shift
         @test !QUBOPreprocessing._can_use_float_spin_heuristic(ws_big, [1, 2, 3])
         w_big = coercive_field_witness(ws_big)
         @test length(w_big) == 3

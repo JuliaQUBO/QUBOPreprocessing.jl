@@ -656,6 +656,7 @@ function _build_implication_network(
             (st.fixed[v] == 2 && u < v) || continue
             exact_work < max_exact_work || return (false, :verification_limit, nothing, _Exact(0), graph_work, exact_work)
             exact_work += 1
+            iszero(q) && continue
             J_uv = direction * _spin_coupling(ws, q)
             iszero(J_uv) && continue
             aJ = abs(J_uv)
@@ -776,7 +777,7 @@ function _recognize_component_indices(
                 return SubmodularComponent{V}(vars, comp_indices, false, false, :work_limit, Int[], work)
             work += 1
             st.fixed[v] == 2 || continue
-            iszero(_spin_coupling(ws, q)) && continue
+            iszero(q) && continue
             if !in_comp[v]
                 return SubmodularComponent{V}(vars, comp_indices, false, false, :boundary_coupled, Int[], work)
             end
@@ -802,9 +803,10 @@ function _recognize_component_indices(
                     return SubmodularComponent{V}(vars, comp_indices, true, false, :work_limit, Int[], work)
                 work += 1
                 st.fixed[v] == 2 || continue
-                dJ = direction * _spin_coupling(ws, q)
-                iszero(dJ) && continue
-                req = dJ < 0 ? sigma[u] : -sigma[u]
+                iszero(q) && continue
+                # Physical and Bool-to-Spin factors are positive. Compare signs
+                # without negating a possibly typemin(Int128) raw coefficient.
+                req = ((q < 0) == (direction > 0)) ? sigma[u] : -sigma[u]
                 if sigma[v] == 0
                     sigma[v] = req
                     push!(queue, v)
@@ -888,7 +890,7 @@ function recognize_submodular_components(
                 _expired(deadline_ns) && return (SubmodularComponent{V}[], :deadline, work)
                 work < max_work || return (SubmodularComponent{V}[], :work_limit, work)
                 work += 1
-                (st.fixed[v] == 2 && !visited[v] && !iszero(_spin_coupling(ws, q))) || continue
+                (st.fixed[v] == 2 && !visited[v] && !iszero(q)) || continue
                 visited[v] = true
                 push!(queue, v)
             end
