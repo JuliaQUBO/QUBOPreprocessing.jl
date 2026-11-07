@@ -388,9 +388,10 @@ function _payload_fits(p::_IntegerState)
     return true
 end
 
-# Enclose numerator/2^shift without creating a Rational or depending on ambient
-# BigFloat precision. Keep at most 53 leading bits; the discarded positive tail
-# is below the next normal ulp. Outward neighbors also cover subnormal rounding.
+# Enclose numerator/2^shift on the normal fast path without a Rational or
+# ambient BigFloat precision. Keep at most 53 leading bits; the discarded
+# positive tail is below the next normal ulp. Near/subnormal results use
+# the checked rational enclosure to handle FTZ.
 function _enclose_grid(st::_Incremental, q::Integer)
     iszero(q) && return (0.0, 0.0)
     negative = q < 0
@@ -403,6 +404,7 @@ function _enclose_grid(st::_Incremental, q::Integer)
     cut = max(0, ndigits(n; base=2) - 53)
     top = UInt64(n >> cut)
     value = ldexp(Float64(top), cut - st.shift)
+    value < floatmin(Float64) && return _enclose(_physical(st, q))
     if isfinite(value) && (n >> cut) << cut == n && trailing_zeros(n) >= st.shift - 1074
         return negative ? (-value, -value) : (value, value)
     end

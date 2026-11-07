@@ -1721,3 +1721,121 @@ end
         @test saved.max_perturbation == expected_error
     end
 end
+# Test-only IEEE decoder: no production scalar adapter or floating arithmetic.
+function _qp93_ftz_bits_exact(x::Float64)
+    b = reinterpret(UInt64,x)
+    e = Int((b >> 52) & 0x7ff)
+    e == 0x7ff && throw(ArgumentError("finite IEEE endpoint required"))
+    f = BigInt(b & 0x000fffffffffffff)
+    n = e == 0 ? f : (big(1) << 52) + f
+    (b >> 63) == 1 && (n = -n)
+    power = e == 0 ? -1074 : e - 1023 - 52
+    return power >= 0 ? (n << power)//big(1) : n//(big(1) << -power)
+end
+
+function _qp93_ftz_contains(lo::Float64,hi::Float64,q,shift)
+    exact = BigInt(q)//(big(1) << shift)
+    isnan(lo) || isnan(hi) ? false :
+        (lo == -Inf || (isfinite(lo) && _qp93_ftz_bits_exact(lo) <= exact)) &&
+        (hi == Inf || (isfinite(hi) && exact <= _qp93_ftz_bits_exact(hi)))
+end
+
+function _qp93_ftz_star_reference()
+    n = 4
+    n <= 4 || error("FTZ oracle original dimension exceeds four")
+    # Independent literal IEEE values, computed before enabling FTZ.
+    m = big(1)//(big(1) << 1022)
+    s = ((big(1) << 52)-1)//(big(1) << 1074)
+    points = [[iszero((mask >> (i-1)) & 1) ? -1 : 1 for i in 1:n] for mask in 0:((1<<n)-1)]
+    energy(x) = 2m*x[1] + sum(4m*x[j] + s*x[1]*x[j] for j in 2:n)
+    values = energy.(points)
+    best = minimum(values)
+    return points,values,best
+end
+
+@testset "shared-grid enclosures and public dominance preserve subnormals under FTZ" begin
+    saved_ftz = Base.get_zero_subnormals()
+    saved_precision = precision(BigFloat)
+    saved_rounding = rounding(BigFloat)
+    try
+        Base.set_zero_subnormals(false)
+        samples = Tuple{BigInt,Int}[
+            (big(0),1074),(big(1),1074),(big(3),1074),(-big(3),1074),
+            (big(1),1075),(-big(1),1075),
+            ((big(1)<<52)-1,1074),(-((big(1)<<52)-1),1074),
+            (big(1)<<52,1074),(-(big(1)<<52),1074),
+            ((big(1)<<52)+1,1074),(-((big(1)<<52)+1),1074),
+            (big(3),1024),(-big(3),1024),(big(3),1),(-big(3),1),
+            (BigInt(typemin(Int128)),1201),(BigInt(typemax(Int128)),1201),
+            (big(3)<<300,1374),(-(big(3)<<300),1374),
+        ]
+        for I in (Int128,BigInt),ftz in (false,true)
+            Base.set_zero_subnormals(false)
+            ws = Workspace(fixture([1],[0.0],zeros(1,1);domain=:spin);
+                           rules=:identity,integerize_scale=false)
+            I === BigInt && (ws._state.numeric = QUBOPreprocessing._regrid(ws._state,BigInt,0))
+            @test eltype(ws._state.fields) === I
+            for p in (24,256),mode in (RoundNearest,RoundUp)
+                setprecision(BigFloat,p) do
+                    setrounding(BigFloat,mode) do
+                        Base.set_zero_subnormals(ftz)
+                        @test Base.get_zero_subnormals() == ftz
+                        for (q,shift) in samples
+                            I === Int128 && !(typemin(Int128)<=q<=typemax(Int128)) && continue
+                            # The zero polynomial is unchanged on every grid.
+                            ws._state.shift = shift
+                            lo,hi = QUBOPreprocessing._enclose_grid(ws._state,I(q))
+                            @test _qp93_ftz_contains(lo,hi,q,shift)
+                        end
+                    end
+                end
+            end
+        end
+
+        Base.set_zero_subnormals(false)
+        points,energies,best = _qp93_ftz_star_reference()
+        @test points[findall(==(best),energies)] == [[1,-1,-1,-1]]
+        lookup = Dict(Tuple(x)=>v for (x,v) in zip(points,energies))
+        for I in (Int128,BigInt),ftz in (false,true),sequence in ((1,),(1,2,3,4))
+            Base.set_zero_subnormals(false)
+            n=4
+            n<=4 || error("FTZ public fixture original dimension exceeds four")
+            m=floatmin(Float64);s=prevfloat(m);L=[2m,4m,4m,4m];Q=zeros(n,n)
+            Q[1,2:4] .= s
+            ws=Workspace(fixture(collect(1:n),L,Q;domain=:spin);
+                         rules=:identity,integerize_scale=false)
+            I === BigInt && (ws._state.numeric=QUBOPreprocessing._regrid(ws._state,BigInt,ws._state.shift))
+            @test eltype(ws._state.fields) === I
+            attempts=Any[]
+            Base.set_zero_subnormals(ftz)
+            try
+                for label in sequence
+                    push!(attempts,prove_dominance(ws,label))
+                    apply_dominance!(ws,label)
+                end
+            finally
+                # Independent replay/reference never runs with FTZ enabled.
+                Base.set_zero_subnormals(false)
+            end
+            for attempt in attempts
+                attempt.certificate === nothing || @test verify_certificate(ws,attempt.certificate).valid
+            end
+            proof=export_certificate(ws)
+            proof === nothing || @test verify_certificate(ws,proof).valid
+            result=materialize(ws,domain_map(ws;domain=:spin);coefficient_type=Rational{BigInt})
+            remaining=QT.dimension(export_model(result))
+            0<=remaining<=4 || error("FTZ residual oracle exceeds four variables")
+            # Enumerate at most16 states and evaluate original literal-rational
+            # energies, independently of certificate bounds or residual energy.
+            retained_best=minimum(lookup[Tuple(reconstruct(result,y).state)] for y in states(remaining,:spin))
+            @test retained_best == best
+        end
+    finally
+        Base.set_zero_subnormals(saved_ftz)
+        setprecision(BigFloat,saved_precision)
+        setrounding(BigFloat,saved_rounding)
+    end
+    @test Base.get_zero_subnormals() == saved_ftz
+    @test precision(BigFloat) == saved_precision
+    @test rounding(BigFloat) == saved_rounding
+end
