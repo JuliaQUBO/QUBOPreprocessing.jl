@@ -3167,20 +3167,39 @@ end
     map::Union{Nothing,DomainGaugeMap};
     check_coflip::Bool=true,
 )
-    st, s = ws._state, ws._snapshot
-    q isa Integer || (q = _grid_numerator(q, st.shift))
-    (st.lower !== nothing && st.upper !== nothing) || return true
+    st = ws._state
+    return _can_possibly_contract_integer(
+        ws, st, st.numeric, elim, rep, q, direction, map; check_coflip,
+    )
+end
+
+# This reader neither mutates state nor invokes callbacks. Its numeric view is
+# valid only for this call; the wrapper captures the current payload each time.
+@inline function _can_possibly_contract_integer(
+    ws::Workspace,
+    st::_Incremental,
+    numeric::_IntegerState{I},
+    elim::Int,
+    rep::Int,
+    q::Union{Integer,_Exact},
+    direction::Int,
+    map::Union{Nothing,DomainGaugeMap};
+    check_coflip::Bool=true,
+) where {I<:Integer}
+    s = ws._snapshot
+    q isa Integer || (q = _grid_numerator(q, numeric.shift))
+    (numeric.lower !== nothing && numeric.upper !== nothing) || return true
     iszero(q) && return false
     is_spin_dom = s.domain === QT.SpinDomain
     tot_scale = is_spin_dom ? 0.5 : 0.25
     j_scale = is_spin_dom ? 1.0 : 0.25
-    up_e_lo, up_e_hi = _enclose_grid(st, st.upper[elim])
-    lo_e_lo, lo_e_hi = _enclose_grid(st, st.lower[elim])
+    up_e_lo, up_e_hi = _enclose_grid(st, numeric.upper[elim])
+    lo_e_lo, lo_e_hi = _enclose_grid(st, numeric.lower[elim])
     tot_e_lo = _prevfloat_finite(tot_scale * _prevfloat_finite(up_e_lo - lo_e_hi))
     tot_e_hi = _nextfloat_finite(tot_scale * _nextfloat_finite(up_e_hi - lo_e_lo))
     g_e = map === nothing ? 1 : map.gauge[elim]
     g_r = map === nothing ? 1 : map.gauge[rep]
-    he_raw = is_spin_dom ? st.fields[elim] : st.dual_fields[elim]
+    he_raw = is_spin_dom ? numeric.fields[elim] : numeric.dual_fields[elim]
     he_lo, he_hi = _enclose_grid(st, he_raw)
     he_abs_hi = max(abs(he_lo), abs(he_hi))
     he_abs_lo = (he_lo <= 0.0 && he_hi >= 0.0) ? 0.0 : min(abs(he_lo), abs(he_hi))
@@ -3190,11 +3209,11 @@ end
         if _nextfloat_finite(two_c_hi - he_abs_lo) < tot_e_lo
             glk_ok = (!iszero(he_raw)) && !(_nextfloat_finite(two_c_hi + he_abs_hi) < tot_e_lo)
             (!glk_ok && !check_coflip) && return false
-            up_r_lo, up_r_hi = _enclose_grid(st, st.upper[rep])
-            lo_r_lo, lo_r_hi = _enclose_grid(st, st.lower[rep])
+            up_r_lo, up_r_hi = _enclose_grid(st, numeric.upper[rep])
+            lo_r_lo, lo_r_hi = _enclose_grid(st, numeric.lower[rep])
             tot_r_lo = _prevfloat_finite(tot_scale * _prevfloat_finite(up_r_lo - lo_r_hi))
             tot_r_hi = _nextfloat_finite(tot_scale * _nextfloat_finite(up_r_hi - lo_r_lo))
-            hr_raw = is_spin_dom ? st.fields[rep] : st.dual_fields[rep]
+            hr_raw = is_spin_dom ? numeric.fields[rep] : numeric.dual_fields[rep]
             hrr_lo, hrr_hi = _enclose_grid(st, hr_raw)
             hr_lo, hr_hi = (direction * g_r >= 0) ? (hrr_lo, hrr_hi) : (-hrr_hi, -hrr_lo)
             q_mapped_nonpos = (direction * (g_e * g_r) >= 0) ? (q < 0) : (q > 0)
@@ -3224,7 +3243,7 @@ end
                         return false
                     end
                 else
-                    a_small, b_large, tot_a_hi, tot_b_lo = if 2 * length(st.adjacency[elim]) < length(st.adjacency[rep])
+                    a_small, b_large, tot_a_hi, tot_b_lo = if 2 * length(numeric.adjacency[elim]) < length(numeric.adjacency[rep])
                         (elim, rep, tot_e_hi, tot_r_lo)
                     else
                         (rep, elim, tot_r_hi, tot_e_lo)
@@ -3234,7 +3253,7 @@ end
                     if isfinite(rem_budget_hi)
                         rem_budget_hi < 0.0 && return false
                         delta_lo_sum = 0.0
-                        for (w, q_aw) in st.adjacency[a_small]
+                        for (w, q_aw) in numeric.adjacency[a_small]
                             (w != elim && w != rep && st.fixed[w] == 2 && !iszero(q_aw)) || continue
                             qaw_lo, qaw_hi = _enclose_grid(st, q_aw)
                             jaw_lo = _prevfloat_finite(j_scale * min(abs(qaw_lo), abs(qaw_hi)))
@@ -3242,7 +3261,7 @@ end
                             if pos_bw == 0
                                 delta_lo_sum = _prevfloat_finite(delta_lo_sum + _prevfloat_finite(2.0 * jaw_lo))
                             else
-                                q_bw = st.adjacency[b_large][pos_bw].second
+                                q_bw = numeric.adjacency[b_large][pos_bw].second
                                 if iszero(q_bw) || ((q_aw > 0) != (orig_σ > 0 ? (q_bw > 0) : (q_bw < 0)))
                                     delta_lo_sum = _prevfloat_finite(delta_lo_sum + _prevfloat_finite(2.0 * jaw_lo))
                                 else
@@ -3326,7 +3345,7 @@ function _step_relation_queue_integer!(
     fills_uv = fill(-1, length(nbrs))
     cans_uv = falses(length(nbrs))
     for (idx, (v, q)) in enumerate(nbrs)
-        can_uv = _can_possibly_contract(ws, u, v, q, direction, map)
+        can_uv = _can_possibly_contract_integer(ws, st, numeric, u, v, q, direction, map)
         cans_uv[idx] = can_uv
         if !can_uv && (mf == typemax(Int) || min_blocked <= mf + 1)
             continue
@@ -3362,7 +3381,7 @@ function _step_relation_queue_integer!(
         if f_uv <= mf && st.rel_queued[v] && st.degrees[v] - 1 <= mf
             continue
         end
-        can_vu = _can_possibly_contract(ws, v, u, q, direction, map; check_coflip=cans_uv[idx])
+        can_vu = _can_possibly_contract_integer(ws, st, numeric, v, u, q, direction, map; check_coflip=cans_uv[idx])
         if !can_vu && (mf == typemax(Int) || min_blocked <= mf + 1)
             continue
         end

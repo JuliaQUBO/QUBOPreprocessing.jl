@@ -1574,3 +1574,86 @@ end
         end
     end
 end
+
+# Read-only relation screening preserves both compatibility and numeric ownership.
+function _integer_reader_normalize(x)
+    x === nothing && return "nothing"
+    # Global type/module metadata are atomic identities, not owned workspace data.
+    x isa Type && return ("Type", x)
+    x isa Module && return ("Module", Base.fullname(x), x)
+    x isa QUBOPreprocessing.UUID && return "<UUID>"
+    x isa Union{Symbol,AbstractString} && return string(x)
+    x isa AbstractFloat && return (string(typeof(x)), bitstring(x))
+    x isa Number && return (string(typeof(x)), string(x))
+    x isa Pair && return (_integer_reader_normalize(x.first), _integer_reader_normalize(x.second))
+    x isa AbstractDict && return sort!([(repr(_integer_reader_normalize(k)), _integer_reader_normalize(v)) for (k,v) in x]; by=first)
+    x isa Union{Tuple,AbstractArray} && return (string(typeof(x)), [_integer_reader_normalize(v) for v in x])
+    return (string(typeof(x)), [(string(f), _integer_reader_normalize(getfield(x,f))) for f in fieldnames(typeof(x))])
+end
+function _integer_reader_workspace(L,Q,domain,sense,scale,rules,wide)
+    n = length(L)
+    1 <= n <= 3 || error("reader fixture original dimension exceeds three (absolute limit eight)")
+    size(Q) == (n,n) || error("fixture shape mismatch")
+    ws = Workspace(fixture(collect(1:n), L,Q; domain,sense,scale); rules,integerize_scale=false)
+    wide && (ws._state.numeric = QUBOPreprocessing._regrid(ws._state, BigInt, ws._state.shift))
+    @test eltype(ws._state.fields) === (wide ? BigInt : Int128)
+    return ws
+end
+function _integer_reader_call(ws,u,v,q,direction,map; check_coflip=true)
+    st = ws._state
+    numeric = st.numeric
+    arrays = (numeric.fields,numeric.adjacency,numeric.dual_fields,numeric.trail,numeric.lower,numeric.upper)
+    before = _integer_reader_normalize((st,ws._snapshot,map,q))
+    result = try
+        value = QUBOPreprocessing._can_possibly_contract(ws,u,v,q,direction,map; check_coflip)
+        @test value isa Bool
+        (:value,value)
+    catch err
+        # Preserve the exception class as part of the wrapper contract.
+        (:exception,string(typeof(err)))
+    end
+    @test ws._state === st && st.numeric === numeric
+    @test all(a === b for (a,b) in zip(arrays,(numeric.fields,numeric.adjacency,numeric.dual_fields,numeric.trail,numeric.lower,numeric.upper)))
+    @test _integer_reader_normalize((st,ws._snapshot,map,q)) == before
+    return result
+end
+@testset "integer reader bounds and Exact conversion guard order" begin
+    for wide in (false,true), rules in (:identity,:relations)
+        ws = _integer_reader_workspace([0.0,0.0],[0.0 1.0;0.0 0.0],:spin,:min,1.0,rules,wide)
+        @test (ws._state.lower === nothing && ws._state.upper === nothing) == (rules === :identity)
+        for q in (Int128(0),big(0),big(0)//big(1)), coflip in (false,true)
+            @test _integer_reader_call(ws,1,2,q,1,nothing;check_coflip=coflip) == (:value,rules === :identity)
+        end
+        @test _integer_reader_call(ws,1,2,big(1)//big(3),1,nothing) == (:exception,"ArgumentError")
+    end
+end
+@testset "integer reader equivalent q and concrete payloads retain wrapper results" begin
+    for variant in (:same,:opposite), domain in (:bool,:spin),
+        (sense,scale) in ((:min,0.5),(:max,-0.5),(:max,0.0))
+        L = [2.0,-1.0,0.0]
+        Q = [0.0 -3.0 2.0;0.0 0.0 (variant === :same ? 2.0 : -2.0);0.0 0.0 0.0]
+        narrow = _integer_reader_workspace(L,Q,domain,sense,scale,:relations,false)
+        wide = _integer_reader_workspace(L,Q,domain,sense,scale,:relations,true)
+        direction = (sense === :min ? 1 : -1) * sign(Int(2scale))
+        for gauged in (false,true), coflip in (false,true), (u,v) in ((1,2),(2,1),(1,3))
+            results = Any[]
+            for ws in (narrow,wide)
+                map = gauged ? domain_map(ws;domain=(domain === :bool ? :spin : :bool),gauge=[-1,1,-1]) : nothing
+                st = ws._state
+                raw = st.adjacency[u][st.adj_pos[u][v]].second
+                physical = BigInt(raw)//(big(1)<<st.shift)
+                for q in (Int128(raw),BigInt(raw),physical)
+                    result = _integer_reader_call(ws,u,v,q,direction,map;check_coflip=coflip)
+                    @test first(result) === :value
+                    push!(results,result)
+                end
+            end
+            @test all(==(first(results)),results)
+        end
+        # Independent rational original-coefficient/reconstruction checks;
+        # these do not reimplement the screening inequality or assume true
+        # means an applicable/certified contraction.
+        check_integer_objective(narrow,L,Q,scale,0.0,domain)
+        check_integer_objective(wide,L,Q,scale,0.0,domain)
+    end
+end
