@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.2
+
+Exact integer-grid workspace state, explicit scheduling policies and opt-in integer normalization (#104–#106).
 
 - Store live workspace fields, edges, bounds, dual-coordinate caches and numeric
   undo records in typed `Int128` or `BigInt` arrays on one exact dyadic grid.
